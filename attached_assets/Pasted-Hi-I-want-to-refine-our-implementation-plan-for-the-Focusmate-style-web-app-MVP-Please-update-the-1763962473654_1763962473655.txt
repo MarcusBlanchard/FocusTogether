@@ -1,0 +1,65 @@
+Hi — I want to refine our implementation plan for the Focusmate-style web app MVP. Please update the plan with the following adjustments and improvements:
+
+Use River for real-time communication
+
+Instead of raw WebSockets, use @replit/river for RPC between client and server. River supports long-lived streaming RPCs and has built-in reconnect / error handling. 
+npm
++1
+
+Define a clear service schema for session actions (like “join queue”, “matched”, “heartbeat”, “disconnect”).
+
+WebSocket / connection reliability
+
+Be aware that Replit’s WebSocket infrastructure uses a reverse proxy (Eval) which may introduce reconnects or transient failures. 
+Replit Blog
+
+Implement retry logic and handling of disconnections in the client, using River’s reconnect capabilities.
+
+Add heartbeat / pinging from clients to the server to detect disconnects early and clean up waiting/matching state.
+
+Session cleanup and management
+
+When a user disconnects (or closes tab), remove them from the matching queue.
+
+Use a “session state” (idle / waiting / matched / in-session) on the server side to manage lifecycle.
+
+When matching two users, send RPC calls to both sides to inform them that they’re matched, and manage their “in-session” status.
+
+WebRTC signaling
+
+Use the backend (via River) to relay WebRTC signaling data (offer / answer / ICE candidates) between matched clients.
+
+Plan to integrate STUN / TURN servers for reliable peer-to-peer connectivity.
+
+Database and Auth
+
+Use Replit Auth middleware in Express (via replit-node) to manage user login / sign-up. 
+GitHub
+
+Use a database for storing user profiles and session logs. Clarify whether to use Postgres or Replit DB (or external DB) for this project.
+
+UI / Frontend states
+
+Landing page + “Start Session” + “Profile”
+
+Waiting-for-partner page
+
+Session page that shows: video streams + shared screen
+
+Display connection / status indicators (e.g. “Connecting…”, “Reconnecting…”) to surface WebSocket or RPC connection issues.
+
+Testing / Deployment
+
+Stress-test WebSocket / River connections in Replit (simulate disconnects, reconnects) to ensure reliability.
+
+Deploy on Replit and verify how connection behaves under real user load.
+
+Set up logging of session state and errors (connection drops, user disconnects, heartbeat failures) to help debug.
+
+Future migration considerations
+
+Structure code in a way that can be re-used when migrating to a desktop app (Electron / Tauri) later.
+
+Keep separation between frontend / backend logic so that the signaling + session code can be moved into a desktop environment more easily.
+
+Please generate a revised implementation plan (architecture, modules, tech stack, rough milestones) incorporating these changes. Then, break it down into development phases / checkpoints (MVP → next).
