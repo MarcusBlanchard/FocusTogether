@@ -2,15 +2,21 @@ import {
   users,
   focusSessions,
   friends,
+  scheduledSessions,
+  scheduledSessionParticipants,
   type User,
   type UpsertUser,
   type FocusSession,
   type InsertFocusSession,
   type Friend,
   type InsertFriend,
+  type ScheduledSession,
+  type InsertScheduledSession,
+  type ScheduledSessionParticipant,
+  type InsertScheduledSessionParticipant,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, or, and, ilike, ne, desc } from "drizzle-orm";
+import { eq, or, and, ilike, ne, desc, gte, lte, sql } from "drizzle-orm";
 
 export interface IStorage {
   // User operations (mandatory for Replit Auth)
@@ -31,6 +37,21 @@ export interface IStorage {
   removeFriend(userId: string, friendId: string): Promise<void>;
   getFriends(userId: string): Promise<User[]>;
   areFriends(userId: string, friendId: string): Promise<boolean>;
+
+  // Scheduled session operations
+  createScheduledSession(session: InsertScheduledSession): Promise<ScheduledSession>;
+  getScheduledSession(sessionId: string): Promise<ScheduledSession | undefined>;
+  updateScheduledSessionStatus(sessionId: string, status: string): Promise<ScheduledSession | undefined>;
+  linkFocusSessionToScheduled(scheduledSessionId: string, focusSessionId: string): Promise<void>;
+  getUpcomingSessions(startDate: Date, endDate: Date): Promise<ScheduledSession[]>;
+  getUserScheduledSessions(userId: string): Promise<ScheduledSession[]>;
+  getOccupancyCount(startAt: Date, endAt: Date): Promise<number>;
+
+  // Scheduled session participant operations
+  addParticipant(participant: InsertScheduledSessionParticipant): Promise<ScheduledSessionParticipant>;
+  removeParticipant(sessionId: string, userId: string): Promise<void>;
+  getSessionParticipants(sessionId: string): Promise<User[]>;
+  getParticipantCount(sessionId: string): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -191,6 +212,180 @@ export class DatabaseStorage implements IStorage {
         and(eq(friends.userId, userId), eq(friends.friendId, friendId))
       );
     return !!record;
+  }
+
+  // Scheduled session operations
+  async createScheduledSession(sessionData: InsertScheduledSession): Promise<ScheduledSession> {
+    const [session] = await db
+      .insert(scheduledSessions)
+      .values(sessionData)
+      .returning();
+    return session;
+  }
+
+  async getScheduledSession(sessionId: string): Promise<ScheduledSession | undefined> {
+    const [session] = await db
+      .select()
+      .from(scheduledSessions)
+      .where(eq(scheduledSessions.id, sessionId));
+    return session;
+  }
+
+  async updateScheduledSessionStatus(sessionId: string, status: string): Promise<ScheduledSession | undefined> {
+    const [session] = await db
+      .update(scheduledSessions)
+      .set({ status })
+      .where(eq(scheduledSessions.id, sessionId))
+      .returning();
+    return session;
+  }
+
+  async linkFocusSessionToScheduled(scheduledSessionId: string, focusSessionId: string): Promise<void> {
+    await db
+      .update(scheduledSessions)
+      .set({ focusSessionId })
+      .where(eq(scheduledSessions.id, scheduledSessionId));
+  }
+
+  async getUpcomingSessions(startDate: Date, endDate: Date): Promise<ScheduledSession[]> {
+    return await db
+      .select()
+      .from(scheduledSessions)
+      .where(
+        and(
+          gte(scheduledSessions.startAt, startDate),
+          lte(scheduledSessions.startAt, endDate),
+          ne(scheduledSessions.status, 'cancelled')
+        )
+      )
+      .orderBy(scheduledSessions.startAt);
+  }
+
+  async getUserScheduledSessions(userId: string): Promise<ScheduledSession[]> {
+    // Get sessions where user is either host or participant
+    const participations = await db
+      .select()
+      .from(scheduledSessionParticipants)
+      .where(eq(scheduledSessionParticipants.userId, userId));
+    
+    const sessionIds = participations.map(p => p.sessionId);
+    
+    if (sessionIds.length === 0) {
+      return await db
+        .select()
+        .from(scheduledSessions)
+        .where(eq(scheduledSessions.hostId, userId))
+        .orderBy(desc(scheduledSessions.startAt));
+    }
+    
+    // Build OR condition properly - handle single ID case
+    const sessionIdConditions = sessionIds.length === 1
+      ? eq(scheduledSessions.id, sessionIds[0])
+      : or(...sessionIds.map(id => eq(scheduledSessions.id, id)));
+    
+    return await db
+      .select()
+      .from(scheduledSessions)
+      .where(
+        or(
+          eq(scheduledSessions.hostId, userId),
+          sessionIdConditions!
+        )
+      )
+      .orderBy(desc(scheduledSessions.startAt));
+  }
+
+  async getOccupancyCount(startAt: Date, endAt: Date): Promise<number> {
+    // Count participants in sessions that overlap with the time range (both scheduled and active)
+    const sessions = await db
+      .select()
+      .from(scheduledSessions)
+      .where(
+        and(
+          lte(scheduledSessions.startAt, endAt),
+          gte(scheduledSessions.endAt, startAt),
+          or(
+            eq(scheduledSessions.status, 'scheduled'),
+            eq(scheduledSessions.status, 'active')
+          )
+        )
+      );
+    
+    if (sessions.length === 0) return 0;
+    
+    const sessionIds = sessions.map(s => s.id);
+    
+    // Handle single ID case for or()
+    const sessionIdConditions = sessionIds.length === 1
+      ? eq(scheduledSessionParticipants.sessionId, sessionIds[0])
+      : or(...sessionIds.map(id => eq(scheduledSessionParticipants.sessionId, id)));
+    
+    const result = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(scheduledSessionParticipants)
+      .where(
+        and(
+          sessionIdConditions!,
+          eq(scheduledSessionParticipants.status, 'joined')
+        )
+      );
+    
+    return Number(result[0]?.count || 0);
+  }
+
+  // Scheduled session participant operations
+  async addParticipant(participantData: InsertScheduledSessionParticipant): Promise<ScheduledSessionParticipant> {
+    const [participant] = await db
+      .insert(scheduledSessionParticipants)
+      .values(participantData)
+      .returning();
+    return participant;
+  }
+
+  async removeParticipant(sessionId: string, userId: string): Promise<void> {
+    await db
+      .update(scheduledSessionParticipants)
+      .set({ status: 'left', leftAt: new Date() })
+      .where(
+        and(
+          eq(scheduledSessionParticipants.sessionId, sessionId),
+          eq(scheduledSessionParticipants.userId, userId)
+        )
+      );
+  }
+
+  async getSessionParticipants(sessionId: string): Promise<User[]> {
+    const participants = await db
+      .select()
+      .from(scheduledSessionParticipants)
+      .where(
+        and(
+          eq(scheduledSessionParticipants.sessionId, sessionId),
+          eq(scheduledSessionParticipants.status, 'joined')
+        )
+      );
+    
+    if (participants.length === 0) return [];
+    
+    const userIds = participants.map(p => p.userId);
+    return await db
+      .select()
+      .from(users)
+      .where(or(...userIds.map(id => eq(users.id, id))));
+  }
+
+  async getParticipantCount(sessionId: string): Promise<number> {
+    const result = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(scheduledSessionParticipants)
+      .where(
+        and(
+          eq(scheduledSessionParticipants.sessionId, sessionId),
+          eq(scheduledSessionParticipants.status, 'joined')
+        )
+      );
+    
+    return Number(result[0]?.count || 0);
   }
 }
 

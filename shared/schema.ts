@@ -7,6 +7,8 @@ import {
   varchar,
   integer,
   uuid,
+  text,
+  unique,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -54,12 +56,43 @@ export const friends = pgTable("friends", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Scheduled sessions table - for calendar booking and free rooms
+export const scheduledSessions = pgTable("scheduled_sessions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  hostId: varchar("host_id").notNull().references(() => users.id),
+  sessionType: varchar("session_type").notNull(), // 'solo', 'group', 'freeRoom'
+  title: varchar("title"),
+  description: text("description"),
+  capacity: integer("capacity").notNull().default(2), // 2 for solo, up to 5 for group, up to 10 for free room
+  startAt: timestamp("start_at").notNull(),
+  endAt: timestamp("end_at").notNull(),
+  status: varchar("status").notNull().default('scheduled'), // 'scheduled', 'active', 'completed', 'cancelled'
+  focusSessionId: uuid("focus_session_id").references(() => focusSessions.id), // links to completed session
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Scheduled session participants - tracks who joins scheduled sessions
+export const scheduledSessionParticipants = pgTable("scheduled_session_participants", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: uuid("session_id").notNull().references(() => scheduledSessions.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  role: varchar("role").notNull().default('participant'), // 'host', 'participant'
+  status: varchar("status").notNull().default('joined'), // 'joined', 'left'
+  joinedAt: timestamp("joined_at").defaultNow(),
+  leftAt: timestamp("left_at"),
+}, (table) => [
+  // Unique constraint to prevent duplicate participants
+  unique().on(table.sessionId, table.userId),
+]);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   sessionsAsUser1: many(focusSessions, { relationName: "user1Sessions" }),
   sessionsAsUser2: many(focusSessions, { relationName: "user2Sessions" }),
   friends: many(friends, { relationName: "userFriends" }),
   friendOf: many(friends, { relationName: "friendOfUser" }),
+  hostedSessions: many(scheduledSessions, { relationName: "hostedSessions" }),
+  scheduledParticipations: many(scheduledSessionParticipants, { relationName: "userParticipations" }),
 }));
 
 export const focusSessionsRelations = relations(focusSessions, ({ one }) => ({
@@ -88,6 +121,32 @@ export const friendsRelations = relations(friends, ({ one }) => ({
   }),
 }));
 
+export const scheduledSessionsRelations = relations(scheduledSessions, ({ one, many }) => ({
+  host: one(users, {
+    fields: [scheduledSessions.hostId],
+    references: [users.id],
+    relationName: "hostedSessions",
+  }),
+  participants: many(scheduledSessionParticipants, { relationName: "sessionParticipants" }),
+  focusSession: one(focusSessions, {
+    fields: [scheduledSessions.focusSessionId],
+    references: [focusSessions.id],
+  }),
+}));
+
+export const scheduledSessionParticipantsRelations = relations(scheduledSessionParticipants, ({ one }) => ({
+  session: one(scheduledSessions, {
+    fields: [scheduledSessionParticipants.sessionId],
+    references: [scheduledSessions.id],
+    relationName: "sessionParticipants",
+  }),
+  user: one(users, {
+    fields: [scheduledSessionParticipants.userId],
+    references: [users.id],
+    relationName: "userParticipations",
+  }),
+}));
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -105,6 +164,16 @@ export const insertFriendSchema = createInsertSchema(friends).omit({
   createdAt: true,
 });
 
+export const insertScheduledSessionSchema = createInsertSchema(scheduledSessions).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertScheduledSessionParticipantSchema = createInsertSchema(scheduledSessionParticipants).omit({
+  id: true,
+  joinedAt: true,
+});
+
 // Types
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
@@ -115,3 +184,9 @@ export type InsertFocusSession = z.infer<typeof insertFocusSessionSchema>;
 
 export type Friend = typeof friends.$inferSelect;
 export type InsertFriend = z.infer<typeof insertFriendSchema>;
+
+export type ScheduledSession = typeof scheduledSessions.$inferSelect;
+export type InsertScheduledSession = z.infer<typeof insertScheduledSessionSchema>;
+
+export type ScheduledSessionParticipant = typeof scheduledSessionParticipants.$inferSelect;
+export type InsertScheduledSessionParticipant = z.infer<typeof insertScheduledSessionParticipantSchema>;
