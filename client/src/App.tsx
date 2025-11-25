@@ -12,6 +12,7 @@ import Friends from "@/pages/friends";
 import HistoryPage from "@/pages/history";
 import SearchPage from "@/pages/search";
 import Profile from "@/pages/profile";
+import CalendarPage from "@/pages/calendar";
 import NotFound from "@/pages/not-found";
 
 function AuthenticatedRoutes() {
@@ -24,6 +25,7 @@ function AuthenticatedRoutes() {
       <Route path="/history" component={HistoryPage} />
       <Route path="/search" component={SearchPage} />
       <Route path="/profile" component={Profile} />
+      <Route path="/calendar" component={CalendarPage} />
       <Route component={NotFound} />
     </Switch>
   );

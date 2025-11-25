@@ -13,16 +13,17 @@ A Focusmate-style focused work session web app where users can be randomly match
 
 ## Key Features
 1. **Random Matching**: Join a queue to be paired with another user
-2. **Video Calls**: WebRTC-powered video/audio chat
-3. **Screen Sharing**: Share your screen with your session partner
-4. **Friend System**: Add users as friends after sessions
-5. **Invite Friends**: Directly invite friends to sessions
-6. **Session History**: Track past sessions with match history
+2. **Calendar & Scheduling**: Schedule work sessions in advance with session types (solo 1-on-1, group up to 5, free rooms up to 10)
+3. **Video Calls**: WebRTC-powered video/audio chat
+4. **Screen Sharing**: Share your screen with your session partner
+5. **Friend System**: Add users as friends after sessions
+6. **Invite Friends**: Directly invite friends to sessions
+7. **Session History**: Track past sessions with match history
 
 ## Project Structure
 ```
 ├── client/src/
-│   ├── pages/           # Landing, Home, Waiting, Session, Friends, History, Search, Profile
+│   ├── pages/           # Landing, Home, Waiting, Session, Friends, History, Search, Profile, Calendar
 │   ├── components/ui/   # Shadcn UI components
 │   ├── hooks/           # useAuth, use-toast
 │   ├── lib/             # queryClient, webrtc, session-client
@@ -40,21 +41,38 @@ A Focusmate-style focused work session web app where users can be randomly match
 
 ## Database Schema
 - **users**: User profiles (id, email, username, first/last name, profile image)
-- **sessions**: Work session records (user1Id, user2Id, startedAt, endedAt, duration)
+- **focus_sessions**: Completed work session records (user1Id, user2Id, startedAt, endedAt, duration)
 - **friends**: Bidirectional friendship relations (userId, friendId)
+- **scheduled_sessions**: Calendar sessions (hostId, sessionType, title, description, capacity, startAt, endAt, status)
+- **scheduled_session_participants**: Tracks participants in scheduled sessions (sessionId, userId, role, status)
 
 ## API Endpoints
+
+### Authentication & Users
 - `GET /api/auth/user` - Get current user
 - `PATCH /api/user/username` - Update username
 - `GET /api/users/search` - Search users by username
+
+### Friends
 - `GET /api/friends` - Get friends list
 - `POST /api/friends` - Add friend
 - `DELETE /api/friends/:friendId` - Remove friend
 - `GET /api/friends/:friendId/check` - Check if users are friends
+
+### Random Matching Sessions
 - `GET /api/sessions/history` - Get session history
 - `POST /api/sessions/join-queue` - Join matching queue
 - `POST /api/sessions/leave-queue` - Leave matching queue
 - `POST /api/sessions/invite` - Invite friend to session
+
+### Scheduled Sessions (Calendar)
+- `POST /api/scheduled-sessions` - Create a scheduled session
+- `GET /api/scheduled-sessions` - Get sessions in a date range
+- `GET /api/scheduled-sessions/my-sessions` - Get user's scheduled sessions
+- `GET /api/scheduled-sessions/:sessionId` - Get specific session details
+- `POST /api/scheduled-sessions/:sessionId/join` - Join a scheduled session
+- `POST /api/scheduled-sessions/:sessionId/leave` - Leave a scheduled session
+- `GET /api/scheduled-sessions/occupancy` - Get occupancy count for time range
 
 ## WebSocket Events (via River RPC)
 - `matched` - Session partner found

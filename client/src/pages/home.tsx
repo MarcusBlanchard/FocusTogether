@@ -12,7 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Play, Users, History, Search, LogOut, Settings, Loader2 } from "lucide-react";
+import { Play, Users, History, Search, LogOut, Settings, Loader2, Calendar } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { sessionClient } from "@/lib/session-client";
@@ -135,7 +135,21 @@ export default function Home() {
           </Button>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-4">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card 
+            className="cursor-pointer hover-elevate" 
+            onClick={() => setLocation("/calendar")}
+            data-testid="card-calendar"
+          >
+            <CardHeader className="pb-2">
+              <Calendar className="h-6 w-6 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <CardTitle className="text-lg">Calendar</CardTitle>
+              <CardDescription>Schedule work sessions</CardDescription>
+            </CardContent>
+          </Card>
+
           <Card 
             className="cursor-pointer hover-elevate" 
             onClick={() => setLocation("/friends")}
