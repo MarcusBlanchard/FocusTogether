@@ -1,0 +1,75 @@
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Video, Users, Clock, Shield } from "lucide-react";
+
+export default function Landing() {
+  return (
+    <div className="min-h-screen bg-background">
+      <header className="border-b">
+        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+          <h1 className="text-2xl font-semibold">FocusSession</h1>
+          <Button asChild data-testid="button-login">
+            <a href="/api/login">Sign In</a>
+          </Button>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-4 py-16">
+        <div className="text-center mb-16">
+          <h2 className="text-4xl md:text-5xl font-semibold mb-6">
+            Stay focused with an accountability partner
+          </h2>
+          <p className="text-lg text-muted-foreground max-w-2xl mx-auto mb-8">
+            Match with another person for a focused work session. Share your screen, 
+            keep each other accountable, and get more done together.
+          </p>
+          <Button size="lg" className="px-12 py-6 text-lg rounded-full" asChild data-testid="button-get-started">
+            <a href="/api/login">Get Started</a>
+          </Button>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6">
+          <Card>
+            <CardHeader>
+              <Video className="h-8 w-8 mb-2 text-muted-foreground" />
+              <CardTitle>Video & Screen Sharing</CardTitle>
+              <CardDescription>
+                See your partner and share your screen to stay accountable during work sessions.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <Users className="h-8 w-8 mb-2 text-muted-foreground" />
+              <CardTitle>Random Matching</CardTitle>
+              <CardDescription>
+                Get matched with another focused worker instantly. No scheduling needed.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <Clock className="h-8 w-8 mb-2 text-muted-foreground" />
+              <CardTitle>Focus Sessions</CardTitle>
+              <CardDescription>
+                Work alongside someone who is also trying to get things done. Social motivation works.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <Shield className="h-8 w-8 mb-2 text-muted-foreground" />
+              <CardTitle>Friend System</CardTitle>
+              <CardDescription>
+                Add friends after sessions and invite them directly for future work sessions.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        </div>
+      </main>
+    </div>
+  );
+}
