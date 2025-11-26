@@ -203,9 +203,9 @@ export default function CalendarPage() {
   };
 
   const preferenceColors = {
-    desk: "bg-blue-100 dark:bg-blue-900 border-blue-300 dark:border-blue-700",
-    active: "bg-green-100 dark:bg-green-900 border-green-300 dark:border-green-700",
-    any: "bg-purple-100 dark:bg-purple-900 border-purple-300 dark:border-purple-700",
+    desk: "bg-blue-500/20 dark:bg-blue-500/30 border-blue-500 dark:border-blue-400 text-blue-900 dark:text-blue-100",
+    active: "bg-green-500/20 dark:bg-green-500/30 border-green-500 dark:border-green-400 text-green-900 dark:text-green-100",
+    any: "bg-purple-500/20 dark:bg-purple-500/30 border-purple-500 dark:border-purple-400 text-purple-900 dark:text-purple-100",
   };
 
   return (
@@ -331,7 +331,7 @@ export default function CalendarPage() {
                               return (
                                 <div
                                   key={session.id}
-                                  className={`absolute left-1 right-1 rounded border-l-4 p-1 text-xs overflow-hidden ${
+                                  className={`absolute left-1 right-1 rounded border-l-4 p-1 text-xs overflow-hidden cursor-pointer transition-all hover:shadow-md hover:scale-[1.02] active:scale-100 ${
                                     preferenceColors[session.bookingPreference as keyof typeof preferenceColors]
                                   }`}
                                   style={{ top: `${top}px`, height: `${height}px` }}
@@ -370,18 +370,18 @@ export default function CalendarPage() {
         </div>
 
         {/* Legend */}
-        <div className="mt-4 flex items-center gap-4 text-sm">
-          <span className="font-medium">Preferences:</span>
+        <div className="mt-4 flex flex-wrap items-center gap-4 text-sm">
+          <span className="font-medium text-muted-foreground">Work Preferences:</span>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded border-l-4 bg-blue-100 dark:bg-blue-900 border-blue-300 dark:border-blue-700"></div>
+            <div className="w-4 h-4 border-l-4 bg-blue-500/20 dark:bg-blue-500/30 border-blue-500"></div>
             <span>Desk</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded border-l-4 bg-green-100 dark:bg-green-900 border-green-300 dark:border-green-700"></div>
+            <div className="w-4 h-4 border-l-4 bg-green-500/20 dark:bg-green-500/30 border-green-500"></div>
             <span>Active</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded border-l-4 bg-purple-100 dark:bg-purple-900 border-purple-300 dark:border-purple-700"></div>
+            <div className="w-4 h-4 border-l-4 bg-purple-500/20 dark:bg-purple-500/30 border-purple-500"></div>
             <span>Any</span>
           </div>
         </div>

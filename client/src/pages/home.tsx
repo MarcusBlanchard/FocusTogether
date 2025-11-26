@@ -1,5 +1,6 @@
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -11,15 +12,82 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Users, History, Search, LogOut, Settings, Loader2, Calendar, User, UsersRound, DoorOpen } from "lucide-react";
+import { Users, History, Search, LogOut, Settings, Loader2, Calendar, User, UsersRound, Briefcase, Activity, Sparkles, Clock } from "lucide-react";
+import { format, addDays, startOfDay, endOfDay } from "date-fns";
 
-type SessionType = "solo" | "group";
+interface UserProfile {
+  id: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  profileImageUrl: string | null;
+  username: string | null;
+  preference: string;
+  bookingCount: number;
+}
+
+interface ScheduledSession {
+  id: string;
+  title: string | null;
+  startAt: string;
+  endAt: string;
+  sessionType: string;
+  bookingPreference: string;
+  durationMinutes: number;
+}
 
 export default function Home() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const [, setLocation] = useLocation();
 
-  if (isLoading) {
+  // Fetch user profile to get preference
+  const { data: profile } = useQuery<UserProfile>({
+    queryKey: ['/api/user/profile'],
+    enabled: !!user,
+  });
+
+  // Fetch upcoming sessions for mini calendar
+  const today = new Date();
+  const threeDaysLater = addDays(today, 3);
+  
+  const { data: upcomingSessions = [] } = useQuery<ScheduledSession[]>({
+    queryKey: ["/api", "scheduled-sessions", "my-sessions"],
+    enabled: !!user,
+  });
+
+  const nextThreeDaysSessions = upcomingSessions.filter((session: ScheduledSession) => {
+    const sessionStart = new Date(session.startAt);
+    return sessionStart >= today && sessionStart <= threeDaysLater;
+  }).slice(0, 3);
+
+  const getPreferenceIcon = (pref: string) => {
+    switch (pref) {
+      case 'desk': return <Briefcase className="h-3.5 w-3.5" />;
+      case 'active': return <Activity className="h-3.5 w-3.5" />;
+      case 'any': return <Sparkles className="h-3.5 w-3.5" />;
+      default: return null;
+    }
+  };
+
+  const getPreferenceLabel = (pref: string) => {
+    switch (pref) {
+      case 'desk': return 'Desk Work';
+      case 'active': return 'Active';
+      case 'any': return 'Any Style';
+      default: return pref;
+    }
+  };
+
+  const getPreferenceColor = (pref: string) => {
+    switch (pref) {
+      case 'desk': return 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-800';
+      case 'active': return 'bg-green-500/10 text-green-600 dark:text-green-400 border-green-200 dark:border-green-800';
+      case 'any': return 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-200 dark:border-purple-800';
+      default: return '';
+    }
+  };
+
+  if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -36,13 +104,24 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
           <h1 className="text-2xl font-semibold">FocusSession</h1>
           
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            {profile?.preference && (
+              <Badge 
+                variant="outline" 
+                className={`gap-1.5 ${getPreferenceColor(profile.preference)}`}
+                data-testid="badge-preference"
+              >
+                {getPreferenceIcon(profile.preference)}
+                <span className="hidden sm:inline">{getPreferenceLabel(profile.preference)}</span>
+              </Badge>
+            )}
+            
             <Badge variant="outline" className="gap-1">
               <span className="h-2 w-2 rounded-full bg-status-online" />
-              Ready
+              <span className="hidden sm:inline">Ready</span>
             </Badge>
             
             <DropdownMenu>
@@ -91,11 +170,57 @@ export default function Home() {
           </p>
         </div>
 
+        {nextThreeDaysSessions.length > 0 && (
+          <Card className="mb-8 max-w-2xl mx-auto">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Upcoming Sessions</CardTitle>
+                <Button variant="ghost" size="sm" onClick={() => setLocation("/calendar")} data-testid="button-view-all">
+                  View All
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {nextThreeDaysSessions.map((session) => (
+                <div
+                  key={session.id}
+                  className="flex items-center gap-3 p-3 rounded-lg border bg-card hover-elevate cursor-pointer"
+                  onClick={() => setLocation(`/session/${session.id}`)}
+                  data-testid={`session-preview-${session.id}`}
+                >
+                  <div className="flex-shrink-0">
+                    <div className="h-12 w-12 rounded-lg bg-muted flex items-center justify-center">
+                      <Calendar className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">
+                      {session.title || `${session.sessionType === 'solo' ? 'Solo' : 'Group'} Session`}
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <span>{format(new Date(session.startAt), 'MMM d, h:mm a')}</span>
+                      <span>•</span>
+                      <span className="flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {session.durationMinutes}m
+                      </span>
+                    </div>
+                  </div>
+                  <Badge variant="outline" className="flex-shrink-0">
+                    {session.sessionType === 'solo' ? <User className="h-3 w-3 mr-1" /> : <UsersRound className="h-3 w-3 mr-1" />}
+                    {session.sessionType}
+                  </Badge>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
+
         <div className="mb-12">
           <h3 className="text-sm font-medium text-muted-foreground mb-4 text-center">Book a Session</h3>
           <div className="grid md:grid-cols-2 gap-4 max-w-2xl mx-auto">
             <Card 
-              className="cursor-pointer hover-elevate"
+              className="cursor-pointer hover-elevate active-elevate-2"
               onClick={() => setLocation("/calendar?type=solo")}
               data-testid="card-session-solo"
             >
@@ -111,7 +236,7 @@ export default function Home() {
             </Card>
 
             <Card 
-              className="cursor-pointer hover-elevate"
+              className="cursor-pointer hover-elevate active-elevate-2"
               onClick={() => setLocation("/calendar?type=group")}
               data-testid="card-session-group"
             >
@@ -130,7 +255,7 @@ export default function Home() {
 
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card 
-            className="cursor-pointer hover-elevate" 
+            className="cursor-pointer hover-elevate active-elevate-2" 
             onClick={() => setLocation("/calendar")}
             data-testid="card-calendar"
           >
@@ -144,7 +269,7 @@ export default function Home() {
           </Card>
 
           <Card 
-            className="cursor-pointer hover-elevate" 
+            className="cursor-pointer hover-elevate active-elevate-2" 
             onClick={() => setLocation("/friends")}
             data-testid="card-friends"
           >
@@ -158,7 +283,7 @@ export default function Home() {
           </Card>
 
           <Card 
-            className="cursor-pointer hover-elevate" 
+            className="cursor-pointer hover-elevate active-elevate-2" 
             onClick={() => setLocation("/history")}
             data-testid="card-history"
           >
@@ -172,7 +297,7 @@ export default function Home() {
           </Card>
 
           <Card 
-            className="cursor-pointer hover-elevate" 
+            className="cursor-pointer hover-elevate active-elevate-2" 
             onClick={() => setLocation("/search")}
             data-testid="card-search"
           >
