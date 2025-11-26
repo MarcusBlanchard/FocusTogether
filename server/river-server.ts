@@ -19,12 +19,12 @@ export const SessionService = SessionServiceSchema.define(
     initializeState: () => ({ connectedAt: Date.now() }),
   },
   {
-    // Join the random matching queue
+    // Join the random matching queue with session type
     joinQueue: Procedure.rpc({
       requestInit: schema.JoinQueueRequest,
       responseData: schema.JoinQueueResponse,
       async handler({ reqInit }) {
-        const result = await sessionManager.joinQueue(reqInit.userId);
+        const result = await sessionManager.joinQueue(reqInit.userId, reqInit.sessionType);
         return Ok(result);
       },
     }),
@@ -183,6 +183,46 @@ export const SessionService = SessionServiceSchema.define(
         return Ok({ success: result.success });
       },
     }),
+
+    // Create a free room
+    createFreeRoom: Procedure.rpc({
+      requestInit: schema.CreateFreeRoomRequest,
+      responseData: schema.CreateFreeRoomResponse,
+      async handler({ reqInit }) {
+        const result = await sessionManager.createFreeRoom(reqInit.userId, reqInit.title);
+        return Ok(result);
+      },
+    }),
+
+    // Join a free room
+    joinFreeRoom: Procedure.rpc({
+      requestInit: schema.JoinFreeRoomRequest,
+      responseData: schema.JoinFreeRoomResponse,
+      async handler({ reqInit }) {
+        const result = await sessionManager.joinFreeRoom(reqInit.userId, reqInit.sessionId);
+        return Ok({ success: result.success });
+      },
+    }),
+
+    // Get available free rooms
+    getFreeRooms: Procedure.rpc({
+      requestInit: schema.GetFreeRoomsRequest,
+      responseData: schema.GetFreeRoomsResponse,
+      async handler() {
+        const rooms = sessionManager.getFreeRooms();
+        return Ok({ rooms });
+      },
+    }),
+
+    // Leave a room
+    leaveRoom: Procedure.rpc({
+      requestInit: schema.LeaveRoomRequest,
+      responseData: schema.LeaveRoomResponse,
+      async handler({ reqInit }) {
+        await sessionManager.leaveRoom(reqInit.userId, reqInit.sessionId);
+        return Ok({ success: true });
+      },
+    }),
   }
 );
 
@@ -220,22 +260,44 @@ export function setupRiverServer(httpServer: Server) {
         }
 
         if (message.action === 'sendSignal' && message.sessionId) {
-          // Get partner for this session
-          const partnerId = sessionManager.getPartnerIdBySession(message.sessionId, senderId);
+          // Get all participants in this session
+          const participantIds = sessionManager.getSessionParticipantIds(message.sessionId);
+          const targetId = message.targetId; // For WebRTC, we need to know who the signal is for
           
-          if (partnerId) {
-            const partnerWs = userConnections.get(partnerId);
-            if (partnerWs && partnerWs.readyState === WebSocket.OPEN) {
-              partnerWs.send(JSON.stringify({
+          if (targetId) {
+            // Send to specific participant (for WebRTC signaling)
+            const targetWs = userConnections.get(targetId);
+            if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+              targetWs.send(JSON.stringify({
                 type: 'signal',
                 signal: {
                   type: message.type,
                   sessionId: message.sessionId,
+                  senderId: senderId,
                   data: message.data,
                 },
               }));
-              console.log(`[River] Forwarded ${message.type} signal from ${senderId} to ${partnerId}`);
+              console.log(`[River] Forwarded ${message.type} signal from ${senderId} to ${targetId}`);
             }
+          } else {
+            // Broadcast to all other participants (for general messages)
+            for (const participantId of participantIds) {
+              if (participantId !== senderId) {
+                const participantWs = userConnections.get(participantId);
+                if (participantWs && participantWs.readyState === WebSocket.OPEN) {
+                  participantWs.send(JSON.stringify({
+                    type: 'signal',
+                    signal: {
+                      type: message.type,
+                      sessionId: message.sessionId,
+                      senderId: senderId,
+                      data: message.data,
+                    },
+                  }));
+                }
+              }
+            }
+            console.log(`[River] Broadcast ${message.type} from ${senderId} to ${participantIds.length - 1} participants`);
           }
         }
       } catch (error) {

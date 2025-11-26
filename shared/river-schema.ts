@@ -15,6 +15,13 @@ export const SessionState = Type.Union([
   Type.Literal('in-session'),
 ]);
 
+// Session types
+export const SessionType = Type.Union([
+  Type.Literal('solo'),
+  Type.Literal('group'),
+  Type.Literal('freeRoom'),
+]);
+
 // User info for matching
 export const UserInfo = Type.Object({
   id: Type.String(),
@@ -76,9 +83,18 @@ export const QueueStatus = Type.Object({
 // Request/Response types for procedures
 export const JoinQueueRequest = Type.Object({
   userId: Type.String(),
+  sessionType: Type.Optional(SessionType),
 });
 
-export const JoinQueueResponse = QueueStatus;
+export const JoinQueueResponse = Type.Object({
+  status: Type.Union([
+    Type.Literal('joined'),
+    Type.Literal('already-in-queue'),
+    Type.Literal('already-matched'),
+  ]),
+  position: Type.Optional(Type.Number()),
+  sessionId: Type.Optional(Type.String()),
+});
 
 export const LeaveQueueRequest = Type.Object({
   userId: Type.String(),
@@ -159,15 +175,86 @@ export const RespondToInviteResponse = Type.Object({
   partner: Type.Optional(UserInfo),
 });
 
+// Free room request/response types
+export const CreateFreeRoomRequest = Type.Object({
+  userId: Type.String(),
+  title: Type.Optional(Type.String()),
+});
+
+export const CreateFreeRoomResponse = Type.Object({
+  sessionId: Type.String(),
+});
+
+export const JoinFreeRoomRequest = Type.Object({
+  userId: Type.String(),
+  sessionId: Type.String(),
+});
+
+export const JoinFreeRoomResponse = Type.Object({
+  success: Type.Boolean(),
+});
+
+export const GetFreeRoomsRequest = Type.Object({});
+
+export const FreeRoomInfo = Type.Object({
+  sessionId: Type.String(),
+  title: Type.String(),
+  participantCount: Type.Number(),
+  maxCapacity: Type.Number(),
+  hostId: Type.String(),
+});
+
+export const GetFreeRoomsResponse = Type.Object({
+  rooms: Type.Array(FreeRoomInfo),
+});
+
+export const LeaveRoomRequest = Type.Object({
+  userId: Type.String(),
+  sessionId: Type.String(),
+});
+
+export const LeaveRoomResponse = Type.Object({
+  success: Type.Boolean(),
+});
+
 // Subscription event types
 export const MatchedEvent = Type.Object({
   type: Type.Literal('matched'),
   sessionId: Type.String(),
-  partner: UserInfo,
+  partner: Type.Optional(UserInfo),
+  sessionType: Type.Optional(SessionType),
+  participants: Type.Optional(Type.Array(UserInfo)),
 });
 
 export const PartnerDisconnectedEvent = Type.Object({
   type: Type.Literal('partner-disconnected'),
+  sessionId: Type.String(),
+});
+
+export const ParticipantJoinedEvent = Type.Object({
+  type: Type.Literal('participant-joined'),
+  sessionId: Type.String(),
+  participant: UserInfo,
+});
+
+export const ParticipantLeftEvent = Type.Object({
+  type: Type.Literal('participant-left'),
+  sessionId: Type.String(),
+  participant: Type.Object({
+    id: Type.String(),
+    username: Type.Union([Type.String(), Type.Null()]),
+  }),
+});
+
+export const RoomJoinedEvent = Type.Object({
+  type: Type.Literal('room-joined'),
+  sessionId: Type.String(),
+  sessionType: SessionType,
+  participants: Type.Array(UserInfo),
+});
+
+export const RoomEndedEvent = Type.Object({
+  type: Type.Literal('room-ended'),
   sessionId: Type.String(),
 });
 
@@ -191,6 +278,10 @@ export const SignalReceivedEvent = Type.Object({
 export const SessionEvent = Type.Union([
   MatchedEvent,
   PartnerDisconnectedEvent,
+  ParticipantJoinedEvent,
+  ParticipantLeftEvent,
+  RoomJoinedEvent,
+  RoomEndedEvent,
   InviteReceivedEvent,
   InviteResponseEvent,
   SignalReceivedEvent,
