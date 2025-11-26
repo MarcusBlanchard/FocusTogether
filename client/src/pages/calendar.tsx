@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Calendar } from "@/components/ui/calendar";
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, Calendar as CalendarIcon, Clock, Users, Loader2, Plus } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
@@ -30,19 +31,31 @@ type ScheduledSession = {
 };
 
 export default function CalendarPage() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const { user } = useAuth();
   const { toast } = useToast();
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
+  // Get session type from URL parameter
+  const searchParams = new URLSearchParams(location.split('?')[1]);
+  const urlSessionType = searchParams.get('type') as 'solo' | 'group' | null;
+  const [filterType, setFilterType] = useState<'all' | 'solo' | 'group'>(urlSessionType || 'all');
+
   // Form state
-  const [sessionType, setSessionType] = useState<string>("solo");
+  const [sessionType, setSessionType] = useState<string>(urlSessionType || "solo");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [capacity, setCapacity] = useState<number>(2);
+  const [capacity, setCapacity] = useState<number>(urlSessionType === 'group' ? 5 : 2);
   const [startTime, setStartTime] = useState("12:00");
   const [duration, setDuration] = useState(60);
+
+  // Update filter when URL changes
+  useEffect(() => {
+    if (urlSessionType) {
+      setFilterType(urlSessionType);
+    }
+  }, [urlSessionType]);
 
   // Get sessions for the selected month
   const monthStart = startOfMonth(selectedDate);
@@ -100,6 +113,27 @@ export default function CalendarPage() {
     },
   });
 
+  const joinSessionMutation = useMutation({
+    mutationFn: async (sessionId: string) => {
+      return apiRequest("POST", `/api/scheduled-sessions/${sessionId}/join`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
+      toast({
+        title: "Joined session",
+        description: "You've successfully joined the work session.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to join session",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleCreateSession = () => {
     if (!selectedDate) {
       toast({
@@ -126,15 +160,17 @@ export default function CalendarPage() {
     });
   };
 
-  // Filter sessions for selected date
+  // Filter sessions for selected date and type
   const selectedDaySessions = sessions?.filter((session) => {
     const sessionDate = new Date(session.startAt);
     const selected = startOfDay(selectedDate);
     const selectedEnd = endOfDay(selectedDate);
-    return sessionDate >= selected && sessionDate <= selectedEnd;
+    const dateMatch = sessionDate >= selected && sessionDate <= selectedEnd;
+    const typeMatch = filterType === 'all' || session.sessionType === filterType;
+    return dateMatch && typeMatch;
   }) || [];
 
-  const maxCapacity = sessionType === 'solo' ? 2 : sessionType === 'group' ? 5 : 10;
+  const maxCapacity = sessionType === 'solo' ? 2 : 5;
 
   return (
     <div className="min-h-screen bg-background">
@@ -241,7 +277,6 @@ export default function CalendarPage() {
                         <SelectContent>
                           <SelectItem value="solo">Solo (1-on-1)</SelectItem>
                           <SelectItem value="group">Group (up to 5)</SelectItem>
-                          <SelectItem value="freeRoom">Free Room (up to 10)</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -321,6 +356,15 @@ export default function CalendarPage() {
               </Dialog>
             </div>
 
+            {/* Session Type Filter Tabs */}
+            <Tabs value={filterType} onValueChange={(value) => setFilterType(value as 'all' | 'solo' | 'group')} className="mb-4">
+              <TabsList className="grid w-full grid-cols-3">
+                <TabsTrigger value="all" data-testid="tab-all">All Sessions</TabsTrigger>
+                <TabsTrigger value="solo" data-testid="tab-solo">Solo (1-on-1)</TabsTrigger>
+                <TabsTrigger value="group" data-testid="tab-group">Group</TabsTrigger>
+              </TabsList>
+            </Tabs>
+
             {isLoading ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -363,7 +407,15 @@ export default function CalendarPage() {
                         {session.hostId === user?.id ? (
                           <Badge variant="secondary">Host</Badge>
                         ) : (
-                          <Button size="sm" data-testid={`button-join-${session.id}`}>
+                          <Button 
+                            size="sm" 
+                            onClick={() => joinSessionMutation.mutate(session.id)}
+                            disabled={joinSessionMutation.isPending}
+                            data-testid={`button-join-${session.id}`}
+                          >
+                            {joinSessionMutation.isPending ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : null}
                             Join Session
                           </Button>
                         )}
