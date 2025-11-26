@@ -46,9 +46,23 @@ export default function FreeRooms() {
       return apiRequest("POST", "/api/free-rooms", { title });
     },
     onSuccess: (data: any) => {
+      console.log('[FreeRooms] Create room response:', data);
       queryClient.invalidateQueries({ queryKey: ['/api/free-rooms'] });
       setCreateDialogOpen(false);
       setRoomTitle("");
+      
+      // Extract sessionId from response
+      const sessionId = data?.sessionId || data?.data?.sessionId;
+      
+      if (!sessionId) {
+        console.error('[FreeRooms] No sessionId in response:', data);
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to get session ID from server.",
+        });
+        return;
+      }
       
       // Navigate to session page
       toast({
@@ -57,7 +71,8 @@ export default function FreeRooms() {
       });
       
       setTimeout(() => {
-        setLocation(`/session/${data.sessionId}`);
+        console.log('[FreeRooms] Navigating to session:', sessionId);
+        setLocation(`/session/${sessionId}`);
       }, 500);
     },
     onError: () => {
