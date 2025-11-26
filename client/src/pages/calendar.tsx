@@ -37,25 +37,30 @@ export default function CalendarPage() {
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
-  // Get session type from URL parameter
-  const searchParams = new URLSearchParams(location.split('?')[1]);
-  const urlSessionType = searchParams.get('type') as 'solo' | 'group' | null;
-  const [filterType, setFilterType] = useState<'all' | 'solo' | 'group'>(urlSessionType || 'all');
-
   // Form state
-  const [sessionType, setSessionType] = useState<string>(urlSessionType || "solo");
+  const [sessionType, setSessionType] = useState<string>("solo");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [capacity, setCapacity] = useState<number>(urlSessionType === 'group' ? 5 : 2);
+  const [capacity, setCapacity] = useState<number>(2);
   const [startTime, setStartTime] = useState("12:00");
   const [duration, setDuration] = useState(60);
+  const [filterType, setFilterType] = useState<'all' | 'solo' | 'group'>('all');
 
-  // Update filter when URL changes
+  // Update filter and form defaults when URL changes
   useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const urlSessionType = searchParams.get('type') as 'solo' | 'group' | null;
+    
+    console.log('[Calendar] URL params:', window.location.search, 'type:', urlSessionType);
+    
     if (urlSessionType) {
       setFilterType(urlSessionType);
+      setSessionType(urlSessionType);
+      setCapacity(urlSessionType === 'group' ? 5 : 2);
+    } else {
+      setFilterType('all');
     }
-  }, [urlSessionType]);
+  }, [location]);
 
   // Get sessions for the selected month
   const monthStart = startOfMonth(selectedDate);
