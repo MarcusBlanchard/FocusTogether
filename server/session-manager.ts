@@ -2,6 +2,7 @@ import { storage } from "./storage";
 import type { User } from "@shared/schema";
 
 export type SessionState = 'idle' | 'waiting' | 'matched' | 'in-session';
+export type SessionType = 'solo' | 'group' | 'freeRoom';
 
 export interface UserSession {
   id: string;
@@ -9,6 +10,7 @@ export interface UserSession {
   sessionId?: string;
   partnerId?: string;
   lastHeartbeat: number;
+  sessionType?: SessionType;
 }
 
 export interface ActiveMatch {
@@ -17,6 +19,17 @@ export interface ActiveMatch {
   user2Id: string;
   state: 'matched' | 'in-session';
   startedAt: Date;
+}
+
+export interface RoomSession {
+  sessionId: string;
+  sessionType: SessionType;
+  participantIds: string[];
+  maxCapacity: number;
+  state: 'waiting' | 'ready' | 'in-session';
+  startedAt: Date;
+  title?: string;
+  hostId: string;
 }
 
 export interface PendingInvite {
@@ -30,8 +43,10 @@ type EventCallback = (userId: string, event: any) => void;
 
 class SessionManager {
   private waitingQueue: string[] = [];
+  private groupQueue: string[] = []; // Queue for group sessions
   private userSessions: Map<string, UserSession> = new Map();
   private activeMatches: Map<string, ActiveMatch> = new Map();
+  private roomSessions: Map<string, RoomSession> = new Map(); // Multi-participant rooms
   private pendingInvites: Map<string, PendingInvite> = new Map();
   private eventCallback: EventCallback | null = null;
 
@@ -103,28 +118,39 @@ class SessionManager {
     return result;
   }
 
-  // Join the random matching queue
-  async joinQueue(userId: string): Promise<{ status: 'joined' | 'already-in-queue' | 'already-matched'; position?: number }> {
+  // Join the random matching queue with session type
+  async joinQueue(userId: string, sessionType: SessionType = 'solo'): Promise<{ status: 'joined' | 'already-in-queue' | 'already-matched'; position?: number; sessionId?: string }> {
     this.registerUser(userId);
     const session = this.userSessions.get(userId)!;
 
     if (session.state === 'waiting') {
-      return { status: 'already-in-queue', position: this.waitingQueue.indexOf(userId) + 1 };
+      const queue = sessionType === 'group' ? this.groupQueue : this.waitingQueue;
+      return { status: 'already-in-queue', position: queue.indexOf(userId) + 1 };
     }
 
     if (session.state === 'matched' || session.state === 'in-session') {
       return { status: 'already-matched' };
     }
 
-    // Add to queue
     session.state = 'waiting';
-    this.waitingQueue.push(userId);
-    console.log(`[SessionManager] User ${userId} joined queue. Queue size: ${this.waitingQueue.length}`);
+    session.sessionType = sessionType;
 
-    // Try to match
-    await this.tryMatch();
-
-    return { status: 'joined', position: this.waitingQueue.indexOf(userId) + 1 };
+    if (sessionType === 'group') {
+      this.groupQueue.push(userId);
+      console.log(`[SessionManager] User ${userId} joined group queue. Queue size: ${this.groupQueue.length}`);
+      // Try to create/join group session
+      const result = await this.tryMatchGroup(userId);
+      if (result.sessionId) {
+        return { status: 'joined', sessionId: result.sessionId };
+      }
+      return { status: 'joined', position: this.groupQueue.indexOf(userId) + 1 };
+    } else {
+      // Solo matching
+      this.waitingQueue.push(userId);
+      console.log(`[SessionManager] User ${userId} joined solo queue. Queue size: ${this.waitingQueue.length}`);
+      await this.tryMatch();
+      return { status: 'joined', position: this.waitingQueue.indexOf(userId) + 1 };
+    }
   }
 
   // Leave the queue
@@ -134,12 +160,19 @@ class SessionManager {
       return false;
     }
 
-    const index = this.waitingQueue.indexOf(userId);
-    if (index > -1) {
-      this.waitingQueue.splice(index, 1);
+    // Remove from appropriate queue
+    const soloIndex = this.waitingQueue.indexOf(userId);
+    if (soloIndex > -1) {
+      this.waitingQueue.splice(soloIndex, 1);
     }
+    const groupIndex = this.groupQueue.indexOf(userId);
+    if (groupIndex > -1) {
+      this.groupQueue.splice(groupIndex, 1);
+    }
+    
     session.state = 'idle';
-    console.log(`[SessionManager] User ${userId} left queue. Queue size: ${this.waitingQueue.length}`);
+    session.sessionType = undefined;
+    console.log(`[SessionManager] User ${userId} left queue`);
     return true;
   }
 
@@ -213,6 +246,225 @@ class SessionManager {
 
       console.log(`[SessionManager] Matched users ${user1Id} and ${user2Id} in session ${sessionId}`);
     }
+  }
+
+  // Try to match users for group sessions (2-5 participants)
+  private async tryMatchGroup(userId: string): Promise<{ sessionId?: string }> {
+    // Look for existing waiting group rooms with space
+    for (const [sessionId, room] of Array.from(this.roomSessions.entries())) {
+      if (
+        room.sessionType === 'group' &&
+        room.state === 'waiting' &&
+        room.participantIds.length < room.maxCapacity &&
+        !room.participantIds.includes(userId)
+      ) {
+        // Join this room
+        await this.joinRoom(userId, sessionId);
+        return { sessionId };
+      }
+    }
+
+    // Create a new group room if we have enough people waiting (2-5)
+    if (this.groupQueue.length >= 2) {
+      const participants = this.groupQueue.splice(0, Math.min(5, this.groupQueue.length));
+      const sessionId = this.generateSessionId();
+      const hostId = participants[0];
+
+      const room: RoomSession = {
+        sessionId,
+        sessionType: 'group',
+        participantIds: participants,
+        maxCapacity: 5,
+        state: 'ready',
+        startedAt: new Date(),
+        hostId,
+      };
+
+      this.roomSessions.set(sessionId, room);
+
+      // Update all participants
+      for (const participantId of participants) {
+        const session = this.userSessions.get(participantId);
+        if (session) {
+          session.state = 'matched';
+          session.sessionId = sessionId;
+        }
+      }
+
+      // Fetch all participant info
+      const participantsInfo = await Promise.all(
+        participants.map(id => storage.getUser(id))
+      );
+
+      // Notify all participants
+      for (const participantId of participants) {
+        const otherParticipants = participantsInfo
+          .filter(p => p && p.id !== participantId)
+          .map(p => ({
+            id: p!.id,
+            username: p!.username,
+            profileImageUrl: p!.profileImageUrl,
+          }));
+
+        this.emit(participantId, {
+          type: 'matched',
+          sessionId,
+          sessionType: 'group',
+          participants: otherParticipants,
+        });
+      }
+
+      console.log(`[SessionManager] Created group session ${sessionId} with ${participants.length} participants`);
+      return { sessionId };
+    }
+
+    return {};
+  }
+
+  // Create a free room
+  async createFreeRoom(userId: string, title?: string): Promise<{ sessionId: string }> {
+    this.registerUser(userId);
+    const sessionId = this.generateSessionId();
+
+    const room: RoomSession = {
+      sessionId,
+      sessionType: 'freeRoom',
+      participantIds: [userId],
+      maxCapacity: 10,
+      state: 'waiting',
+      startedAt: new Date(),
+      title: title || 'Free Room',
+      hostId: userId,
+    };
+
+    this.roomSessions.set(sessionId, room);
+
+    const session = this.userSessions.get(userId)!;
+    session.state = 'in-session';
+    session.sessionId = sessionId;
+    session.sessionType = 'freeRoom';
+
+    console.log(`[SessionManager] Created free room ${sessionId} by user ${userId}`);
+    return { sessionId };
+  }
+
+  // Join a free room
+  async joinFreeRoom(userId: string, sessionId: string): Promise<{ success: boolean; participants?: any[] }> {
+    const room = this.roomSessions.get(sessionId);
+    if (!room || room.sessionType !== 'freeRoom') {
+      return { success: false };
+    }
+
+    if (room.participantIds.length >= room.maxCapacity) {
+      return { success: false };
+    }
+
+    if (room.participantIds.includes(userId)) {
+      return { success: false };
+    }
+
+    await this.joinRoom(userId, sessionId);
+    return { success: true };
+  }
+
+  // Helper: Join a room
+  private async joinRoom(userId: string, sessionId: string) {
+    const room = this.roomSessions.get(sessionId);
+    if (!room) return;
+
+    room.participantIds.push(userId);
+
+    this.registerUser(userId);
+    const session = this.userSessions.get(userId)!;
+    session.state = 'in-session';
+    session.sessionId = sessionId;
+    session.sessionType = room.sessionType;
+
+    // Get all participants info
+    const participantsInfo = await Promise.all(
+      room.participantIds.map(id => storage.getUser(id))
+    );
+
+    const newUser = await storage.getUser(userId);
+
+    // Notify existing participants about new user
+    for (const participantId of room.participantIds) {
+      if (participantId !== userId && newUser) {
+        this.emit(participantId, {
+          type: 'participant-joined',
+          sessionId,
+          participant: {
+            id: newUser.id,
+            username: newUser.username,
+            profileImageUrl: newUser.profileImageUrl,
+          },
+        });
+      }
+    }
+
+    // Notify new user about existing participants
+    const otherParticipants = participantsInfo
+      .filter(p => p && p.id !== userId)
+      .map(p => ({
+        id: p!.id,
+        username: p!.username,
+        profileImageUrl: p!.profileImageUrl,
+      }));
+
+    this.emit(userId, {
+      type: 'room-joined',
+      sessionId,
+      sessionType: room.sessionType,
+      participants: otherParticipants,
+    });
+
+    console.log(`[SessionManager] User ${userId} joined room ${sessionId}. Total: ${room.participantIds.length}`);
+  }
+
+  // Get available free rooms
+  getFreeRooms(): Array<{ sessionId: string; title: string; participantCount: number; maxCapacity: number; hostId: string }> {
+    const rooms: Array<{ sessionId: string; title: string; participantCount: number; maxCapacity: number; hostId: string }> = [];
+
+    for (const [sessionId, room] of Array.from(this.roomSessions.entries())) {
+      if (room.sessionType === 'freeRoom' && room.participantIds.length < room.maxCapacity) {
+        rooms.push({
+          sessionId,
+          title: room.title || 'Free Room',
+          participantCount: room.participantIds.length,
+          maxCapacity: room.maxCapacity,
+          hostId: room.hostId,
+        });
+      }
+    }
+
+    return rooms;
+  }
+
+  // Get participants in a room
+  async getRoomParticipants(sessionId: string): Promise<User[]> {
+    const room = this.roomSessions.get(sessionId);
+    if (!room) return [];
+
+    const participants = await Promise.all(
+      room.participantIds.map(id => storage.getUser(id))
+    );
+
+    return participants.filter((p): p is User => p !== null);
+  }
+
+  // Get all participant IDs in a session (for signaling)
+  getSessionParticipantIds(sessionId: string): string[] {
+    const room = this.roomSessions.get(sessionId);
+    if (room) {
+      return room.participantIds;
+    }
+
+    const match = this.activeMatches.get(sessionId);
+    if (match) {
+      return [match.user1Id, match.user2Id];
+    }
+
+    return [];
   }
 
   // Invite a friend to a session
@@ -361,8 +613,35 @@ class SessionManager {
     return true;
   }
 
-  // End a session
+  // End a session (handles both 1-on-1 and room sessions)
   async endSession(sessionId: string, initiatorId?: string) {
+    // Check if it's a room session
+    const room = this.roomSessions.get(sessionId);
+    if (room) {
+      // Room session - remove all participants
+      for (const participantId of room.participantIds) {
+        const session = this.userSessions.get(participantId);
+        if (session) {
+          session.state = 'idle';
+          session.sessionId = undefined;
+          session.sessionType = undefined;
+        }
+
+        // Notify other participants
+        if (participantId !== initiatorId) {
+          this.emit(participantId, {
+            type: 'room-ended',
+            sessionId,
+          });
+        }
+      }
+
+      this.roomSessions.delete(sessionId);
+      console.log(`[SessionManager] Room session ${sessionId} ended`);
+      return;
+    }
+
+    // 1-on-1 session
     const match = this.activeMatches.get(sessionId);
     if (!match) return;
 
@@ -390,15 +669,59 @@ class SessionManager {
       session1.state = 'idle';
       session1.sessionId = undefined;
       session1.partnerId = undefined;
+      session1.sessionType = undefined;
     }
     if (session2) {
       session2.state = 'idle';
       session2.sessionId = undefined;
       session2.partnerId = undefined;
+      session2.sessionType = undefined;
     }
 
     this.activeMatches.delete(sessionId);
     console.log(`[SessionManager] Session ${sessionId} ended`);
+  }
+
+  // Leave a room (for multi-participant sessions)
+  async leaveRoom(userId: string, sessionId: string) {
+    const room = this.roomSessions.get(sessionId);
+    if (!room) return;
+
+    const index = room.participantIds.indexOf(userId);
+    if (index === -1) return;
+
+    room.participantIds.splice(index, 1);
+
+    const session = this.userSessions.get(userId);
+    if (session) {
+      session.state = 'idle';
+      session.sessionId = undefined;
+      session.sessionType = undefined;
+    }
+
+    const user = await storage.getUser(userId);
+
+    // Notify remaining participants
+    for (const participantId of room.participantIds) {
+      if (user) {
+        this.emit(participantId, {
+          type: 'participant-left',
+          sessionId,
+          participant: {
+            id: user.id,
+            username: user.username,
+          },
+        });
+      }
+    }
+
+    // If room is empty, delete it
+    if (room.participantIds.length === 0) {
+      this.roomSessions.delete(sessionId);
+      console.log(`[SessionManager] Room ${sessionId} deleted (empty)`);
+    } else {
+      console.log(`[SessionManager] User ${userId} left room ${sessionId}. Remaining: ${room.participantIds.length}`);
+    }
   }
 
   // Handle user disconnect
