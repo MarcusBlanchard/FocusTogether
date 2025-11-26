@@ -2,7 +2,8 @@
 // Uses direct WebSocket since River client requires more complex setup
 
 export interface PartnerInfo {
-  id: string;
+  id?: string;
+  userId?: string;
   username: string | null;
   profileImageUrl: string | null;
 }
