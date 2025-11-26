@@ -60,27 +60,44 @@ export const SessionService = SessionServiceSchema.define(
       },
     }),
 
-    // Send WebRTC signal to partner
+    // Send WebRTC signal to partner(s) - supports both 1-on-1 and mesh routing
     sendSignal: Procedure.rpc({
       requestInit: schema.SendSignalRequest,
       responseData: schema.SendSignalResponse,
       async handler({ reqInit }) {
-        // Find the partner for this session
-        const partnerId = sessionManager.getPartnerId(reqInit.sessionId);
-        if (!partnerId) {
+        const targetId = reqInit.targetId;
+        
+        if (targetId) {
+          // Send to specific participant (mesh networking)
+          const targetWs = userConnections.get(targetId);
+          if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+            targetWs.send(JSON.stringify({
+              type: 'signal',
+              signal: reqInit,
+            }));
+            return Ok({ delivered: true });
+          }
           return Ok({ delivered: false });
+        } else {
+          // Broadcast to all other participants (for legacy 1-on-1 support)
+          const participantIds = sessionManager.getSessionParticipantIds(reqInit.sessionId);
+          let delivered = false;
+          
+          for (const participantId of participantIds) {
+            if (participantId !== reqInit.senderId) {
+              const participantWs = userConnections.get(participantId);
+              if (participantWs && participantWs.readyState === WebSocket.OPEN) {
+                participantWs.send(JSON.stringify({
+                  type: 'signal',
+                  signal: reqInit,
+                }));
+                delivered = true;
+              }
+            }
+          }
+          
+          return Ok({ delivered });
         }
-
-        // Send signal to partner via their WebSocket
-        const partnerWs = userConnections.get(partnerId);
-        if (partnerWs && partnerWs.readyState === WebSocket.OPEN) {
-          partnerWs.send(JSON.stringify({
-            type: 'signal',
-            signal: reqInit,
-          }));
-          return Ok({ delivered: true });
-        }
-        return Ok({ delivered: false });
       },
     }),
 

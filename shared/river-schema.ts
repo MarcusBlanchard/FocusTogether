@@ -67,6 +67,8 @@ export const InviteResult = Type.Union([
 export const SignalPayload = Type.Object({
   type: SignalType,
   sessionId: Type.String(),
+  senderId: Type.Optional(Type.String()),
+  targetId: Type.Optional(Type.String()),
   data: Type.Any(),
 });
 

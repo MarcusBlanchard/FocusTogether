@@ -12,13 +12,15 @@ A Focusmate-style focused work session web app where users can be randomly match
 - **Auth**: Replit Auth (OpenID Connect)
 
 ## Key Features
-1. **Random Matching**: Join a queue to be paired with another user
+1. **Random Matching**: Join a queue to be paired with another user (solo or group matching)
 2. **Calendar & Scheduling**: Schedule work sessions in advance with session types (solo 1-on-1, group up to 5, free rooms up to 10)
-3. **Video Calls**: WebRTC-powered video/audio chat
-4. **Screen Sharing**: Share your screen with your session partner
-5. **Friend System**: Add users as friends after sessions
-6. **Invite Friends**: Directly invite friends to sessions
-7. **Session History**: Track past sessions with match history
+3. **Video Calls**: WebRTC-powered video/audio chat with mesh networking for up to 5 participants
+4. **Group Sessions**: Join or create group work sessions with 2-5 participants
+5. **Free Rooms**: Create or join open rooms with up to 10 participants
+6. **Screen Sharing**: Share your screen with session partners
+7. **Friend System**: Add users as friends after sessions
+8. **Invite Friends**: Directly invite friends to sessions
+9. **Session History**: Track past sessions with match history
 
 ## Project Structure
 ```
