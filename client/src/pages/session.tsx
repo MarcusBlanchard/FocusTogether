@@ -181,53 +181,8 @@ export default function Session() {
       const stream = await meshWebRTCManager.getUserMedia();
       setLocalStream(stream);
 
-      // Get screen share (mandatory)
-      try {
-        const displayStream = await meshWebRTCManager.getDisplayMedia();
-        setScreenStream(displayStream);
-        setScreenSharing(true);
-
-        // Handle when user stops sharing via browser UI
-        displayStream.getVideoTracks()[0].addEventListener('ended', async () => {
-          setScreenSharing(false);
-          setScreenStream(null);
-          
-          toast({
-            title: "Screen sharing required",
-            description: "Screen sharing is mandatory for focus sessions. Please share again.",
-            variant: "destructive",
-          });
-          
-          // Try to restart screen sharing after a delay
-          setTimeout(async () => {
-            try {
-              const newStream = await meshWebRTCManager.getDisplayMedia();
-              setScreenStream(newStream);
-              setScreenSharing(true);
-              
-              // Re-add the ended listener for the new stream
-              newStream.getVideoTracks()[0].addEventListener('ended', () => {
-                setScreenSharing(false);
-                setScreenStream(null);
-                toast({
-                  title: "Screen sharing stopped",
-                  description: "You stopped sharing your screen. The session will continue without screen share.",
-                });
-              });
-            } catch (retryError) {
-              console.error('[Session] Failed to restart screen sharing:', retryError);
-            }
-          }, 2000);
-        });
-      } catch (error) {
-        console.error('[Session] Error getting screen share:', error);
-        toast({
-          title: "Screen Share Required",
-          description: "You must share your screen to join this session.",
-          variant: "destructive",
-        });
-        return;
-      }
+      // Screen share is optional - don't block session if user declines
+      // Users can toggle it on later if desired
 
       meshWebRTCManager.setCallbacks({
         onPeerStream: (info) => {
@@ -452,34 +407,41 @@ export default function Session() {
 
   const handleToggleScreenShare = async () => {
     if (screenSharing) {
-      // Cannot stop screen sharing - it's mandatory
+      // Stop screen sharing
+      if (screenStream) {
+        screenStream.getTracks().forEach(track => track.stop());
+      }
+      setScreenStream(null);
+      setScreenSharing(false);
+      setScreenBlurred(false);
+      
       toast({
-        title: "Screen sharing required",
-        description: "Screen sharing is mandatory for focus sessions.",
-        variant: "destructive",
+        title: "Screen sharing stopped",
+        description: "You stopped sharing your screen.",
       });
-      return;
     } else {
+      // Start screen sharing
       try {
         const displayStream = await meshWebRTCManager.getDisplayMedia();
         setScreenStream(displayStream);
         setScreenSharing(true);
 
+        // Handle when user stops sharing via browser UI
         displayStream.getVideoTracks()[0].addEventListener('ended', () => {
+          setScreenSharing(false);
+          setScreenStream(null);
+          setScreenBlurred(false);
+          
           toast({
-            title: "Screen sharing required",
-            description: "Screen sharing is mandatory for focus sessions. Restarting...",
-            variant: "destructive",
+            title: "Screen sharing stopped",
+            description: "You stopped sharing your screen.",
           });
-          setTimeout(() => {
-            handleToggleScreenShare();
-          }, 1000);
         });
       } catch (error) {
         console.error('[Session] Error sharing screen:', error);
         toast({
-          title: "Screen Share Required",
-          description: "You must share your screen to participate in this session.",
+          title: "Screen share not available",
+          description: "Could not start screen sharing. You can try again later.",
           variant: "destructive",
         });
       }
