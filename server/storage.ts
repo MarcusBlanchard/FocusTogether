@@ -42,10 +42,12 @@ export interface IStorage {
   createScheduledSession(session: InsertScheduledSession): Promise<ScheduledSession>;
   getScheduledSession(sessionId: string): Promise<ScheduledSession | undefined>;
   updateScheduledSessionStatus(sessionId: string, status: string): Promise<ScheduledSession | undefined>;
+  updateSessionStatus(sessionId: string, status: string): Promise<ScheduledSession | undefined>;
   linkFocusSessionToScheduled(scheduledSessionId: string, focusSessionId: string): Promise<void>;
   getUpcomingSessions(startDate: Date, endDate: Date): Promise<ScheduledSession[]>;
   getUserScheduledSessions(userId: string): Promise<ScheduledSession[]>;
   getOccupancyCount(startAt: Date, endAt: Date): Promise<number>;
+  findMatchingBooking(startAt: Date, durationMinutes: number, bookingPreference: string, excludeUserId: string): Promise<ScheduledSession | undefined>;
 
   // Scheduled session participant operations
   addParticipant(participant: InsertScheduledSessionParticipant): Promise<ScheduledSessionParticipant>;
@@ -240,11 +242,80 @@ export class DatabaseStorage implements IStorage {
     return session;
   }
 
+  async updateSessionStatus(sessionId: string, status: string): Promise<ScheduledSession | undefined> {
+    return this.updateScheduledSessionStatus(sessionId, status);
+  }
+
   async linkFocusSessionToScheduled(scheduledSessionId: string, focusSessionId: string): Promise<void> {
     await db
       .update(scheduledSessions)
       .set({ focusSessionId })
       .where(eq(scheduledSessions.id, scheduledSessionId));
+  }
+
+  async findMatchingBooking(
+    startAt: Date,
+    durationMinutes: number,
+    bookingPreference: string,
+    excludeUserId: string
+  ): Promise<ScheduledSession | undefined> {
+    // Calculate end time
+    const endAt = new Date(startAt.getTime() + durationMinutes * 60000);
+
+    // Build preference matching condition
+    // desk ↔ desk or any
+    // active ↔ active or any
+    // any ↔ desk or active or any
+    let preferenceCondition;
+    if (bookingPreference === 'desk') {
+      preferenceCondition = or(
+        eq(scheduledSessions.bookingPreference, 'desk'),
+        eq(scheduledSessions.bookingPreference, 'any')
+      );
+    } else if (bookingPreference === 'active') {
+      preferenceCondition = or(
+        eq(scheduledSessions.bookingPreference, 'active'),
+        eq(scheduledSessions.bookingPreference, 'any')
+      );
+    } else {
+      // 'any' matches with all
+      preferenceCondition = or(
+        eq(scheduledSessions.bookingPreference, 'desk'),
+        eq(scheduledSessions.bookingPreference, 'active'),
+        eq(scheduledSessions.bookingPreference, 'any')
+      );
+    }
+
+    // Find sessions with matching:
+    // - Same start time
+    // - Same duration
+    // - Compatible preference
+    // - Not cancelled
+    // - Not full (has space)
+    // - Not created by this user
+    const [matchingSession] = await db
+      .select()
+      .from(scheduledSessions)
+      .where(
+        and(
+          eq(scheduledSessions.startAt, startAt),
+          eq(scheduledSessions.durationMinutes, durationMinutes),
+          preferenceCondition!,
+          ne(scheduledSessions.status, 'cancelled'),
+          ne(scheduledSessions.hostId, excludeUserId)
+        )
+      )
+      .limit(1);
+
+    if (!matchingSession) return undefined;
+
+    // Check if session has space
+    const participantCount = await this.getParticipantCount(matchingSession.id);
+    if (participantCount >= matchingSession.capacity) {
+      return undefined;
+    }
+
+    return matchingSession;
   }
 
   async getUpcomingSessions(startDate: Date, endDate: Date): Promise<ScheduledSession[]> {

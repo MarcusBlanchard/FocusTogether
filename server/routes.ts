@@ -159,30 +159,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Join the matching queue
-  app.post('/api/sessions/join-queue', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const result = await sessionManager.joinQueue(userId);
-      res.json(result);
-    } catch (error) {
-      console.error("Error joining queue:", error);
-      res.status(500).json({ message: "Failed to join queue" });
-    }
-  });
-
-  // Leave the matching queue
-  app.post('/api/sessions/leave-queue', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const success = sessionManager.leaveQueue(userId);
-      res.json({ success });
-    } catch (error) {
-      console.error("Error leaving queue:", error);
-      res.status(500).json({ message: "Failed to leave queue" });
-    }
-  });
-
   // Invite a friend to a session
   app.post('/api/sessions/invite', isAuthenticated, async (req: any, res) => {
     try {
@@ -201,87 +177,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Free Rooms Routes
-
-  // Get list of available free rooms
-  app.get('/api/free-rooms', isAuthenticated, async (req: any, res) => {
-    try {
-      const rooms = sessionManager.getFreeRooms();
-      res.json({ rooms });
-    } catch (error) {
-      console.error("Error fetching free rooms:", error);
-      res.status(500).json({ message: "Failed to fetch free rooms" });
-    }
-  });
-
-  // Create a new free room
-  app.post('/api/free-rooms', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const { title } = req.body;
-      
-      const result = await sessionManager.createFreeRoom(userId, title);
-      res.json(result);
-    } catch (error) {
-      console.error("Error creating free room:", error);
-      res.status(500).json({ message: "Failed to create free room" });
-    }
-  });
-
-  // Join a free room
-  app.post('/api/free-rooms/:sessionId/join', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const { sessionId } = req.params;
-      
-      const result = await sessionManager.joinFreeRoom(userId, sessionId);
-      res.json(result);
-    } catch (error) {
-      console.error("Error joining free room:", error);
-      res.status(500).json({ message: "Failed to join free room" });
-    }
-  });
-
   // Scheduled Sessions Routes
 
   // Create a scheduled session
   app.post('/api/scheduled-sessions', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const { sessionType, title, description, capacity, startAt, endAt } = req.body;
+      const { sessionType, bookingPreference, durationMinutes, title, description, startAt } = req.body;
 
       // Validate session type
-      if (!['solo', 'group', 'freeRoom'].includes(sessionType)) {
-        return res.status(400).json({ message: "Invalid session type" });
+      if (!['solo', 'group'].includes(sessionType)) {
+        return res.status(400).json({ message: "Invalid session type. Must be 'solo' or 'group'" });
       }
 
-      // Validate time window
-      const start = new Date(startAt);
-      const end = new Date(endAt);
-      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-        return res.status(400).json({ message: "Invalid date format" });
+      // Validate booking preference
+      if (!['desk', 'active', 'any'].includes(bookingPreference)) {
+        return res.status(400).json({ message: "Invalid booking preference. Must be 'desk', 'active', or 'any'" });
       }
-      if (start >= end) {
-        return res.status(400).json({ message: "Start time must be before end time" });
+
+      // Validate duration
+      if (![20, 40, 60].includes(durationMinutes)) {
+        return res.status(400).json({ message: "Invalid duration. Must be 20, 40, or 60 minutes" });
+      }
+
+      // Validate time
+      const start = new Date(startAt);
+      if (isNaN(start.getTime())) {
+        return res.status(400).json({ message: "Invalid date format" });
       }
       if (start < new Date()) {
         return res.status(400).json({ message: "Cannot schedule sessions in the past" });
       }
 
-      // Validate capacity based on type
-      const requiredCapacity = sessionType === 'solo' ? 2 : sessionType === 'group' ? 5 : 10;
-      if (capacity && (capacity < 2 || capacity > requiredCapacity)) {
-        return res.status(400).json({ message: `Capacity must be between 2 and ${requiredCapacity} for ${sessionType} sessions` });
-      }
-      const finalCapacity = capacity || requiredCapacity;
+      // Calculate end time based on duration
+      const end = new Date(start.getTime() + durationMinutes * 60000);
+
+      // Set capacity based on type
+      const capacity = sessionType === 'solo' ? 2 : 5;
 
       // Create the scheduled session
       const session = await storage.createScheduledSession({
         hostId: userId,
         sessionType,
-        title,
+        bookingPreference,
+        durationMinutes,
+        title: title || `${sessionType.charAt(0).toUpperCase() + sessionType.slice(1)} Session`,
         description,
-        capacity: finalCapacity,
+        capacity,
         startAt: start,
         endAt: end,
         status: 'scheduled',
@@ -295,7 +237,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: 'joined',
       });
 
-      res.json(session);
+      // Check for matching bookings and auto-match
+      const matchedSession = await storage.findMatchingBooking(
+        start,
+        durationMinutes,
+        bookingPreference,
+        userId
+      );
+
+      if (matchedSession) {
+        // Auto-match: add this user to the matched session
+        await storage.addParticipant({
+          sessionId: matchedSession.id,
+          userId,
+          role: 'participant',
+          status: 'joined',
+        });
+
+        // Update status if session is now full
+        const participantCount = await storage.getParticipantCount(matchedSession.id);
+        if (participantCount >= matchedSession.capacity) {
+          await storage.updateSessionStatus(matchedSession.id, 'ready');
+        }
+
+        // Cancel the newly created session since user joined existing one
+        await storage.updateSessionStatus(session.id, 'cancelled');
+
+        res.json({ 
+          matched: true, 
+          session: matchedSession,
+          message: "Automatically matched with an existing session"
+        });
+      } else {
+        res.json({ 
+          matched: false, 
+          session,
+          message: "Booking created. Waiting for others to join."
+        });
+      }
     } catch (error) {
       console.error("Error creating scheduled session:", error);
       res.status(500).json({ message: "Failed to create scheduled session" });
