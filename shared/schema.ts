@@ -56,14 +56,16 @@ export const friends = pgTable("friends", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Scheduled sessions table - for calendar booking and free rooms
+// Scheduled sessions table - for calendar booking
 export const scheduledSessions = pgTable("scheduled_sessions", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   hostId: varchar("host_id").notNull().references(() => users.id),
-  sessionType: varchar("session_type").notNull(), // 'solo', 'group', 'freeRoom'
+  sessionType: varchar("session_type").notNull(), // 'solo', 'group'
+  bookingPreference: varchar("booking_preference").notNull(), // 'desk', 'active', 'any'
+  durationMinutes: integer("duration_minutes").notNull(), // 20, 40, or 60
   title: varchar("title"),
   description: text("description"),
-  capacity: integer("capacity").notNull().default(2), // 2 for solo, up to 5 for group, up to 10 for free room
+  capacity: integer("capacity").notNull().default(2), // 2 for solo, up to 5 for group
   startAt: timestamp("start_at").notNull(),
   endAt: timestamp("end_at").notNull(),
   status: varchar("status").notNull().default('scheduled'), // 'scheduled', 'active', 'completed', 'cancelled'
