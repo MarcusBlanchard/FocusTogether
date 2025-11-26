@@ -201,6 +201,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Free Rooms Routes
+
+  // Get list of available free rooms
+  app.get('/api/free-rooms', isAuthenticated, async (req: any, res) => {
+    try {
+      const rooms = sessionManager.getFreeRooms();
+      res.json({ rooms });
+    } catch (error) {
+      console.error("Error fetching free rooms:", error);
+      res.status(500).json({ message: "Failed to fetch free rooms" });
+    }
+  });
+
+  // Create a new free room
+  app.post('/api/free-rooms', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { title } = req.body;
+      
+      const result = await sessionManager.createFreeRoom(userId, title);
+      res.json(result);
+    } catch (error) {
+      console.error("Error creating free room:", error);
+      res.status(500).json({ message: "Failed to create free room" });
+    }
+  });
+
+  // Join a free room
+  app.post('/api/free-rooms/:sessionId/join', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { sessionId } = req.params;
+      
+      const result = await sessionManager.joinFreeRoom(userId, sessionId);
+      res.json(result);
+    } catch (error) {
+      console.error("Error joining free room:", error);
+      res.status(500).json({ message: "Failed to join free room" });
+    }
+  });
+
   // Scheduled Sessions Routes
 
   // Create a scheduled session

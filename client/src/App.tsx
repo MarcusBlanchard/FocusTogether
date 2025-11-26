@@ -13,6 +13,7 @@ import HistoryPage from "@/pages/history";
 import SearchPage from "@/pages/search";
 import Profile from "@/pages/profile";
 import CalendarPage from "@/pages/calendar";
+import FreeRooms from "@/pages/free-rooms";
 import NotFound from "@/pages/not-found";
 
 function AuthenticatedRoutes() {
@@ -26,6 +27,7 @@ function AuthenticatedRoutes() {
       <Route path="/search" component={SearchPage} />
       <Route path="/profile" component={Profile} />
       <Route path="/calendar" component={CalendarPage} />
+      <Route path="/free-rooms" component={FreeRooms} />
       <Route component={NotFound} />
     </Switch>
   );
