@@ -12,24 +12,18 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Play, Users, History, Search, LogOut, Settings, Loader2, Calendar } from "lucide-react";
+import { Play, Users, History, Search, LogOut, Settings, Loader2, Calendar, User, UsersRound, DoorOpen } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { sessionClient } from "@/lib/session-client";
+
+type SessionType = "solo" | "group" | "freeRoom";
 
 export default function Home() {
   const { user, isLoading } = useAuth();
   const [, setLocation] = useLocation();
   const [isStarting, setIsStarting] = useState(false);
-
-  const joinQueueMutation = useMutation({
-    mutationFn: async () => {
-      return apiRequest("POST", "/api/sessions/join-queue");
-    },
-    onSuccess: () => {
-      setLocation("/waiting");
-    },
-  });
+  const [selectedType, setSelectedType] = useState<SessionType>("solo");
 
   const handleStartSession = async () => {
     if (!user) return;
@@ -39,8 +33,13 @@ export default function Home() {
     // Connect to WebSocket first
     sessionClient.connect(user.id);
     
-    // Navigate to waiting page (queue join happens there)
-    setLocation("/waiting");
+    // For free rooms, go to the free rooms lobby instead
+    if (selectedType === "freeRoom") {
+      setLocation("/free-rooms");
+    } else {
+      // For solo and group, go to waiting page with session type
+      setLocation(`/waiting?type=${selectedType}`);
+    }
   };
 
   if (isLoading) {
@@ -108,31 +107,101 @@ export default function Home() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-12">
-        <div className="text-center mb-12">
+        <div className="text-center mb-8">
           <h2 className="text-3xl font-semibold mb-4">Ready to focus?</h2>
           <p className="text-muted-foreground mb-8 max-w-md mx-auto">
-            Start a session to be matched with another focused worker. You'll work together via video call.
+            Choose your session type and start a focused work session.
           </p>
-          
-          <Button 
-            size="lg" 
-            className="px-12 py-6 text-lg rounded-full"
-            onClick={handleStartSession}
-            disabled={isStarting}
-            data-testid="button-start-session"
-          >
-            {isStarting ? (
-              <>
-                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                Connecting...
-              </>
-            ) : (
-              <>
-                <Play className="mr-2 h-5 w-5" />
-                Start Session
-              </>
-            )}
-          </Button>
+        </div>
+
+        <div className="mb-12">
+          <h3 className="text-sm font-medium text-muted-foreground mb-4 text-center">Select Session Type</h3>
+          <div className="grid md:grid-cols-3 gap-4 mb-6">
+            <Card 
+              className={`cursor-pointer hover-elevate ${selectedType === "solo" ? "border-primary" : ""}`}
+              onClick={() => setSelectedType("solo")}
+              data-testid="card-session-solo"
+            >
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <User className="h-8 w-8 text-primary" />
+                  {selectedType === "solo" && (
+                    <Badge variant="default" data-testid="badge-selected">Selected</Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">Solo (1-on-1)</CardTitle>
+                <CardDescription>
+                  Get matched with one other person for a focused work session
+                </CardDescription>
+              </CardContent>
+            </Card>
+
+            <Card 
+              className={`cursor-pointer hover-elevate ${selectedType === "group" ? "border-primary" : ""}`}
+              onClick={() => setSelectedType("group")}
+              data-testid="card-session-group"
+            >
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <UsersRound className="h-8 w-8 text-primary" />
+                  {selectedType === "group" && (
+                    <Badge variant="default" data-testid="badge-selected">Selected</Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">Group (2-5)</CardTitle>
+                <CardDescription>
+                  Join a small group session with 2-5 focused workers
+                </CardDescription>
+              </CardContent>
+            </Card>
+
+            <Card 
+              className={`cursor-pointer hover-elevate ${selectedType === "freeRoom" ? "border-primary" : ""}`}
+              onClick={() => setSelectedType("freeRoom")}
+              data-testid="card-session-freeroom"
+            >
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <DoorOpen className="h-8 w-8 text-primary" />
+                  {selectedType === "freeRoom" && (
+                    <Badge variant="default" data-testid="badge-selected">Selected</Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CardTitle className="text-lg mb-2">Free Room</CardTitle>
+                <CardDescription>
+                  Create or join an open room with up to 10 participants
+                </CardDescription>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="text-center">
+            <Button 
+              size="lg" 
+              className="px-12 py-6 text-lg rounded-full"
+              onClick={handleStartSession}
+              disabled={isStarting}
+              data-testid="button-start-session"
+            >
+              {isStarting ? (
+                <>
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  Connecting...
+                </>
+              ) : (
+                <>
+                  <Play className="mr-2 h-5 w-5" />
+                  {selectedType === "freeRoom" ? "Browse Free Rooms" : "Start Session"}
+                </>
+              )}
+            </Button>
+          </div>
         </div>
 
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
