@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Video, Users, Clock, Shield } from "lucide-react";
+import { Video, Calendar, Clock, Shield } from "lucide-react";
 
 export default function Landing() {
   return (
@@ -20,11 +20,10 @@ export default function Landing() {
             Stay focused with an accountability partner
           </h2>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto mb-8">
-            Match with another person for a focused work session. Share your screen, 
-            keep each other accountable, and get more done together.
+            Schedule a focused work session and get automatically matched with a partner who booked the same time and preferences.
           </p>
           <Button size="lg" className="px-12 py-6 text-lg rounded-full" asChild data-testid="button-get-started">
-            <a href="/api/login">Get Started</a>
+            <a href="/api/login">Book a Session</a>
           </Button>
         </div>
 
@@ -41,10 +40,10 @@ export default function Landing() {
 
           <Card>
             <CardHeader>
-              <Users className="h-8 w-8 mb-2 text-muted-foreground" />
-              <CardTitle>Random Matching</CardTitle>
+              <Calendar className="h-8 w-8 mb-2 text-muted-foreground" />
+              <CardTitle>Smart Auto-Matching</CardTitle>
               <CardDescription>
-                Get matched with another focused worker instantly. No scheduling needed.
+                Book a time slot that works for you, and we'll match you with partners who chose the same time and preferences.
               </CardDescription>
             </CardHeader>
           </Card>
