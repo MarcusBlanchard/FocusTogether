@@ -19,6 +19,8 @@ interface VideoGridProps {
   };
   localAudioEnabled: boolean;
   localVideoEnabled: boolean;
+  screenStream?: MediaStream | null;
+  screenBlurred?: boolean;
 }
 
 export function VideoGrid({ 
@@ -26,7 +28,9 @@ export function VideoGrid({
   localStream, 
   localUser, 
   localAudioEnabled, 
-  localVideoEnabled 
+  localVideoEnabled,
+  screenStream,
+  screenBlurred 
 }: VideoGridProps) {
   const totalParticipants = participants.length + 1; // +1 for local user
 
@@ -39,27 +43,78 @@ export function VideoGrid({
   };
 
   return (
-    <div className={`grid ${getGridClass()} gap-2 h-full w-full p-4`}>
-      {/* Local video */}
-      <VideoTile
-        stream={localStream}
-        user={localUser}
-        isLocal={true}
-        audioEnabled={localAudioEnabled}
-        videoEnabled={localVideoEnabled}
-      />
+    <div className="h-full w-full relative">
+      {/* Screen Share Display (when active) */}
+      {screenStream && (
+        <div className="absolute inset-0 bg-background">
+          <ScreenShareTile stream={screenStream} blurred={screenBlurred} />
+        </div>
+      )}
 
-      {/* Remote videos */}
-      {participants.map((participant) => (
+      {/* Video Grid - positioned at bottom right when screen sharing */}
+      <div 
+        className={
+          screenStream
+            ? "absolute bottom-4 right-4 grid grid-cols-2 gap-2 max-w-md"
+            : `grid ${getGridClass()} gap-2 h-full w-full p-4`
+        }
+      >
+        {/* Local video */}
         <VideoTile
-          key={participant.userId}
-          stream={participant.stream}
-          user={participant}
-          isLocal={false}
-          audioEnabled={participant.audioEnabled}
-          videoEnabled={participant.videoEnabled}
+          stream={localStream}
+          user={localUser}
+          isLocal={true}
+          audioEnabled={localAudioEnabled}
+          videoEnabled={localVideoEnabled}
         />
-      ))}
+
+        {/* Remote videos */}
+        {participants.map((participant) => (
+          <VideoTile
+            key={participant.userId}
+            stream={participant.stream}
+            user={participant}
+            isLocal={false}
+            audioEnabled={participant.audioEnabled}
+            videoEnabled={participant.videoEnabled}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface ScreenShareTileProps {
+  stream: MediaStream;
+  blurred?: boolean;
+}
+
+function ScreenShareTile({ stream, blurred }: ScreenShareTileProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  return (
+    <div className="w-full h-full flex items-center justify-center bg-black">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        className={`w-full h-full object-contain ${blurred ? 'blur-md' : ''}`}
+        data-testid="screen-share-video"
+        style={blurred ? { filter: 'blur(8px)' } : undefined}
+      />
+      {blurred && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="bg-background/80 backdrop-blur-sm px-4 py-2 rounded-lg text-sm font-medium">
+            Screen is blurred
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -82,7 +137,7 @@ function VideoTile({ stream, user, isLocal, audioEnabled = true, videoEnabled = 
   const userId = user.userId || user.id || '';
 
   useEffect(() => {
-    if (videoRef.current && stream) {
+    if (videoRef.current) {
       videoRef.current.srcObject = stream;
     }
   }, [stream]);

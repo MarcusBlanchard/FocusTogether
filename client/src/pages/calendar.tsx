@@ -120,13 +120,15 @@ export default function CalendarPage() {
     mutationFn: async (sessionId: string) => {
       return apiRequest("POST", `/api/scheduled-sessions/${sessionId}/join`, {});
     },
-    onSuccess: () => {
+    onSuccess: (_data, sessionId) => {
       queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
       queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
       toast({
         title: "Joined session",
         description: "You've successfully joined the work session.",
       });
+      // Navigate to session page
+      setLocation(`/session/${sessionId}`);
     },
     onError: (error: Error) => {
       toast({

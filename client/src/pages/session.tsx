@@ -1,26 +1,51 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams, useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { 
   Mic, 
   MicOff, 
   Video, 
   VideoOff, 
-  Monitor, 
+  Monitor,
   MonitorOff,
   PhoneOff,
   Loader2,
-  UserPlus,
-  Users
+  Users,
+  Clock,
+  UserCheck,
+  Eye,
+  EyeOff
 } from "lucide-react";
 import { sessionClient, type SessionEvent, type ParticipantInfo } from "@/lib/session-client";
 import { meshWebRTCManager } from "@/lib/webrtc-mesh";
-import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { VideoGrid, type VideoParticipant } from "@/components/VideoGrid";
+import { format, formatDistanceToNow, isPast, isBefore, addMinutes } from "date-fns";
+
+type SessionStatus = 'pre-session' | 'active' | 'ended' | 'post-session';
+
+interface ScheduledSessionData {
+  id: string;
+  title: string | null;
+  description: string | null;
+  sessionType: string;
+  capacity: number;
+  startAt: string;
+  endAt: string;
+  participantCount: number;
+  participants?: Array<{
+    userId: string;
+    username: string | null;
+    role: string;
+  }>;
+}
 
 export default function Session() {
   const params = useParams<{ sessionId: string }>();
@@ -28,31 +53,96 @@ export default function Session() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>('pre-session');
   const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [participants, setParticipants] = useState<VideoParticipant[]>([]);
 
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [videoEnabled, setVideoEnabled] = useState(true);
   const [screenSharing, setScreenSharing] = useState(false);
+  const [screenBlurred, setScreenBlurred] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
 
   const [sessionDuration, setSessionDuration] = useState(0);
-  const sessionStartRef = useRef<Date>(new Date());
+  const [countdown, setCountdown] = useState(0);
+  const sessionStartRef = useRef<Date | null>(null);
+  const initializingRef = useRef(false);
 
-  // Timer effect
+  // Fetch scheduled session details
+  const { data: sessionData, isLoading: sessionLoading } = useQuery<ScheduledSessionData>({
+    queryKey: ['/api/scheduled-sessions', params.sessionId],
+    enabled: !!params.sessionId,
+    refetchInterval: sessionStatus === 'pre-session' ? 5000 : false, // Poll while waiting
+  });
+
+  // Log session completion
+  const completeSessionMutation = useMutation({
+    mutationFn: async (data: { sessionId: string; duration: number }) => {
+      return apiRequest("POST", "/api/sessions/complete", data);
+    },
+  });
+
+  // Countdown timer for pre-session
   useEffect(() => {
+    if (!sessionData?.startAt) return;
+
     const interval = setInterval(() => {
-      const elapsed = Math.floor((new Date().getTime() - sessionStartRef.current.getTime()) / 1000);
+      const startTime = new Date(sessionData.startAt);
+      const now = new Date();
+      const diff = Math.floor((startTime.getTime() - now.getTime()) / 1000);
+
+      if (diff <= 0) {
+        setCountdown(0);
+        // Auto-enter session when time is reached
+        if (sessionStatus === 'pre-session' && !initializingRef.current) {
+          setSessionStatus('active');
+          initSession();
+        }
+      } else {
+        setCountdown(diff);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [sessionData, sessionStatus]);
+
+  // Session duration timer
+  useEffect(() => {
+    if (sessionStatus !== 'active' || !sessionStartRef.current) return;
+
+    const interval = setInterval(() => {
+      const elapsed = Math.floor((new Date().getTime() - sessionStartRef.current!.getTime()) / 1000);
       setSessionDuration(elapsed);
     }, 1000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [sessionStatus]);
 
-  // Initialize WebRTC and session
+  // Determine initial session status
   useEffect(() => {
-    if (!user || !params.sessionId) return;
+    if (!sessionData) return;
 
+    const startTime = new Date(sessionData.startAt);
+    const endTime = new Date(sessionData.endAt);
+    const now = new Date();
+
+    if (isPast(endTime)) {
+      setSessionStatus('ended');
+    } else if (isBefore(now, startTime)) {
+      setSessionStatus('pre-session');
+    } else if (!initializingRef.current) {
+      // Session time has arrived, auto-enter
+      setSessionStatus('active');
+      sessionStartRef.current = startTime;
+      initSession();
+    }
+  }, [sessionData]);
+
+  const initSession = async () => {
+    if (!user || !params.sessionId || initializingRef.current) return;
+    
+    initializingRef.current = true;
     let unsubscribe: (() => void) | null = null;
 
     const waitForConnection = (): Promise<void> => {
@@ -69,7 +159,6 @@ export default function Session() {
           }
         }, 100);
 
-        // Reject on timeout after 10 seconds
         setTimeout(() => {
           clearInterval(checkInterval);
           if (!sessionClient.isConnected() || !sessionClient.getUserId()) {
@@ -81,107 +170,141 @@ export default function Session() {
       });
     };
 
-    const initSession = async () => {
+    try {
+      if (!sessionClient.isConnected()) {
+        sessionClient.connect(user.id);
+      }
+
+      await waitForConnection();
+
+      // Get local media (camera + mic)
+      const stream = await meshWebRTCManager.getUserMedia();
+      setLocalStream(stream);
+
+      // Get screen share (mandatory)
       try {
-        // Ensure session client is connected first
-        if (!sessionClient.isConnected()) {
-          sessionClient.connect(user.id);
-        }
+        const displayStream = await meshWebRTCManager.getDisplayMedia();
+        setScreenStream(displayStream);
+        setScreenSharing(true);
 
-        // Wait for actual connection and userId to be available
-        await waitForConnection();
-
-        // Get local media
-        const stream = await meshWebRTCManager.getUserMedia();
-        setLocalStream(stream);
-
-        // Set up WebRTC callbacks
-        meshWebRTCManager.setCallbacks({
-          onPeerStream: (info) => {
-            console.log('[Session] Remote stream from:', info.peerId);
-            setParticipants(prev => {
-              const existing = prev.find(p => p.userId === info.peerId);
-              if (existing) {
-                return prev.map(p => p.userId === info.peerId ? { ...p, stream: info.stream } : p);
-              }
-              return prev;
-            });
-            setConnectionState('connected');
-          },
-          onSignal: (signal) => {
-            // Send signal via session client
-            const userId = sessionClient.getUserId();
-            if (!userId) {
-              console.error('[Session] Cannot send signal - user ID not available');
-              return;
+        // Handle when user stops sharing via browser UI
+        displayStream.getVideoTracks()[0].addEventListener('ended', async () => {
+          setScreenSharing(false);
+          setScreenStream(null);
+          
+          toast({
+            title: "Screen sharing required",
+            description: "Screen sharing is mandatory for focus sessions. Please share again.",
+            variant: "destructive",
+          });
+          
+          // Try to restart screen sharing after a delay
+          setTimeout(async () => {
+            try {
+              const newStream = await meshWebRTCManager.getDisplayMedia();
+              setScreenStream(newStream);
+              setScreenSharing(true);
+              
+              // Re-add the ended listener for the new stream
+              newStream.getVideoTracks()[0].addEventListener('ended', () => {
+                setScreenSharing(false);
+                setScreenStream(null);
+                toast({
+                  title: "Screen sharing stopped",
+                  description: "You stopped sharing your screen. The session will continue without screen share.",
+                });
+              });
+            } catch (retryError) {
+              console.error('[Session] Failed to restart screen sharing:', retryError);
             }
-            sessionClient.sendSignal(
-              params.sessionId!,
-              signal.type,
-              signal.data,
-              userId,
-              signal.targetId
-            );
-          },
-          onConnectionStateChange: (peerId, state) => {
-            console.log('[Session] Connection state for', peerId, ':', state);
-            if (state === 'connected') {
-              setConnectionState('connected');
-            } else if (state === 'failed' || state === 'disconnected') {
-              // Remove participant stream
-              setParticipants(prev => prev.map(p => 
-                p.userId === peerId ? { ...p, stream: null } : p
-              ));
-            }
-          },
+          }, 2000);
         });
-
-        meshWebRTCManager.setSessionId(params.sessionId!);
-        meshWebRTCManager.setMyUserId(user.id);
-
-        // Set up session event listener AFTER initialization
-        unsubscribe = sessionClient.onEvent(async (event: SessionEvent) => {
-          if (event.type === 'signal' && event.signal) {
-            await handleSignal(event.signal);
-          } else if (event.type === 'participant-joined' && event.participant) {
-            // Ignore self
-            if (event.participant.userId !== user.id) {
-              await handleParticipantJoined(event.participant);
-            }
-          } else if (event.type === 'participant-left' && event.participant) {
-            // Ignore self
-            if (event.participant.userId !== user.id) {
-              handleParticipantLeft(event.participant);
-            }
-          } else if (event.type === 'room-joined' && event.participants) {
-            await handleRoomJoined(event.participants);
-          } else if (event.type === 'partner-disconnected') {
-            handlePartnerDisconnect();
-          } else if (event.type === 'matched' && event.partner) {
-            await handleMatched(event.partner);
-          }
-        });
-
-        console.log('[Session] Initialization complete');
       } catch (error) {
-        console.error('[Session] Error initializing:', error);
+        console.error('[Session] Error getting screen share:', error);
         toast({
-          title: "Connection Error",
-          description: "Failed to access camera/microphone. Please check permissions.",
+          title: "Screen Share Required",
+          description: "You must share your screen to join this session.",
           variant: "destructive",
         });
+        return;
       }
-    };
 
-    initSession();
+      meshWebRTCManager.setCallbacks({
+        onPeerStream: (info) => {
+          console.log('[Session] Remote stream from:', info.peerId);
+          setParticipants(prev => {
+            const existing = prev.find(p => p.userId === info.peerId);
+            if (existing) {
+              return prev.map(p => p.userId === info.peerId ? { ...p, stream: info.stream } : p);
+            }
+            return prev;
+          });
+          setConnectionState('connected');
+        },
+        onSignal: (signal) => {
+          const userId = sessionClient.getUserId();
+          if (!userId) {
+            console.error('[Session] Cannot send signal - user ID not available');
+            return;
+          }
+          sessionClient.sendSignal(
+            params.sessionId!,
+            signal.type,
+            signal.data,
+            userId,
+            signal.targetId
+          );
+        },
+        onConnectionStateChange: (peerId, state) => {
+          console.log('[Session] Connection state for', peerId, ':', state);
+          if (state === 'connected') {
+            setConnectionState('connected');
+          } else if (state === 'failed' || state === 'disconnected') {
+            setParticipants(prev => prev.map(p => 
+              p.userId === peerId ? { ...p, stream: null } : p
+            ));
+          }
+        },
+      });
+
+      meshWebRTCManager.setSessionId(params.sessionId!);
+      meshWebRTCManager.setMyUserId(user.id);
+
+      unsubscribe = sessionClient.onEvent(async (event: SessionEvent) => {
+        if (event.type === 'signal' && event.signal) {
+          await handleSignal(event.signal);
+        } else if (event.type === 'participant-joined' && event.participant) {
+          if (event.participant.userId !== user.id) {
+            await handleParticipantJoined(event.participant);
+          }
+        } else if (event.type === 'participant-left' && event.participant) {
+          if (event.participant.userId !== user.id) {
+            handleParticipantLeft(event.participant);
+          }
+        } else if (event.type === 'room-joined' && event.participants) {
+          await handleRoomJoined(event.participants);
+        } else if (event.type === 'partner-disconnected') {
+          handlePartnerDisconnect();
+        } else if (event.type === 'matched' && event.partner) {
+          await handleMatched(event.partner);
+        }
+      });
+
+      sessionStartRef.current = new Date();
+      console.log('[Session] Initialization complete');
+    } catch (error) {
+      console.error('[Session] Error initializing:', error);
+      toast({
+        title: "Connection Error",
+        description: "Failed to access camera/microphone/screen. Please check permissions.",
+        variant: "destructive",
+      });
+    }
 
     return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-      meshWebRTCManager.close();
+      if (unsubscribe) unsubscribe();
     };
-  }, [user, params.sessionId]);
+  };
 
   const handleSignal = async (signal: { type: string; sessionId: string; senderId: string; targetId?: string; data: any }) => {
     try {
@@ -205,19 +328,10 @@ export default function Session() {
 
   const handleMatched = async (partner: { id?: string; userId?: string; username: string | null; profileImageUrl: string | null }) => {
     const participantId = partner.userId || partner.id;
-    if (!participantId) {
-      console.error('[Session] Matched partner has no userId:', partner);
-      return;
-    }
+    if (!participantId) return;
 
-    console.log('[Session] Matched with partner:', partner);
-
-    // Check if we already have a connection to this participant
     const existingConnection = meshWebRTCManager.getPeerConnection(participantId);
-    if (existingConnection) {
-      console.log('[Session] Already have connection to', participantId);
-      return;
-    }
+    if (existingConnection) return;
 
     setParticipants([{
       userId: participantId,
@@ -228,12 +342,8 @@ export default function Session() {
       videoEnabled: true,
     }]);
 
-    // Role-based signaling: lower userId initiates offer to avoid glare
     const userId = sessionClient.getUserId();
-    if (!userId) {
-      console.error('[Session] Cannot initiate offer - userId not available');
-      return;
-    }
+    if (!userId) return;
 
     const shouldInitiate = userId < participantId;
     if (shouldInitiate) {
@@ -243,25 +353,14 @@ export default function Session() {
       } catch (error) {
         console.error('[Session] Error creating offer:', error);
       }
-    } else {
-      console.log('[Session] Waiting for offer from', participantId);
     }
   };
 
   const handleParticipantJoined = async (participant: ParticipantInfo) => {
-    if (!participant.userId) {
-      console.error('[Session] Participant joined without userId:', participant);
-      return;
-    }
+    if (!participant.userId) return;
 
-    console.log('[Session] Participant joined:', participant);
-
-    // Check if we already have a connection to this participant
     const existingConnection = meshWebRTCManager.getPeerConnection(participant.userId);
-    if (existingConnection) {
-      console.log('[Session] Already have connection to', participant.userId);
-      return;
-    }
+    if (existingConnection) return;
 
     setParticipants(prev => [...prev, {
       userId: participant.userId,
@@ -272,12 +371,13 @@ export default function Session() {
       videoEnabled: true,
     }]);
 
-    // Role-based signaling: lower userId initiates offer
+    toast({
+      title: "Participant joined",
+      description: `${participant.username || "A participant"} joined the session.`,
+    });
+
     const userId = sessionClient.getUserId();
-    if (!userId) {
-      console.error('[Session] Cannot initiate offer - userId not available');
-      return;
-    }
+    if (!userId) return;
 
     const shouldInitiate = userId < participant.userId;
     if (shouldInitiate) {
@@ -287,8 +387,6 @@ export default function Session() {
       } catch (error) {
         console.error('[Session] Error creating offer for new participant:', error);
       }
-    } else {
-      console.log('[Session] Waiting for offer from', participant.userId);
     }
   };
 
@@ -304,15 +402,9 @@ export default function Session() {
   };
 
   const handleRoomJoined = async (participants: ParticipantInfo[]) => {
-    console.log('[Session] Joined room with participants:', participants);
-    
     const userId = sessionClient.getUserId();
-    if (!userId) {
-      console.error('[Session] Cannot join room - userId not available');
-      return;
-    }
+    if (!userId) return;
     
-    // Add all existing participants (excluding self)
     const otherParticipants = participants.filter(p => p.userId && p.userId !== userId);
     setParticipants(otherParticipants.map(p => ({
       userId: p.userId,
@@ -323,7 +415,6 @@ export default function Session() {
       videoEnabled: true,
     })));
 
-    // Create offers only to participants with higher userIds (role-based to avoid glare)
     for (const participant of otherParticipants) {
       if (!participant.userId) continue;
 
@@ -335,8 +426,6 @@ export default function Session() {
         } catch (error) {
           console.error('[Session] Error creating offer for participant:', error);
         }
-      } else {
-        console.log('[Session] Waiting for offer from', participant.userId);
       }
     }
   };
@@ -363,54 +452,116 @@ export default function Session() {
 
   const handleToggleScreenShare = async () => {
     if (screenSharing) {
-      meshWebRTCManager.stopScreenShare();
-      setScreenSharing(false);
+      // Cannot stop screen sharing - it's mandatory
+      toast({
+        title: "Screen sharing required",
+        description: "Screen sharing is mandatory for focus sessions.",
+        variant: "destructive",
+      });
+      return;
     } else {
       try {
-        await meshWebRTCManager.getDisplayMedia();
+        const displayStream = await meshWebRTCManager.getDisplayMedia();
+        setScreenStream(displayStream);
         setScreenSharing(true);
+
+        displayStream.getVideoTracks()[0].addEventListener('ended', () => {
+          toast({
+            title: "Screen sharing required",
+            description: "Screen sharing is mandatory for focus sessions. Restarting...",
+            variant: "destructive",
+          });
+          setTimeout(() => {
+            handleToggleScreenShare();
+          }, 1000);
+        });
       } catch (error) {
         console.error('[Session] Error sharing screen:', error);
         toast({
-          title: "Screen Share Error",
-          description: "Failed to share screen. Please try again.",
+          title: "Screen Share Required",
+          description: "You must share your screen to participate in this session.",
           variant: "destructive",
         });
       }
     }
   };
 
+  const handleToggleScreenBlur = () => {
+    const newState = !screenBlurred;
+    setScreenBlurred(newState);
+    
+    if (screenStream) {
+      const videoTrack = screenStream.getVideoTracks()[0];
+      if (videoTrack) {
+        // Apply CSS filter to blur the screen share
+        // This will be handled in VideoGrid component
+      }
+    }
+  };
+
   const handleEndSession = () => {
+    // Log session completion
+    if (sessionStartRef.current && sessionStatus === 'active') {
+      const duration = Math.floor((new Date().getTime() - sessionStartRef.current.getTime()) / 1000);
+      completeSessionMutation.mutate({
+        sessionId: params.sessionId!,
+        duration,
+      });
+    }
+
     meshWebRTCManager.close();
     sessionClient.disconnect();
-    setLocation("/");
+    
+    if (sessionStartRef.current) {
+      setSessionStatus('post-session');
+    } else {
+      setLocation("/");
+    }
   };
 
   const formatDuration = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const formatCountdown = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}h ${mins}m ${secs}s`;
+    } else if (mins > 0) {
+      return `${mins}m ${secs}s`;
+    }
+    return `${secs}s`;
   };
 
   const getConnectionBadge = () => {
     switch (connectionState) {
       case 'connecting':
         return (
-          <Badge variant="secondary" className="gap-1">
+          <Badge variant="secondary" className="gap-1" data-testid="badge-connecting">
             <Loader2 className="h-3 w-3 animate-spin" />
             Connecting
           </Badge>
         );
       case 'connected':
         return (
-          <Badge variant="outline" className="gap-1">
+          <Badge variant="outline" className="gap-1" data-testid="badge-connected">
             <span className="h-2 w-2 rounded-full bg-status-online" />
             Connected
           </Badge>
         );
       case 'disconnected':
         return (
-          <Badge variant="destructive" className="gap-1">
+          <Badge variant="destructive" className="gap-1" data-testid="badge-disconnected">
             <span className="h-2 w-2 rounded-full bg-status-offline" />
             Disconnected
           </Badge>
@@ -420,6 +571,169 @@ export default function Session() {
 
   if (!user) return null;
 
+  if (sessionLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center">
+          <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4 text-muted-foreground" />
+          <p className="text-muted-foreground">Loading session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!sessionData) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Session Not Found</CardTitle>
+            <CardDescription>This session doesn't exist or has been deleted.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={() => setLocation("/calendar")} className="w-full">
+              Back to Calendar
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Pre-session countdown screen
+  if (sessionStatus === 'pre-session') {
+    const startTime = new Date(sessionData.startAt);
+    
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-2xl">
+          <CardHeader className="text-center">
+            <CardTitle className="text-3xl mb-2">{sessionData.title || "Work Session"}</CardTitle>
+            <CardDescription className="text-lg">
+              {sessionData.sessionType === 'solo' ? '1-on-1 Session' : 'Group Session'} • {sessionData.participantCount}/{sessionData.capacity} joined
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="text-center">
+              <Clock className="h-16 w-16 mx-auto mb-4 text-primary" />
+              <p className="text-sm text-muted-foreground mb-2">Session starts in</p>
+              <p className="text-5xl font-bold mb-4" data-testid="text-countdown">
+                {formatCountdown(countdown)}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {format(startTime, "EEEE, MMMM d 'at' h:mm a")}
+              </p>
+            </div>
+
+            <div className="border-t pt-6">
+              <h3 className="font-semibold mb-3 flex items-center gap-2">
+                <Users className="h-4 w-4" />
+                Participants ({sessionData.participantCount}/{sessionData.capacity})
+              </h3>
+              {sessionData.participants && sessionData.participants.length > 0 ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {sessionData.participants.map((p: any) => (
+                    <div key={p.userId} className="flex items-center gap-2 p-2 rounded-lg border">
+                      <UserCheck className="h-4 w-4 text-status-online" />
+                      <span className="text-sm">{p.username || "Anonymous"}</span>
+                      {p.role === 'host' && <Badge variant="outline" className="text-xs">Host</Badge>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  Waiting for participants to join...
+                </p>
+              )}
+            </div>
+
+            {sessionData.description && (
+              <div className="border-t pt-6">
+                <h3 className="font-semibold mb-2">Description</h3>
+                <p className="text-sm text-muted-foreground">{sessionData.description}</p>
+              </div>
+            )}
+
+            <Button 
+              onClick={() => setLocation("/calendar")} 
+              variant="outline" 
+              className="w-full"
+              data-testid="button-back-to-calendar"
+            >
+              Back to Calendar
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Session ended screen
+  if (sessionStatus === 'ended') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <CardTitle>Session Has Ended</CardTitle>
+            <CardDescription>
+              This session ended at {format(new Date(sessionData.endAt), "h:mm a")}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={() => setLocation("/calendar")} className="w-full">
+              Back to Calendar
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Post-session summary
+  if (sessionStatus === 'post-session') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl mb-2">Session Complete!</CardTitle>
+            <CardDescription>Great work staying focused</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="text-center border rounded-lg p-6 bg-muted/30">
+              <p className="text-sm text-muted-foreground mb-2">Session Duration</p>
+              <p className="text-4xl font-bold" data-testid="text-final-duration">
+                {formatDuration(sessionDuration)}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between p-3 rounded-lg border">
+                <span className="text-sm font-medium">Session Type</span>
+                <Badge variant="outline">
+                  {sessionData.sessionType === 'solo' ? '1-on-1' : 'Group'}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between p-3 rounded-lg border">
+                <span className="text-sm font-medium">Participants</span>
+                <span className="text-sm">{participants.length + 1}</span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Button onClick={() => setLocation("/calendar")} className="w-full">
+                Back to Calendar
+              </Button>
+              <Button onClick={() => setLocation("/history")} variant="outline" className="w-full">
+                View History
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Active session screen
   return (
     <div className="h-screen w-screen bg-background flex flex-col">
       {/* Top Bar */}
@@ -466,7 +780,7 @@ export default function Session() {
           <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-10">
             <div className="text-center">
               <p className="text-lg font-medium mb-2">Session has ended</p>
-              <Button onClick={handleEndSession}>Return Home</Button>
+              <Button onClick={handleEndSession}>View Summary</Button>
             </div>
           </div>
         )}
@@ -477,6 +791,8 @@ export default function Session() {
           localUser={user}
           localAudioEnabled={audioEnabled}
           localVideoEnabled={videoEnabled}
+          screenStream={screenStream}
+          screenBlurred={screenBlurred}
         />
       </main>
 
@@ -502,24 +818,30 @@ export default function Session() {
           {videoEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
         </Button>
 
-        <Button
-          variant={screenSharing ? "default" : "outline"}
-          className="px-6 py-3 rounded-lg"
-          onClick={handleToggleScreenShare}
-          data-testid="button-toggle-screen"
-        >
-          {screenSharing ? (
-            <>
-              <MonitorOff className="mr-2 h-5 w-5" />
-              Stop Sharing
-            </>
-          ) : (
-            <>
-              <Monitor className="mr-2 h-5 w-5" />
-              Share Screen
-            </>
-          )}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="default"
+            className="px-6 py-3 rounded-lg"
+            disabled
+            data-testid="button-screen-share-status"
+          >
+            <Monitor className="mr-2 h-5 w-5" />
+            Screen Sharing
+          </Button>
+          
+          <div className="flex items-center gap-2 px-4 py-2 rounded-lg border bg-background">
+            <Label htmlFor="blur-screen" className="text-sm cursor-pointer flex items-center gap-2">
+              {screenBlurred ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              Blur
+            </Label>
+            <Switch
+              id="blur-screen"
+              checked={screenBlurred}
+              onCheckedChange={handleToggleScreenBlur}
+              data-testid="switch-blur-screen"
+            />
+          </div>
+        </div>
       </footer>
     </div>
   );

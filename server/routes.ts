@@ -451,6 +451,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Log session completion
+  app.post('/api/sessions/complete', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { sessionId, duration } = req.body;
+
+      console.log(`[Session Complete] User ${userId} completed session ${sessionId} (${duration}s)`);
+      
+      // Note: For now we just log it. In the future we could:
+      // - Update scheduled_sessions status to 'completed'
+      // - Create focus_sessions records for pairwise participant tracking
+      // - Track analytics and session stats
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error logging session completion:", error);
+      res.status(500).json({ message: "Failed to log session completion" });
+    }
+  });
+
   const httpServer = createServer(app);
 
   // Setup River RPC server

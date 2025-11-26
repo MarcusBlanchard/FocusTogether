@@ -73,6 +73,14 @@ class MeshWebRTCManager {
         video: true,
         audio: false,
       });
+      
+      // Add screen tracks to all existing peer connections
+      this.screenStream.getTracks().forEach((track) => {
+        this.peerConnections.forEach((pc) => {
+          pc.addTrack(track, this.screenStream!);
+        });
+      });
+      
       return this.screenStream;
     } catch (error) {
       console.error('[WebRTC Mesh] Error getting display media:', error);
@@ -112,6 +120,34 @@ class MeshWebRTCManager {
         pc.addTrack(track, this.localStream!);
       });
     }
+    
+    // Add screen share tracks if available
+    if (this.screenStream) {
+      this.screenStream.getTracks().forEach((track) => {
+        pc.addTrack(track, this.screenStream!);
+      });
+    }
+
+    // Handle negotiation needed (for adding/removing tracks)
+    pc.onnegotiationneeded = async () => {
+      try {
+        console.log('[WebRTC Mesh] Negotiation needed for', peerId);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        if (this.callbacks.onSignal) {
+          this.callbacks.onSignal({
+            type: 'offer',
+            sessionId: this.sessionId,
+            senderId: this.myUserId,
+            targetId: peerId,
+            data: offer,
+          });
+        }
+      } catch (error) {
+        console.error('[WebRTC Mesh] Error during renegotiation:', error);
+      }
+    };
 
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
@@ -276,7 +312,19 @@ class MeshWebRTCManager {
 
   stopScreenShare() {
     if (this.screenStream) {
-      this.screenStream.getTracks().forEach((track) => track.stop());
+      // Remove screen tracks from all peer connections
+      const screenTracks = this.screenStream.getTracks();
+      this.peerConnections.forEach((pc) => {
+        const senders = pc.getSenders();
+        senders.forEach((sender) => {
+          if (sender.track && screenTracks.includes(sender.track)) {
+            pc.removeTrack(sender);
+          }
+        });
+      });
+      
+      // Stop the screen tracks
+      screenTracks.forEach((track) => track.stop());
       this.screenStream = null;
     }
   }

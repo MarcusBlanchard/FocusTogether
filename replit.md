@@ -98,7 +98,12 @@ The app runs on port 5000.
 ## Session Flow
 1. User navigates to Calendar page (from Solo/Group cards on home with ?type parameter for pre-selection)
 2. User schedules a new session or joins an existing session
-3. At session start time, users navigate to /session/:sessionId
-4. Session client connects to River WebSocket
-5. WebRTC connection established via P2P mesh signaling
-6. Video call active until one user ends session
+3. User clicks "Join Session" → navigates to /session/:sessionId
+4. **Pre-session countdown**: Shows countdown timer and participant list before session starts
+5. **Auto-entry**: When session time is reached, automatically enters the session
+6. **WebRTC initialization**: Session client connects to River WebSocket, establishes P2P mesh connections
+7. **Media streams**: Camera, microphone, and screen sharing (with optional blur) activated
+8. **Active session**: Video call with controls (mute, camera, timer, participant names)
+9. **Late joiners/early leavers**: Handled dynamically via WebRTC mesh renegotiation
+10. **Session end**: User clicks "End Session" → shows post-session summary with duration
+11. **Session logging**: Completion logged to server for history tracking
