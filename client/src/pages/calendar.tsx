@@ -51,8 +51,6 @@ export default function CalendarPage() {
     const searchParams = new URLSearchParams(window.location.search);
     const urlSessionType = searchParams.get('type') as 'solo' | 'group' | null;
     
-    console.log('[Calendar] URL params:', window.location.search, 'type:', urlSessionType);
-    
     if (urlSessionType) {
       setFilterType(urlSessionType);
       setSessionType(urlSessionType);

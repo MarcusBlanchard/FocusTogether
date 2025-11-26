@@ -1,26 +1,25 @@
 # FocusSession - Video Co-Working App
 
 ## Overview
-A Focusmate-style focused work session web app where users can be randomly matched for video/screen-sharing work sessions or invite friends directly.
+A Focusmate-style focused work session web app with calendar-based booking. Users schedule Solo (1-on-1) or Group (2-5 people) sessions in advance, then join video/screen-sharing work sessions with accountability partners.
 
 ## Tech Stack
 - **Frontend**: React with TypeScript, Vite, Tailwind CSS, Shadcn UI
 - **Backend**: Express.js with TypeScript
 - **Database**: PostgreSQL with Drizzle ORM
 - **Real-time**: Replit River RPC over WebSocket
-- **Video**: WebRTC peer-to-peer (with STUN servers)
+- **Video**: WebRTC peer-to-peer mesh networking (with STUN servers)
 - **Auth**: Replit Auth (OpenID Connect)
 
 ## Key Features
-1. **Random Matching**: Join a queue to be paired with another user (solo or group matching)
-2. **Calendar & Scheduling**: Schedule work sessions in advance with session types (solo 1-on-1, group up to 5, free rooms up to 10)
-3. **Video Calls**: WebRTC-powered video/audio chat with mesh networking for up to 5 participants
-4. **Group Sessions**: Join or create group work sessions with 2-5 participants
-5. **Free Rooms**: Create or join open rooms with up to 10 participants
-6. **Screen Sharing**: Share your screen with session partners
-7. **Friend System**: Add users as friends after sessions
-8. **Invite Friends**: Directly invite friends to sessions
-9. **Session History**: Track past sessions with match history
+1. **Calendar-Based Booking**: Schedule work sessions in advance (Solo 1-on-1 or Group 2-5 people)
+2. **Session Type Filtering**: Filter scheduled sessions by type (All, Solo, Group)
+3. **URL Pre-selection**: Deep linking to calendar with session type pre-selected (?type=solo or ?type=group)
+4. **Video Calls**: WebRTC-powered video/audio chat with P2P mesh networking (optimized for up to 5 participants)
+5. **Screen Sharing**: Share your screen with session partners
+6. **Friend System**: Add users as friends after sessions
+7. **Session History**: Track past sessions with match history
+8. **Join Sessions**: Browse and join available sessions created by other users
 
 ## Project Structure
 ```
@@ -97,10 +96,9 @@ npm run dev  # Starts both backend (Express) and frontend (Vite)
 The app runs on port 5000.
 
 ## Session Flow
-1. User clicks "Start Session" → navigates to /waiting
-2. Session client connects to River WebSocket
-3. User is added to matching queue
-4. When matched, both users receive 'matched' event
-5. Navigate to /session/:sessionId
-6. WebRTC connection established via signaling
-7. Video call active until one user ends session
+1. User navigates to Calendar page (from Solo/Group cards on home with ?type parameter for pre-selection)
+2. User schedules a new session or joins an existing session
+3. At session start time, users navigate to /session/:sessionId
+4. Session client connects to River WebSocket
+5. WebRTC connection established via P2P mesh signaling
+6. Video call active until one user ends session
