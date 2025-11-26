@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -12,35 +11,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Play, Users, History, Search, LogOut, Settings, Loader2, Calendar, User, UsersRound, DoorOpen } from "lucide-react";
-import { useMutation } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
-import { sessionClient } from "@/lib/session-client";
+import { Users, History, Search, LogOut, Settings, Loader2, Calendar, User, UsersRound, DoorOpen } from "lucide-react";
 
-type SessionType = "solo" | "group" | "freeRoom";
+type SessionType = "solo" | "group";
 
 export default function Home() {
   const { user, isLoading } = useAuth();
   const [, setLocation] = useLocation();
-  const [isStarting, setIsStarting] = useState(false);
-  const [selectedType, setSelectedType] = useState<SessionType>("solo");
-
-  const handleStartSession = async () => {
-    if (!user) return;
-    
-    setIsStarting(true);
-    
-    // Connect to WebSocket first
-    sessionClient.connect(user.id);
-    
-    // For free rooms, go to the free rooms lobby instead
-    if (selectedType === "freeRoom") {
-      setLocation("/free-rooms");
-    } else {
-      // For solo and group, go to waiting page with session type
-      setLocation(`/waiting?type=${selectedType}`);
-    }
-  };
 
   if (isLoading) {
     return (
@@ -115,96 +92,43 @@ export default function Home() {
         </div>
 
         <div className="mb-12">
-          <h3 className="text-sm font-medium text-muted-foreground mb-4 text-center">Select Session Type</h3>
-          <div className="grid md:grid-cols-3 gap-4 mb-6">
+          <h3 className="text-sm font-medium text-muted-foreground mb-4 text-center">Book a Session</h3>
+          <div className="grid md:grid-cols-2 gap-4 max-w-2xl mx-auto">
             <Card 
-              className={`cursor-pointer hover-elevate ${selectedType === "solo" ? "border-primary" : ""}`}
-              onClick={() => setSelectedType("solo")}
+              className="cursor-pointer hover-elevate"
+              onClick={() => setLocation("/calendar?type=solo")}
               data-testid="card-session-solo"
             >
               <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <User className="h-8 w-8 text-primary" />
-                  {selectedType === "solo" && (
-                    <Badge variant="default" data-testid="badge-selected">Selected</Badge>
-                  )}
-                </div>
+                <User className="h-8 w-8 text-primary" />
               </CardHeader>
               <CardContent>
                 <CardTitle className="text-lg mb-2">Solo (1-on-1)</CardTitle>
                 <CardDescription>
-                  Get matched with one other person for a focused work session
+                  Book a one-on-one focused work session with another person
                 </CardDescription>
               </CardContent>
             </Card>
 
             <Card 
-              className={`cursor-pointer hover-elevate ${selectedType === "group" ? "border-primary" : ""}`}
-              onClick={() => setSelectedType("group")}
+              className="cursor-pointer hover-elevate"
+              onClick={() => setLocation("/calendar?type=group")}
               data-testid="card-session-group"
             >
               <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <UsersRound className="h-8 w-8 text-primary" />
-                  {selectedType === "group" && (
-                    <Badge variant="default" data-testid="badge-selected">Selected</Badge>
-                  )}
-                </div>
+                <UsersRound className="h-8 w-8 text-primary" />
               </CardHeader>
               <CardContent>
                 <CardTitle className="text-lg mb-2">Group (2-5)</CardTitle>
                 <CardDescription>
-                  Join a small group session with 2-5 focused workers
+                  Book a small group session with 2-5 focused workers
                 </CardDescription>
               </CardContent>
             </Card>
-
-            <Card 
-              className={`cursor-pointer hover-elevate ${selectedType === "freeRoom" ? "border-primary" : ""}`}
-              onClick={() => setSelectedType("freeRoom")}
-              data-testid="card-session-freeroom"
-            >
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <DoorOpen className="h-8 w-8 text-primary" />
-                  {selectedType === "freeRoom" && (
-                    <Badge variant="default" data-testid="badge-selected">Selected</Badge>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent>
-                <CardTitle className="text-lg mb-2">Free Room</CardTitle>
-                <CardDescription>
-                  Create or join an open room with up to 10 participants
-                </CardDescription>
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="text-center">
-            <Button 
-              size="lg" 
-              className="px-12 py-6 text-lg rounded-full"
-              onClick={handleStartSession}
-              disabled={isStarting}
-              data-testid="button-start-session"
-            >
-              {isStarting ? (
-                <>
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  Connecting...
-                </>
-              ) : (
-                <>
-                  <Play className="mr-2 h-5 w-5" />
-                  {selectedType === "freeRoom" ? "Browse Free Rooms" : "Start Session"}
-                </>
-              )}
-            </Button>
           </div>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card 
             className="cursor-pointer hover-elevate" 
             onClick={() => setLocation("/calendar")}
@@ -215,21 +139,7 @@ export default function Home() {
             </CardHeader>
             <CardContent>
               <CardTitle className="text-lg">Calendar</CardTitle>
-              <CardDescription>Schedule work sessions</CardDescription>
-            </CardContent>
-          </Card>
-
-          <Card 
-            className="cursor-pointer hover-elevate" 
-            onClick={() => setLocation("/free-rooms")}
-            data-testid="card-free-rooms"
-          >
-            <CardHeader className="pb-2">
-              <DoorOpen className="h-6 w-6 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <CardTitle className="text-lg">Free Rooms</CardTitle>
-              <CardDescription>Browse and join open rooms</CardDescription>
+              <CardDescription>View your scheduled sessions</CardDescription>
             </CardContent>
           </Card>
 
