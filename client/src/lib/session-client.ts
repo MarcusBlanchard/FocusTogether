@@ -7,8 +7,14 @@ export interface PartnerInfo {
   profileImageUrl: string | null;
 }
 
+export interface ParticipantInfo {
+  userId: string;
+  username: string | null;
+  profileImageUrl: string | null;
+}
+
 export interface SessionEvent {
-  type: 'matched' | 'partner-disconnected' | 'invite-received' | 'invite-response' | 'signal';
+  type: 'matched' | 'partner-disconnected' | 'invite-received' | 'invite-response' | 'signal' | 'participant-joined' | 'participant-left' | 'room-joined' | 'room-ended';
   sessionId?: string;
   partner?: PartnerInfo;
   inviter?: PartnerInfo;
@@ -16,8 +22,14 @@ export interface SessionEvent {
   signal?: {
     type: 'offer' | 'answer' | 'ice-candidate';
     sessionId: string;
+    senderId: string;
+    targetId?: string;
     data: any;
   };
+  participant?: ParticipantInfo;
+  participants?: ParticipantInfo[];
+  roomId?: string;
+  roomName?: string;
 }
 
 type EventCallback = (event: SessionEvent) => void;
@@ -128,15 +140,21 @@ class SessionClient {
     };
   }
 
-  sendSignal(sessionId: string, type: 'offer' | 'answer' | 'ice-candidate', data: any) {
+  sendSignal(sessionId: string, type: 'offer' | 'answer' | 'ice-candidate', data: any, senderId: string, targetId?: string) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({
         action: 'sendSignal',
         sessionId,
         type,
+        senderId,
+        targetId,
         data,
       }));
     }
+  }
+
+  getUserId(): string | null {
+    return this.userId;
   }
 
   disconnect() {

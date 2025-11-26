@@ -227,7 +227,7 @@ class SessionManager {
           type: 'matched',
           sessionId,
           partner: {
-            id: user2.id,
+            userId: user2.id,
             username: user2.username,
             profileImageUrl: user2.profileImageUrl,
           },
@@ -237,7 +237,7 @@ class SessionManager {
           type: 'matched',
           sessionId,
           partner: {
-            id: user1.id,
+            userId: user1.id,
             username: user1.username,
             profileImageUrl: user1.profileImageUrl,
           },
@@ -394,7 +394,7 @@ class SessionManager {
           type: 'participant-joined',
           sessionId,
           participant: {
-            id: newUser.id,
+            userId: newUser.id,
             username: newUser.username,
             profileImageUrl: newUser.profileImageUrl,
           },
@@ -406,7 +406,7 @@ class SessionManager {
     const otherParticipants = participantsInfo
       .filter(p => p && p.id !== userId)
       .map(p => ({
-        id: p!.id,
+        userId: p!.id,
         username: p!.username,
         profileImageUrl: p!.profileImageUrl,
       }));
@@ -708,7 +708,7 @@ class SessionManager {
           type: 'participant-left',
           sessionId,
           participant: {
-            id: user.id,
+            userId: user.id,
             username: user.username,
           },
         });

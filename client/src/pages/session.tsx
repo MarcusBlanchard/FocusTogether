@@ -3,7 +3,6 @@ import { useParams, useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { 
   Mic, 
   MicOff, 
@@ -14,19 +13,14 @@ import {
   PhoneOff,
   Loader2,
   UserPlus,
-  Check
+  Users
 } from "lucide-react";
-import { sessionClient, type SessionEvent } from "@/lib/session-client";
-import { webrtcManager } from "@/lib/webrtc";
+import { sessionClient, type SessionEvent, type ParticipantInfo } from "@/lib/session-client";
+import { meshWebRTCManager } from "@/lib/webrtc-mesh";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-
-interface PartnerInfo {
-  id: string;
-  username: string | null;
-  profileImageUrl: string | null;
-}
+import { VideoGrid, type VideoParticipant } from "@/components/VideoGrid";
 
 export default function Session() {
   const params = useParams<{ sessionId: string }>();
@@ -35,41 +29,15 @@ export default function Session() {
   const { toast } = useToast();
 
   const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-  const [partner, setPartner] = useState<PartnerInfo | null>(null);
-  const [isFriend, setIsFriend] = useState(false);
-  const [friendAdded, setFriendAdded] = useState(false);
+  const [participants, setParticipants] = useState<VideoParticipant[]>([]);
 
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [videoEnabled, setVideoEnabled] = useState(true);
   const [screenSharing, setScreenSharing] = useState(false);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
 
   const [sessionDuration, setSessionDuration] = useState(0);
   const sessionStartRef = useRef<Date>(new Date());
-
-  const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const screenVideoRef = useRef<HTMLVideoElement>(null);
-
-  const addFriendMutation = useMutation({
-    mutationFn: async (friendId: string) => {
-      return apiRequest("POST", "/api/friends", { friendId });
-    },
-    onSuccess: () => {
-      setFriendAdded(true);
-      queryClient.invalidateQueries({ queryKey: ["/api/friends"] });
-      toast({
-        title: "Friend added",
-        description: `${partner?.username || "User"} has been added to your friends.`,
-      });
-    },
-    onError: () => {
-      toast({
-        title: "Error",
-        description: "Failed to add friend. Please try again.",
-        variant: "destructive",
-      });
-    },
-  });
 
   // Timer effect
   useEffect(() => {
@@ -85,44 +53,116 @@ export default function Session() {
   useEffect(() => {
     if (!user || !params.sessionId) return;
 
-    const initSession = async () => {
-      try {
-        // Get local media
-        const localStream = await webrtcManager.getUserMedia();
-        
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = localStream;
+    let unsubscribe: (() => void) | null = null;
+
+    const waitForConnection = (): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        if (sessionClient.isConnected() && sessionClient.getUserId()) {
+          resolve();
+          return;
         }
 
+        const checkInterval = setInterval(() => {
+          if (sessionClient.isConnected() && sessionClient.getUserId()) {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        }, 100);
+
+        // Reject on timeout after 10 seconds
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          if (!sessionClient.isConnected() || !sessionClient.getUserId()) {
+            reject(new Error('Failed to establish WebSocket connection'));
+          } else {
+            resolve();
+          }
+        }, 10000);
+      });
+    };
+
+    const initSession = async () => {
+      try {
+        // Ensure session client is connected first
+        if (!sessionClient.isConnected()) {
+          sessionClient.connect(user.id);
+        }
+
+        // Wait for actual connection and userId to be available
+        await waitForConnection();
+
+        // Get local media
+        const stream = await meshWebRTCManager.getUserMedia();
+        setLocalStream(stream);
+
         // Set up WebRTC callbacks
-        webrtcManager.setCallbacks({
-          onRemoteStream: (stream) => {
-            if (remoteVideoRef.current) {
-              remoteVideoRef.current.srcObject = stream;
-            }
+        meshWebRTCManager.setCallbacks({
+          onPeerStream: (info) => {
+            console.log('[Session] Remote stream from:', info.peerId);
+            setParticipants(prev => {
+              const existing = prev.find(p => p.userId === info.peerId);
+              if (existing) {
+                return prev.map(p => p.userId === info.peerId ? { ...p, stream: info.stream } : p);
+              }
+              return prev;
+            });
             setConnectionState('connected');
           },
-          onConnectionStateChange: (state) => {
+          onSignal: (signal) => {
+            // Send signal via session client
+            const userId = sessionClient.getUserId();
+            if (!userId) {
+              console.error('[Session] Cannot send signal - user ID not available');
+              return;
+            }
+            sessionClient.sendSignal(
+              params.sessionId!,
+              signal.type,
+              signal.data,
+              userId,
+              signal.targetId
+            );
+          },
+          onConnectionStateChange: (peerId, state) => {
+            console.log('[Session] Connection state for', peerId, ':', state);
             if (state === 'connected') {
               setConnectionState('connected');
-            } else if (state === 'disconnected' || state === 'failed') {
-              setConnectionState('disconnected');
+            } else if (state === 'failed' || state === 'disconnected') {
+              // Remove participant stream
+              setParticipants(prev => prev.map(p => 
+                p.userId === peerId ? { ...p, stream: null } : p
+              ));
             }
-          },
-          onIceCandidate: (candidate) => {
-            sessionClient.sendSignal(params.sessionId!, 'ice-candidate', candidate);
           },
         });
 
-        // Initialize peer connection
-        await webrtcManager.initializePeerConnection();
-        webrtcManager.addLocalStream();
+        meshWebRTCManager.setSessionId(params.sessionId!);
+        meshWebRTCManager.setMyUserId(user.id);
 
-        // Create and send offer (first user to connect creates offer)
-        const offer = await webrtcManager.createOffer();
-        sessionClient.sendSignal(params.sessionId!, 'offer', offer);
+        // Set up session event listener AFTER initialization
+        unsubscribe = sessionClient.onEvent(async (event: SessionEvent) => {
+          if (event.type === 'signal' && event.signal) {
+            await handleSignal(event.signal);
+          } else if (event.type === 'participant-joined' && event.participant) {
+            // Ignore self
+            if (event.participant.userId !== user.id) {
+              await handleParticipantJoined(event.participant);
+            }
+          } else if (event.type === 'participant-left' && event.participant) {
+            // Ignore self
+            if (event.participant.userId !== user.id) {
+              handleParticipantLeft(event.participant);
+            }
+          } else if (event.type === 'room-joined' && event.participants) {
+            await handleRoomJoined(event.participants);
+          } else if (event.type === 'partner-disconnected') {
+            handlePartnerDisconnect();
+          } else if (event.type === 'matched' && event.partner) {
+            await handleMatched(event.partner);
+          }
+        });
 
-        setConnectionState('connected');
+        console.log('[Session] Initialization complete');
       } catch (error) {
         console.error('[Session] Error initializing:', error);
         toast({
@@ -133,98 +173,202 @@ export default function Session() {
       }
     };
 
-    // Set up session event listener
-    const unsubscribe = sessionClient.onEvent((event: SessionEvent) => {
-      if (event.type === 'signal' && event.signal) {
-        handleSignal(event.signal);
-      } else if (event.type === 'partner-disconnected') {
-        handlePartnerDisconnect();
-      } else if (event.type === 'matched' && event.partner) {
-        setPartner(event.partner);
-        checkFriendship(event.partner.id);
-      }
-    });
-
-    // Ensure connected to WebSocket
-    if (!sessionClient.isConnected()) {
-      sessionClient.connect(user.id);
-    }
-
     initSession();
 
     return () => {
-      unsubscribe();
-      webrtcManager.close();
+      if (unsubscribe) {
+        unsubscribe();
+      }
+      meshWebRTCManager.close();
     };
   }, [user, params.sessionId]);
 
-  const handleSignal = async (signal: { type: string; sessionId: string; data: any }) => {
+  const handleSignal = async (signal: { type: string; sessionId: string; senderId: string; targetId?: string; data: any }) => {
     try {
+      const peerId = signal.senderId;
+      
       if (signal.type === 'offer') {
-        const answer = await webrtcManager.handleOffer(signal.data);
-        sessionClient.sendSignal(params.sessionId!, 'answer', answer);
+        const answer = await meshWebRTCManager.handleOffer(peerId, signal.data);
+        const userId = sessionClient.getUserId();
+        if (userId) {
+          sessionClient.sendSignal(params.sessionId!, 'answer', answer, userId, peerId);
+        }
       } else if (signal.type === 'answer') {
-        await webrtcManager.handleAnswer(signal.data);
+        await meshWebRTCManager.handleAnswer(peerId, signal.data);
       } else if (signal.type === 'ice-candidate') {
-        await webrtcManager.handleIceCandidate(signal.data);
+        await meshWebRTCManager.handleIceCandidate(peerId, signal.data);
       }
     } catch (error) {
       console.error('[Session] Error handling signal:', error);
     }
   };
 
-  const handlePartnerDisconnect = () => {
-    setConnectionState('disconnected');
+  const handleMatched = async (partner: { id?: string; userId?: string; username: string | null; profileImageUrl: string | null }) => {
+    const participantId = partner.userId || partner.id;
+    if (!participantId) {
+      console.error('[Session] Matched partner has no userId:', partner);
+      return;
+    }
+
+    console.log('[Session] Matched with partner:', partner);
+
+    // Check if we already have a connection to this participant
+    const existingConnection = meshWebRTCManager.getPeerConnection(participantId);
+    if (existingConnection) {
+      console.log('[Session] Already have connection to', participantId);
+      return;
+    }
+
+    setParticipants([{
+      userId: participantId,
+      username: partner.username,
+      profileImageUrl: partner.profileImageUrl,
+      stream: null,
+      audioEnabled: true,
+      videoEnabled: true,
+    }]);
+
+    // Role-based signaling: lower userId initiates offer to avoid glare
+    const userId = sessionClient.getUserId();
+    if (!userId) {
+      console.error('[Session] Cannot initiate offer - userId not available');
+      return;
+    }
+
+    const shouldInitiate = userId < participantId;
+    if (shouldInitiate) {
+      try {
+        const offer = await meshWebRTCManager.createOffer(participantId);
+        sessionClient.sendSignal(params.sessionId!, 'offer', offer, userId, participantId);
+      } catch (error) {
+        console.error('[Session] Error creating offer:', error);
+      }
+    } else {
+      console.log('[Session] Waiting for offer from', participantId);
+    }
+  };
+
+  const handleParticipantJoined = async (participant: ParticipantInfo) => {
+    if (!participant.userId) {
+      console.error('[Session] Participant joined without userId:', participant);
+      return;
+    }
+
+    console.log('[Session] Participant joined:', participant);
+
+    // Check if we already have a connection to this participant
+    const existingConnection = meshWebRTCManager.getPeerConnection(participant.userId);
+    if (existingConnection) {
+      console.log('[Session] Already have connection to', participant.userId);
+      return;
+    }
+
+    setParticipants(prev => [...prev, {
+      userId: participant.userId,
+      username: participant.username,
+      profileImageUrl: participant.profileImageUrl,
+      stream: null,
+      audioEnabled: true,
+      videoEnabled: true,
+    }]);
+
+    // Role-based signaling: lower userId initiates offer
+    const userId = sessionClient.getUserId();
+    if (!userId) {
+      console.error('[Session] Cannot initiate offer - userId not available');
+      return;
+    }
+
+    const shouldInitiate = userId < participant.userId;
+    if (shouldInitiate) {
+      try {
+        const offer = await meshWebRTCManager.createOffer(participant.userId);
+        sessionClient.sendSignal(params.sessionId!, 'offer', offer, userId, participant.userId);
+      } catch (error) {
+        console.error('[Session] Error creating offer for new participant:', error);
+      }
+    } else {
+      console.log('[Session] Waiting for offer from', participant.userId);
+    }
+  };
+
+  const handleParticipantLeft = (participant: ParticipantInfo) => {
+    console.log('[Session] Participant left:', participant);
+    setParticipants(prev => prev.filter(p => p.userId !== participant.userId));
+    meshWebRTCManager.removePeer(participant.userId);
+    
     toast({
-      title: "Partner disconnected",
-      description: "Your session partner has left the call.",
+      title: "Participant left",
+      description: `${participant.username || "A participant"} has left the session.`,
     });
   };
 
-  const checkFriendship = async (partnerId: string) => {
-    try {
-      const response = await fetch(`/api/friends/${partnerId}/check`);
-      const data = await response.json();
-      setIsFriend(data.isFriend);
-    } catch (error) {
-      console.error('Error checking friendship:', error);
+  const handleRoomJoined = async (participants: ParticipantInfo[]) => {
+    console.log('[Session] Joined room with participants:', participants);
+    
+    const userId = sessionClient.getUserId();
+    if (!userId) {
+      console.error('[Session] Cannot join room - userId not available');
+      return;
     }
+    
+    // Add all existing participants (excluding self)
+    const otherParticipants = participants.filter(p => p.userId && p.userId !== userId);
+    setParticipants(otherParticipants.map(p => ({
+      userId: p.userId,
+      username: p.username,
+      profileImageUrl: p.profileImageUrl,
+      stream: null,
+      audioEnabled: true,
+      videoEnabled: true,
+    })));
+
+    // Create offers only to participants with higher userIds (role-based to avoid glare)
+    for (const participant of otherParticipants) {
+      if (!participant.userId) continue;
+
+      const shouldInitiate = userId < participant.userId;
+      if (shouldInitiate) {
+        try {
+          const offer = await meshWebRTCManager.createOffer(participant.userId);
+          sessionClient.sendSignal(params.sessionId!, 'offer', offer, userId, participant.userId);
+        } catch (error) {
+          console.error('[Session] Error creating offer for participant:', error);
+        }
+      } else {
+        console.log('[Session] Waiting for offer from', participant.userId);
+      }
+    }
+  };
+
+  const handlePartnerDisconnect = () => {
+    setConnectionState('disconnected');
+    toast({
+      title: "Session ended",
+      description: "The session has ended.",
+    });
   };
 
   const handleToggleAudio = () => {
     const newState = !audioEnabled;
     setAudioEnabled(newState);
-    webrtcManager.toggleAudio(newState);
+    meshWebRTCManager.toggleAudio(newState);
   };
 
   const handleToggleVideo = () => {
     const newState = !videoEnabled;
     setVideoEnabled(newState);
-    webrtcManager.toggleVideo(newState);
+    meshWebRTCManager.toggleVideo(newState);
   };
 
   const handleToggleScreenShare = async () => {
     if (screenSharing) {
-      webrtcManager.stopScreenShare();
-      if (screenVideoRef.current) {
-        screenVideoRef.current.srcObject = null;
-      }
+      meshWebRTCManager.stopScreenShare();
       setScreenSharing(false);
     } else {
       try {
-        const screenStream = await webrtcManager.getDisplayMedia();
-        if (screenVideoRef.current) {
-          screenVideoRef.current.srcObject = screenStream;
-        }
+        await meshWebRTCManager.getDisplayMedia();
         setScreenSharing(true);
-
-        // Handle when user stops sharing via browser UI
-        screenStream.getVideoTracks()[0].onended = () => {
-          setScreenSharing(false);
-          if (screenVideoRef.current) {
-            screenVideoRef.current.srcObject = null;
-          }
-        };
       } catch (error) {
         console.error('[Session] Error sharing screen:', error);
         toast({
@@ -237,15 +381,9 @@ export default function Session() {
   };
 
   const handleEndSession = () => {
-    webrtcManager.close();
+    meshWebRTCManager.close();
     sessionClient.disconnect();
     setLocation("/");
-  };
-
-  const handleAddFriend = () => {
-    if (partner) {
-      addFriendMutation.mutate(partner.id);
-    }
   };
 
   const formatDuration = (seconds: number) => {
@@ -280,7 +418,7 @@ export default function Session() {
     }
   };
 
-  const partnerInitials = partner?.username?.[0]?.toUpperCase() || "?";
+  if (!user) return null;
 
   return (
     <div className="h-screen w-screen bg-background flex flex-col">
@@ -294,44 +432,13 @@ export default function Session() {
         </div>
 
         <div className="flex items-center gap-2">
-          {partner && (
-            <div className="flex items-center gap-2">
-              <Avatar className="h-8 w-8">
-                <AvatarImage src={partner.profileImageUrl || undefined} />
-                <AvatarFallback>{partnerInitials}</AvatarFallback>
-              </Avatar>
-              <span className="text-sm font-medium" data-testid="text-partner-name">
-                {partner.username || "Partner"}
-              </span>
-            </div>
-          )}
+          <Users className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium" data-testid="text-participant-count">
+            {participants.length + 1} {participants.length === 0 ? "participant" : "participants"}
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
-          {partner && !isFriend && !friendAdded && (
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={handleAddFriend}
-              disabled={addFriendMutation.isPending}
-              data-testid="button-add-friend"
-            >
-              {addFriendMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <>
-                  <UserPlus className="mr-1 h-4 w-4" />
-                  Add Friend
-                </>
-              )}
-            </Button>
-          )}
-          {friendAdded && (
-            <Badge variant="secondary" className="gap-1">
-              <Check className="h-3 w-3" />
-              Friend Added
-            </Badge>
-          )}
           <Button 
             variant="destructive" 
             size="sm"
@@ -346,75 +453,31 @@ export default function Session() {
 
       {/* Main Video Area */}
       <main className="flex-1 relative overflow-hidden">
-        {/* Remote Video (or Screen Share) */}
-        <div className="absolute inset-0 bg-muted flex items-center justify-center">
-          {screenSharing ? (
-            <video 
-              ref={screenVideoRef}
-              autoPlay 
-              playsInline
-              className="max-w-full max-h-full object-contain"
-              data-testid="video-screen-share"
-            />
-          ) : (
-            <video 
-              ref={remoteVideoRef}
-              autoPlay 
-              playsInline
-              className="w-full h-full object-cover"
-              data-testid="video-remote"
-            />
-          )}
-          
-          {connectionState === 'connecting' && (
-            <div className="absolute inset-0 flex items-center justify-center bg-background/80">
-              <div className="text-center">
-                <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4 text-muted-foreground" />
-                <p className="text-muted-foreground">Connecting to partner...</p>
-              </div>
-            </div>
-          )}
-
-          {connectionState === 'disconnected' && (
-            <div className="absolute inset-0 flex items-center justify-center bg-background/80">
-              <div className="text-center">
-                <p className="text-lg font-medium mb-2">Partner has disconnected</p>
-                <Button onClick={handleEndSession}>Return Home</Button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Local Video (Picture-in-Picture) */}
-        <div className="absolute bottom-4 right-4 w-48 h-36 rounded-lg shadow-xl overflow-hidden bg-muted">
-          <video 
-            ref={localVideoRef}
-            autoPlay 
-            playsInline
-            muted
-            className="w-full h-full object-cover"
-            data-testid="video-local"
-          />
-          {!videoEnabled && (
-            <div className="absolute inset-0 flex items-center justify-center bg-muted">
-              <VideoOff className="h-8 w-8 text-muted-foreground" />
-            </div>
-          )}
-        </div>
-
-        {/* Side videos when screen sharing */}
-        {screenSharing && (
-          <div className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col gap-2">
-            <div className="w-40 aspect-video rounded-lg shadow-lg overflow-hidden bg-muted">
-              <video 
-                ref={remoteVideoRef}
-                autoPlay 
-                playsInline
-                className="w-full h-full object-cover"
-              />
+        {connectionState === 'connecting' && participants.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-10">
+            <div className="text-center">
+              <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4 text-muted-foreground" />
+              <p className="text-muted-foreground">Connecting to participants...</p>
             </div>
           </div>
         )}
+
+        {connectionState === 'disconnected' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-10">
+            <div className="text-center">
+              <p className="text-lg font-medium mb-2">Session has ended</p>
+              <Button onClick={handleEndSession}>Return Home</Button>
+            </div>
+          </div>
+        )}
+
+        <VideoGrid
+          participants={participants}
+          localStream={localStream}
+          localUser={user}
+          localAudioEnabled={audioEnabled}
+          localVideoEnabled={videoEnabled}
+        />
       </main>
 
       {/* Bottom Controls */}
