@@ -204,7 +204,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
           <Card 
             className="cursor-pointer hover-elevate" 
             onClick={() => setLocation("/calendar")}
@@ -216,6 +216,20 @@ export default function Home() {
             <CardContent>
               <CardTitle className="text-lg">Calendar</CardTitle>
               <CardDescription>Schedule work sessions</CardDescription>
+            </CardContent>
+          </Card>
+
+          <Card 
+            className="cursor-pointer hover-elevate" 
+            onClick={() => setLocation("/free-rooms")}
+            data-testid="card-free-rooms"
+          >
+            <CardHeader className="pb-2">
+              <DoorOpen className="h-6 w-6 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <CardTitle className="text-lg">Free Rooms</CardTitle>
+              <CardDescription>Browse and join open rooms</CardDescription>
             </CardContent>
           </Card>
 
