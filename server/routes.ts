@@ -45,6 +45,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get user profile with statistics
+  app.get('/api/user/profile', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Get booking count (number of scheduled sessions user has participated in)
+      const bookingCount = await storage.getUserBookingCount(userId);
+
+      res.json({
+        ...user,
+        bookingCount,
+      });
+    } catch (error) {
+      console.error("Error fetching user profile:", error);
+      res.status(500).json({ message: "Failed to fetch user profile" });
+    }
+  });
+
+  // Update user preferences
+  app.patch('/api/user/preferences', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { preference } = req.body;
+
+      if (!preference || !['desk', 'active', 'any'].includes(preference)) {
+        return res.status(400).json({ message: "Invalid preference. Must be 'desk', 'active', or 'any'" });
+      }
+
+      const user = await storage.updateUserPreference(userId, preference);
+      res.json(user);
+    } catch (error) {
+      console.error("Error updating user preferences:", error);
+      res.status(500).json({ message: "Failed to update preferences" });
+    }
+  });
+
   // Search users by username
   app.get('/api/users/search', isAuthenticated, async (req: any, res) => {
     try {

@@ -105,6 +105,24 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  async updateUserPreference(userId: string, preference: string): Promise<User | undefined> {
+    const [user] = await db
+      .update(users)
+      .set({ preference, updatedAt: new Date() })
+      .where(eq(users.id, userId))
+      .returning();
+    return user;
+  }
+
+  async getUserBookingCount(userId: string): Promise<number> {
+    const result = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(scheduledSessionParticipants)
+      .where(eq(scheduledSessionParticipants.userId, userId));
+    
+    return result[0]?.count || 0;
+  }
+
   // Focus session operations
   async createFocusSession(sessionData: InsertFocusSession): Promise<FocusSession> {
     const [session] = await db
