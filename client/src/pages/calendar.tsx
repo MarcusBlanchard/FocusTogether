@@ -12,11 +12,14 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Calendar as CalendarIcon, Clock, Users } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Calendar as CalendarIcon, Clock, Users, Monitor, Activity, Shuffle } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { format, startOfWeek, addDays, addWeeks, startOfDay, isSameDay, addMinutes, parseISO } from "date-fns";
+
+type BookingPreference = 'desk' | 'active' | 'any';
+type SessionDuration = 20 | 40 | 60 | 120;
 
 type ScheduledSession = {
   id: string;
@@ -60,7 +63,11 @@ export default function CalendarPage() {
   const [durationMinutes, setDurationMinutes] = useState<number>(60);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [filterType, setFilterType] = useState<'all' | 'solo' | 'group'>('all');
+  
+  // Filter state - no "All" option, defaults to Solo
+  const [filterSessionType, setFilterSessionType] = useState<'solo' | 'group'>('solo');
+  const [filterPreference, setFilterPreference] = useState<BookingPreference>('desk');
+  const [filterDuration, setFilterDuration] = useState<SessionDuration>(60);
 
   // Update filter and form defaults when URL changes
   useEffect(() => {
@@ -68,10 +75,8 @@ export default function CalendarPage() {
     const urlSessionType = searchParams.get('type') as 'solo' | 'group' | null;
     
     if (urlSessionType) {
-      setFilterType(urlSessionType);
+      setFilterSessionType(urlSessionType);
       setSessionType(urlSessionType);
-    } else {
-      setFilterType('all');
     }
   }, [location]);
 
@@ -174,6 +179,15 @@ export default function CalendarPage() {
 
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(currentWeekStart, i));
 
+  // Helper to check if preferences are compatible for matching
+  const arePreferencesCompatible = (sessionPref: string, filterPref: BookingPreference): boolean => {
+    // "Any" matches with everything
+    if (filterPref === 'any' || sessionPref === 'any') return true;
+    // Exact match
+    if (sessionPref === filterPref) return true;
+    return false;
+  };
+
   // Helper to get sessions for a specific time slot
   const getSessionsForSlot = (day: Date, hour: number) => {
     if (!sessions) return [];
@@ -189,9 +203,17 @@ export default function CalendarPage() {
       
       // Check if session overlaps with this hour slot
       const overlaps = sessionStart < slotEnd && sessionEnd > slotStart;
-      const typeMatch = filterType === 'all' || session.sessionType === filterType;
       
-      return overlaps && typeMatch;
+      // Filter by session type (Solo/Group)
+      const typeMatch = session.sessionType === filterSessionType;
+      
+      // Filter by compatible booking preference (Desk ↔ Any, Active ↔ Any)
+      const preferenceMatch = arePreferencesCompatible(session.bookingPreference, filterPreference);
+      
+      // Filter by duration
+      const durationMatch = session.durationMinutes === filterDuration;
+      
+      return overlaps && typeMatch && preferenceMatch && durationMatch;
     });
   };
 
@@ -267,14 +289,100 @@ export default function CalendarPage() {
             </Button>
           </div>
 
-          {/* Session Type Filter */}
-          <Tabs value={filterType} onValueChange={(value) => setFilterType(value as 'all' | 'solo' | 'group')}>
-            <TabsList>
-              <TabsTrigger value="all" data-testid="tab-all">All</TabsTrigger>
-              <TabsTrigger value="solo" data-testid="tab-solo">Solo</TabsTrigger>
-              <TabsTrigger value="group" data-testid="tab-group">Group</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          {/* Filters Row */}
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Session Type Filter (Solo/Group) */}
+            <div className="flex items-center gap-1 bg-muted rounded-md p-1">
+              <Button
+                variant={filterSessionType === 'solo' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => {
+                  setFilterSessionType('solo');
+                  setSessionType('solo');
+                }}
+                data-testid="filter-solo"
+                className="h-7 px-3"
+              >
+                <Users className="h-3.5 w-3.5 mr-1.5" />
+                Solo
+              </Button>
+              <Button
+                variant={filterSessionType === 'group' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => {
+                  setFilterSessionType('group');
+                  setSessionType('group');
+                }}
+                data-testid="filter-group"
+                className="h-7 px-3"
+              >
+                <Users className="h-3.5 w-3.5 mr-1.5" />
+                Group
+              </Button>
+            </div>
+
+            {/* Booking Preference Filter */}
+            <div className="flex items-center gap-1 bg-muted rounded-md p-1">
+              <Button
+                variant={filterPreference === 'desk' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => {
+                  setFilterPreference('desk');
+                  setBookingPreference('desk');
+                }}
+                data-testid="filter-desk"
+                className="h-7 px-3"
+              >
+                <Monitor className="h-3.5 w-3.5 mr-1.5" />
+                Desk
+              </Button>
+              <Button
+                variant={filterPreference === 'active' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => {
+                  setFilterPreference('active');
+                  setBookingPreference('active');
+                }}
+                data-testid="filter-active"
+                className="h-7 px-3"
+              >
+                <Activity className="h-3.5 w-3.5 mr-1.5" />
+                Active
+              </Button>
+              <Button
+                variant={filterPreference === 'any' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => {
+                  setFilterPreference('any');
+                  setBookingPreference('any');
+                }}
+                data-testid="filter-any"
+                className="h-7 px-3"
+              >
+                <Shuffle className="h-3.5 w-3.5 mr-1.5" />
+                Any
+              </Button>
+            </div>
+
+            {/* Duration Filter */}
+            <div className="flex items-center gap-1 bg-muted rounded-md p-1">
+              {([20, 40, 60, 120] as SessionDuration[]).map((duration) => (
+                <Button
+                  key={duration}
+                  variant={filterDuration === duration ? 'default' : 'ghost'}
+                  size="sm"
+                  onClick={() => {
+                    setFilterDuration(duration);
+                    setDurationMinutes(duration);
+                  }}
+                  data-testid={`filter-${duration}min`}
+                  className="h-7 px-2.5"
+                >
+                  {duration}m
+                </Button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* Calendar Grid */}
@@ -357,7 +465,70 @@ export default function CalendarPage() {
                             {slotSessions.map((session) => {
                               const { top, height } = getSessionPosition(session, day, hour);
                               const isHost = session.hostId === user?.id;
+                              const isParticipant = session.participants?.some(p => p.id === user?.id) || isHost;
                               
+                              // For other people's bookings, show only profile pictures
+                              if (!isParticipant) {
+                                return (
+                                  <div
+                                    key={session.id}
+                                    className={`absolute left-1 right-1 rounded border-l-4 p-1 overflow-hidden cursor-pointer transition-all hover:shadow-md hover:scale-[1.02] active:scale-100 flex items-center justify-center ${
+                                      preferenceColors[session.bookingPreference as keyof typeof preferenceColors]
+                                    }`}
+                                    style={{ top: `${top}px`, height: `${height}px`, zIndex: 10 }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setLocation(`/session/${session.id}`);
+                                    }}
+                                    data-testid={`session-${session.id}`}
+                                  >
+                                    {/* Show only participant avatars for other people's sessions */}
+                                    {session.participants && session.participants.length > 0 ? (
+                                      <TooltipProvider>
+                                        <div className="flex items-center justify-center flex-wrap gap-0.5">
+                                          {session.participants.slice(0, session.durationMinutes >= 60 ? 5 : session.durationMinutes >= 40 ? 4 : 2).map((participant, idx) => {
+                                            const displayName = participant.firstName && participant.lastName
+                                              ? `${participant.firstName} ${participant.lastName}`
+                                              : participant.username || "Anonymous";
+                                            const initials = participant.firstName && participant.lastName
+                                              ? `${participant.firstName[0]}${participant.lastName[0]}`.toUpperCase()
+                                              : participant.username?.[0]?.toUpperCase() || "?";
+                                            const avatarSize = session.durationMinutes >= 60 ? "h-7 w-7" : session.durationMinutes >= 40 ? "h-6 w-6" : "h-5 w-5";
+                                            
+                                            return (
+                                              <Tooltip key={participant.id}>
+                                                <TooltipTrigger asChild>
+                                                  <div className={idx > 0 ? "-ml-2" : ""}>
+                                                    <Avatar className={`${avatarSize} border-2 border-background`}>
+                                                      <AvatarImage src={participant.profileImageUrl || undefined} />
+                                                      <AvatarFallback className="text-[9px] font-medium">{initials}</AvatarFallback>
+                                                    </Avatar>
+                                                  </div>
+                                                </TooltipTrigger>
+                                                <TooltipContent side="top">
+                                                  <p className="text-xs">{displayName}</p>
+                                                </TooltipContent>
+                                              </Tooltip>
+                                            );
+                                          })}
+                                          {session.participants.length > (session.durationMinutes >= 60 ? 5 : session.durationMinutes >= 40 ? 4 : 2) && (
+                                            <Badge variant="secondary" className="text-[10px] h-5 px-1.5 -ml-1">
+                                              +{session.participants.length - (session.durationMinutes >= 60 ? 5 : session.durationMinutes >= 40 ? 4 : 2)}
+                                            </Badge>
+                                          )}
+                                        </div>
+                                      </TooltipProvider>
+                                    ) : (
+                                      <div className="text-muted-foreground flex items-center gap-1 text-xs">
+                                        <Users className="h-4 w-4" />
+                                        <span>{session.participantCount || 0}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              }
+                              
+                              // For user's own sessions, show full details
                               return (
                                 <div
                                   key={session.id}
@@ -510,6 +681,7 @@ export default function CalendarPage() {
                     <SelectItem value="20">20 minutes</SelectItem>
                     <SelectItem value="40">40 minutes</SelectItem>
                     <SelectItem value="60">60 minutes</SelectItem>
+                    <SelectItem value="120">120 minutes (2 hours)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
