@@ -455,9 +455,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSessionParticipants(sessionId: string): Promise<User[]> {
-    const participants = await db
-      .select()
+    const result = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        username: users.username,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        profileImageUrl: users.profileImageUrl,
+        role: scheduledSessionParticipants.role,
+      })
       .from(scheduledSessionParticipants)
+      .innerJoin(users, eq(scheduledSessionParticipants.userId, users.id))
       .where(
         and(
           eq(scheduledSessionParticipants.sessionId, sessionId),
@@ -465,13 +474,8 @@ export class DatabaseStorage implements IStorage {
         )
       );
     
-    if (participants.length === 0) return [];
-    
-    const userIds = participants.map(p => p.userId);
-    return await db
-      .select()
-      .from(users)
-      .where(or(...userIds.map(id => eq(users.id, id))));
+    // Cast to User[] with role field
+    return result as any;
   }
 
   async getParticipantCount(sessionId: string): Promise<number> {

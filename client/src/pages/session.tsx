@@ -42,8 +42,12 @@ interface ScheduledSessionData {
   endAt: string;
   participantCount: number;
   participants?: Array<{
+    id: string;
     userId: string;
     username: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    profileImageUrl: string | null;
     role: string;
   }>;
 }
@@ -616,16 +620,21 @@ export default function Session() {
               {sessionData.participants && sessionData.participants.length > 0 ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {sessionData.participants.map((p: any) => {
-                    const initials = p.username?.[0]?.toUpperCase() || "?";
+                    const displayName = p.firstName && p.lastName 
+                      ? `${p.firstName} ${p.lastName}`
+                      : p.username || "Anonymous";
+                    const initials = p.firstName && p.lastName
+                      ? `${p.firstName[0]}${p.lastName[0]}`.toUpperCase()
+                      : p.username?.[0]?.toUpperCase() || "?";
                     return (
-                      <div key={p.userId} className="flex items-center gap-3 p-3 rounded-lg border bg-card">
+                      <div key={p.id} className="flex items-center gap-3 p-3 rounded-lg border bg-card">
                         <Avatar className="h-10 w-10">
                           <AvatarImage src={p.profileImageUrl || undefined} />
                           <AvatarFallback>{initials}</AvatarFallback>
                         </Avatar>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium truncate">{p.username || "Anonymous"}</span>
+                            <span className="text-sm font-medium truncate">{displayName}</span>
                             {p.role === 'host' && <Badge variant="secondary" className="text-xs">Host</Badge>}
                           </div>
                           <div className="flex items-center gap-1 text-xs text-muted-foreground">
