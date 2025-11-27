@@ -180,13 +180,10 @@ export default function CalendarPage() {
 
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(currentWeekStart, i));
 
-  // Helper to check if preferences are compatible for matching
+  // Helper to check if preferences match - STRICT matching only
   const arePreferencesCompatible = (sessionPref: string, filterPref: BookingPreference): boolean => {
-    // "Any" matches with everything
-    if (filterPref === 'any' || sessionPref === 'any') return true;
-    // Exact match
-    if (sessionPref === filterPref) return true;
-    return false;
+    // Strict matching: Desk only matches Desk, Active only matches Active, Any only matches Any
+    return sessionPref === filterPref;
   };
 
   // Helper to get sessions for a specific time slot

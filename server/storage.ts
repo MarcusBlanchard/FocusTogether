@@ -291,29 +291,10 @@ export class DatabaseStorage implements IStorage {
     // Calculate end time
     const endAt = new Date(startAt.getTime() + durationMinutes * 60000);
 
-    // Build preference matching condition
-    // desk ↔ desk or any
-    // active ↔ active or any
-    // any ↔ desk or active or any
-    let preferenceCondition;
-    if (bookingPreference === 'desk') {
-      preferenceCondition = or(
-        eq(scheduledSessions.bookingPreference, 'desk'),
-        eq(scheduledSessions.bookingPreference, 'any')
-      );
-    } else if (bookingPreference === 'active') {
-      preferenceCondition = or(
-        eq(scheduledSessions.bookingPreference, 'active'),
-        eq(scheduledSessions.bookingPreference, 'any')
-      );
-    } else {
-      // 'any' matches with all
-      preferenceCondition = or(
-        eq(scheduledSessions.bookingPreference, 'desk'),
-        eq(scheduledSessions.bookingPreference, 'active'),
-        eq(scheduledSessions.bookingPreference, 'any')
-      );
-    }
+    // Build preference matching condition - STRICT matching only
+    // Desk only matches Desk, Active only matches Active, Any only matches Any
+    // No cross-matching, no fallback
+    const preferenceCondition = eq(scheduledSessions.bookingPreference, bookingPreference);
 
     // Find sessions with matching:
     // - Same start time
