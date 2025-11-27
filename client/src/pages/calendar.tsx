@@ -474,11 +474,15 @@ export default function CalendarPage() {
                                 : host.username?.[0]?.toUpperCase() || "?") || "?";
                               
                               // Show only profile picture for all sessions
+                              // Center avatar within the first 15-minute segment (white space between lines)
+                              const avatarSize = 40;
+                              const avatarTop = top + (SUB_SLOT_HEIGHT - avatarSize) / 2; // Center in first sub-slot
+                              
                               return (
                                 <div
                                   key={session.id}
                                   className="absolute cursor-pointer"
-                                  style={{ top: `${top + height / 2 - 20}px`, left: "50%", transform: "translateX(-50%)", zIndex: 10 }}
+                                  style={{ top: `${avatarTop}px`, left: "50%", transform: "translateX(-50%)", zIndex: 10 }}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setLocation(`/session/${session.id}`);
