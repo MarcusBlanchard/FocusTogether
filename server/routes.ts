@@ -347,11 +347,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const sessions = await storage.getUpcomingSessions(start, end);
       
-      // Enrich with participant counts
+      // Enrich with participant counts and participant data
       const enrichedSessions = await Promise.all(
         sessions.map(async (session) => {
           const participantCount = await storage.getParticipantCount(session.id);
-          return { ...session, participantCount };
+          const participants = await storage.getSessionParticipants(session.id);
+          return { ...session, participantCount, participants };
         })
       );
 

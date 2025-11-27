@@ -10,6 +10,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Calendar as CalendarIcon, Clock, Users } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
@@ -29,6 +31,13 @@ type ScheduledSession = {
   endAt: string;
   status: string;
   participantCount?: number;
+  participants?: Array<{
+    id: string;
+    firstName: string | null;
+    lastName: string | null;
+    username: string | null;
+    profileImageUrl: string | null;
+  }>;
 };
 
 const HOURS = Array.from({ length: 14 }, (_, i) => i + 8); // 8 AM to 9 PM
@@ -43,7 +52,7 @@ export default function CalendarPage() {
     startOfWeek(new Date(), { weekStartsOn: 1 }) // Monday
   );
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [selectedSlot, setSelectedSlot] = useState<{ day: Date; hour: number } | null>(null);
+  const [selectedSlot, setSelectedSlot] = useState<{ day: Date; hour: number; minute: number } | null>(null);
 
   // Form state
   const [sessionType, setSessionType] = useState<string>("solo");
@@ -125,8 +134,8 @@ export default function CalendarPage() {
     },
   });
 
-  const handleSlotClick = (day: Date, hour: number) => {
-    setSelectedSlot({ day, hour });
+  const handleSlotClick = (day: Date, hour: number, minute: number = 0) => {
+    setSelectedSlot({ day, hour, minute });
     setIsDialogOpen(true);
   };
 
@@ -141,7 +150,7 @@ export default function CalendarPage() {
     }
 
     const startAt = new Date(selectedSlot.day);
-    startAt.setHours(selectedSlot.hour, 0, 0, 0);
+    startAt.setHours(selectedSlot.hour, selectedSlot.minute, 0, 0);
 
     // Validate booking is in the future
     if (startAt <= new Date()) {
@@ -311,18 +320,38 @@ export default function CalendarPage() {
                       {/* Day slots */}
                       {weekDays.map((day, dayIndex) => {
                         const slotSessions = getSessionsForSlot(day, hour);
-                        const isPast = new Date(day).setHours(hour, 0, 0, 0) < new Date().getTime();
                         
                         return (
                           <div
                             key={dayIndex}
-                            className={`relative border-l hover-elevate cursor-pointer transition-colors ${
-                              isPast ? "bg-muted/30" : ""
-                            } ${isSameDay(day, new Date()) ? "bg-primary/5" : ""}`}
+                            className={`relative border-l ${isSameDay(day, new Date()) ? "bg-primary/5" : ""}`}
                             style={{ height: `${TIME_SLOT_HEIGHT}px` }}
-                            onClick={() => !isPast && handleSlotClick(day, hour)}
-                            data-testid={`slot-${format(day, "yyyy-MM-dd")}-${hour}`}
                           >
+                            {/* 15-minute sub-slots */}
+                            {[0, 15, 30, 45].map((minute, minuteIndex) => {
+                              const isPast = new Date(day).setHours(hour, minute, 0, 0) < new Date().getTime();
+                              const hasExistingSession = slotSessions.some((session) => {
+                                const sessionStart = parseISO(session.startAt);
+                                return sessionStart.getHours() === hour && sessionStart.getMinutes() === minute;
+                              });
+                              
+                              return (
+                                <div
+                                  key={minute}
+                                  className={`absolute w-full hover-elevate cursor-pointer transition-colors ${
+                                    minuteIndex > 0 ? "border-t border-border/30" : ""
+                                  } ${isPast ? "bg-muted/30" : ""} ${hasExistingSession ? "pointer-events-none" : ""}`}
+                                  style={{ 
+                                    top: `${minuteIndex * 20}px`, 
+                                    height: "20px"
+                                  }}
+                                  onClick={() => !isPast && !hasExistingSession && handleSlotClick(day, hour, minute)}
+                                  data-testid={`slot-${format(day, "yyyy-MM-dd")}-${hour}-${minute}`}
+                                />
+                              );
+                            })}
+                            
+                            {/* Render sessions on top of sub-slots */}
                             {/* Render sessions in this slot */}
                             {slotSessions.map((session) => {
                               const { top, height } = getSessionPosition(session, day, hour);
@@ -348,10 +377,52 @@ export default function CalendarPage() {
                                     <Clock className="h-3 w-3" />
                                     {session.durationMinutes}m
                                   </div>
-                                  <div className="text-muted-foreground flex items-center gap-1">
-                                    <Users className="h-3 w-3" />
-                                    {session.participantCount || 0}/{session.capacity}
-                                  </div>
+                                  
+                                  {/* Participant avatars or count */}
+                                  {session.participants && session.participants.length > 0 ? (
+                                    <TooltipProvider>
+                                      <div className="flex items-center gap-1 mt-0.5">
+                                        {/* Show different number of avatars based on session height */}
+                                        {session.participants.slice(0, session.durationMinutes >= 60 ? 4 : session.durationMinutes >= 40 ? 3 : 1).map((participant, idx) => {
+                                          const displayName = participant.firstName && participant.lastName
+                                            ? `${participant.firstName} ${participant.lastName}`
+                                            : participant.username || "Anonymous";
+                                          const initials = participant.firstName && participant.lastName
+                                            ? `${participant.firstName[0]}${participant.lastName[0]}`.toUpperCase()
+                                            : participant.username?.[0]?.toUpperCase() || "?";
+                                          const avatarSize = session.durationMinutes >= 40 ? "h-5 w-5" : "h-4 w-4";
+                                          
+                                          return (
+                                            <Tooltip key={participant.id}>
+                                              <TooltipTrigger asChild>
+                                                <div className={idx > 0 ? "-ml-1.5" : ""}>
+                                                  <Avatar className={`${avatarSize} border border-background`}>
+                                                    <AvatarImage src={participant.profileImageUrl || undefined} />
+                                                    <AvatarFallback className="text-[8px]">{initials}</AvatarFallback>
+                                                  </Avatar>
+                                                </div>
+                                              </TooltipTrigger>
+                                              <TooltipContent side="top">
+                                                <p className="text-xs">{displayName}</p>
+                                              </TooltipContent>
+                                            </Tooltip>
+                                          );
+                                        })}
+                                        {/* Show overflow count */}
+                                        {session.participants.length > (session.durationMinutes >= 60 ? 4 : session.durationMinutes >= 40 ? 3 : 1) && (
+                                          <Badge variant="secondary" className="text-[10px] h-4 px-1 -ml-1">
+                                            +{session.participants.length - (session.durationMinutes >= 60 ? 4 : session.durationMinutes >= 40 ? 3 : 1)}
+                                          </Badge>
+                                        )}
+                                      </div>
+                                    </TooltipProvider>
+                                  ) : (
+                                    <div className="text-muted-foreground flex items-center gap-1">
+                                      <Users className="h-3 w-3" />
+                                      {session.participantCount || 0}/{session.capacity}
+                                    </div>
+                                  )}
+                                  
                                   {isHost && (
                                     <Badge variant="secondary" className="text-xs mt-1">Host</Badge>
                                   )}
@@ -395,7 +466,7 @@ export default function CalendarPage() {
                 {selectedSlot && (
                   <>
                     Booking for {format(selectedSlot.day, "EEE, MMM dd, yyyy")} at{" "}
-                    {format(new Date().setHours(selectedSlot.hour, 0, 0, 0), "h:mm a")}
+                    {format(new Date().setHours(selectedSlot.hour, selectedSlot.minute, 0, 0), "h:mm a")}
                   </>
                 )}
               </DialogDescription>
