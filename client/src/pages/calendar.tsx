@@ -467,56 +467,40 @@ export default function CalendarPage() {
                               const isHost = session.hostId === user?.id;
                               const isParticipant = session.participants?.some(p => p.id === user?.id) || isHost;
                               
-                              // For other people's bookings, show only profile pictures
+                              // For other people's bookings, show only their profile picture
                               if (!isParticipant) {
+                                const host = session.participants?.find(p => p.id === session.hostId);
+                                const displayName = host && (host.firstName && host.lastName
+                                  ? `${host.firstName} ${host.lastName}`
+                                  : host.username || "Anonymous") || "Anonymous";
+                                const initials = host && (host.firstName && host.lastName
+                                  ? `${host.firstName[0]}${host.lastName[0]}`.toUpperCase()
+                                  : host.username?.[0]?.toUpperCase() || "?") || "?";
+                                
                                 return (
                                   <div
                                     key={session.id}
-                                    className="absolute left-1 right-1 overflow-hidden cursor-pointer flex items-center justify-center"
-                                    style={{ top: `${top}px`, height: `${height}px`, zIndex: 10 }}
+                                    className="absolute cursor-pointer"
+                                    style={{ top: `${top + height / 2 - 20}px`, left: "50%", transform: "translateX(-50%)", zIndex: 10 }}
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setLocation(`/session/${session.id}`);
                                     }}
                                     data-testid={`session-${session.id}`}
                                   >
-                                    {/* Show only participant avatars for other people's sessions */}
-                                    {session.participants && session.participants.length > 0 ? (
-                                      <TooltipProvider>
-                                        <div className="flex items-center justify-center flex-wrap gap-0.5">
-                                          {session.participants.slice(0, session.durationMinutes >= 60 ? 5 : session.durationMinutes >= 40 ? 4 : 2).map((participant, idx) => {
-                                            const displayName = participant.firstName && participant.lastName
-                                              ? `${participant.firstName} ${participant.lastName}`
-                                              : participant.username || "Anonymous";
-                                            const initials = participant.firstName && participant.lastName
-                                              ? `${participant.firstName[0]}${participant.lastName[0]}`.toUpperCase()
-                                              : participant.username?.[0]?.toUpperCase() || "?";
-                                            const avatarSize = session.durationMinutes >= 60 ? "h-7 w-7" : session.durationMinutes >= 40 ? "h-6 w-6" : "h-5 w-5";
-                                            
-                                            return (
-                                              <Tooltip key={participant.id}>
-                                                <TooltipTrigger asChild>
-                                                  <div className={idx > 0 ? "-ml-2" : ""}>
-                                                    <Avatar className={`${avatarSize} border-2 border-background`}>
-                                                      <AvatarImage src={participant.profileImageUrl || undefined} />
-                                                      <AvatarFallback className="text-[9px] font-medium">{initials}</AvatarFallback>
-                                                    </Avatar>
-                                                  </div>
-                                                </TooltipTrigger>
-                                                <TooltipContent side="top">
-                                                  <p className="text-xs">{displayName}</p>
-                                                </TooltipContent>
-                                              </Tooltip>
-                                            );
-                                          })}
-                                          {session.participants.length > (session.durationMinutes >= 60 ? 5 : session.durationMinutes >= 40 ? 4 : 2) && (
-                                            <Badge variant="secondary" className="text-[10px] h-5 px-1.5 -ml-1">
-                                              +{session.participants.length - (session.durationMinutes >= 60 ? 5 : session.durationMinutes >= 40 ? 4 : 2)}
-                                            </Badge>
-                                          )}
-                                        </div>
-                                      </TooltipProvider>
-                                    ) : null}
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Avatar className="h-10 w-10 border-2 border-background">
+                                            <AvatarImage src={host?.profileImageUrl || undefined} />
+                                            <AvatarFallback className="text-sm font-medium">{initials}</AvatarFallback>
+                                          </Avatar>
+                                        </TooltipTrigger>
+                                        <TooltipContent side="top">
+                                          <p className="text-xs">{displayName}</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
                                   </div>
                                 );
                               }
