@@ -44,7 +44,7 @@ type ScheduledSession = {
 };
 
 const HOURS = Array.from({ length: 14 }, (_, i) => i + 8); // 8 AM to 9 PM
-const TIME_SLOT_HEIGHT = 100; // pixels per hour - increased to fit profile pictures
+const TIME_SLOT_HEIGHT = 80; // pixels per hour
 
 export default function CalendarPage() {
   const [location, setLocation] = useLocation();
