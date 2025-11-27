@@ -338,12 +338,13 @@ export default function CalendarPage() {
                               return (
                                 <div
                                   key={minute}
-                                  className={`absolute w-full hover-elevate cursor-pointer transition-colors ${
+                                  className={`absolute w-full cursor-pointer transition-colors hover:bg-primary/10 ${
                                     minuteIndex > 0 ? "border-t border-border/30" : ""
-                                  } ${isPast ? "bg-muted/30" : ""} ${hasExistingSession ? "pointer-events-none" : ""}`}
+                                  } ${isPast ? "bg-muted/30 hover:bg-muted/40" : ""} ${hasExistingSession ? "pointer-events-none" : ""}`}
                                   style={{ 
                                     top: `${minuteIndex * 20}px`, 
-                                    height: "20px"
+                                    height: "20px",
+                                    zIndex: 1
                                   }}
                                   onClick={() => !isPast && !hasExistingSession && handleSlotClick(day, hour, minute)}
                                   data-testid={`slot-${format(day, "yyyy-MM-dd")}-${hour}-${minute}`}
@@ -363,7 +364,7 @@ export default function CalendarPage() {
                                   className={`absolute left-1 right-1 rounded border-l-4 p-1 text-xs overflow-hidden cursor-pointer transition-all hover:shadow-md hover:scale-[1.02] active:scale-100 ${
                                     preferenceColors[session.bookingPreference as keyof typeof preferenceColors]
                                   }`}
-                                  style={{ top: `${top}px`, height: `${height}px` }}
+                                  style={{ top: `${top}px`, height: `${height}px`, zIndex: 10 }}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setLocation(`/session/${session.id}`);
