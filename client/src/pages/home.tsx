@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Users, History, Search, LogOut, Settings, Loader2, Calendar, User, UsersRound, Briefcase, Activity, Sparkles, Clock } from "lucide-react";
 import { format, addDays, startOfDay, endOfDay } from "date-fns";
+import { NotificationBell } from "@/components/notification-bell";
 
 interface UserProfile {
   id: string;
@@ -123,6 +124,8 @@ export default function Home() {
               <span className="h-2 w-2 rounded-full bg-status-online" />
               <span className="hidden sm:inline">Ready</span>
             </Badge>
+            
+            <NotificationBell />
             
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

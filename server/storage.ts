@@ -4,6 +4,7 @@ import {
   friends,
   scheduledSessions,
   scheduledSessionParticipants,
+  notifications,
   type User,
   type UpsertUser,
   type FocusSession,
@@ -14,6 +15,8 @@ import {
   type InsertScheduledSession,
   type ScheduledSessionParticipant,
   type InsertScheduledSessionParticipant,
+  type Notification,
+  type InsertNotification,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, or, and, ilike, ne, desc, gte, lte, sql } from "drizzle-orm";
@@ -48,12 +51,20 @@ export interface IStorage {
   getUserScheduledSessions(userId: string): Promise<ScheduledSession[]>;
   getOccupancyCount(startAt: Date, endAt: Date): Promise<number>;
   findMatchingBooking(startAt: Date, durationMinutes: number, bookingPreference: string, excludeUserId: string): Promise<ScheduledSession | undefined>;
+  checkUserOverlap(userId: string, startAt: Date, endAt: Date): Promise<boolean>;
 
   // Scheduled session participant operations
   addParticipant(participant: InsertScheduledSessionParticipant): Promise<ScheduledSessionParticipant>;
   removeParticipant(sessionId: string, userId: string): Promise<void>;
   getSessionParticipants(sessionId: string): Promise<User[]>;
   getParticipantCount(sessionId: string): Promise<number>;
+
+  // Notification operations
+  createNotification(notification: InsertNotification): Promise<Notification>;
+  getUserNotifications(userId: string, limit?: number): Promise<Notification[]>;
+  getUnreadCount(userId: string): Promise<number>;
+  markAsRead(notificationId: string): Promise<void>;
+  markAllAsRead(userId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -475,6 +486,87 @@ export class DatabaseStorage implements IStorage {
       );
     
     return Number(result[0]?.count || 0);
+  }
+
+  // Notification operations
+  async createNotification(notificationData: InsertNotification): Promise<Notification> {
+    const [notification] = await db
+      .insert(notifications)
+      .values(notificationData)
+      .returning();
+    return notification;
+  }
+
+  async getUserNotifications(userId: string, limit: number = 20): Promise<Notification[]> {
+    return await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.userId, userId))
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit);
+  }
+
+  async getUnreadCount(userId: string): Promise<number> {
+    const result = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.userId, userId),
+          eq(notifications.read, 0)
+        )
+      );
+    
+    return Number(result[0]?.count || 0);
+  }
+
+  async markAsRead(notificationId: string): Promise<void> {
+    await db
+      .update(notifications)
+      .set({ read: 1 })
+      .where(eq(notifications.id, notificationId));
+  }
+
+  async markAllAsRead(userId: string): Promise<void> {
+    await db
+      .update(notifications)
+      .set({ read: 1 })
+      .where(eq(notifications.userId, userId));
+  }
+
+  async checkUserOverlap(userId: string, startAt: Date, endAt: Date): Promise<boolean> {
+    // Find all sessions where the user is a participant (including cancelled ones should be excluded)
+    const userSessionIds = await db
+      .select({ sessionId: scheduledSessionParticipants.sessionId })
+      .from(scheduledSessionParticipants)
+      .where(
+        and(
+          eq(scheduledSessionParticipants.userId, userId),
+          eq(scheduledSessionParticipants.status, 'joined')
+        )
+      );
+
+    if (userSessionIds.length === 0) return false;
+
+    // Check if any of these sessions overlap with the requested time range
+    const overlappingSessions = await db
+      .select()
+      .from(scheduledSessions)
+      .where(
+        and(
+          or(...userSessionIds.map(s => eq(scheduledSessions.id, s.sessionId))),
+          ne(scheduledSessions.status, 'cancelled'), // Exclude cancelled sessions
+          or(
+            // Session starts before requested end and ends after requested start (overlap)
+            and(
+              lte(scheduledSessions.startAt, endAt),
+              gte(scheduledSessions.endAt, startAt)
+            )
+          )
+        )
+      );
+
+    return overlappingSessions.length > 0;
   }
 }
 

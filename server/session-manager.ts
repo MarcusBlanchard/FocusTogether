@@ -62,9 +62,63 @@ class SessionManager {
     this.eventCallback = callback;
   }
 
-  private emit(userId: string, event: any) {
+  private async emit(userId: string, event: any) {
     if (this.eventCallback) {
       this.eventCallback(userId, event);
+    }
+
+    // Create notifications for important events
+    try {
+      let notificationData = null;
+
+      switch (event.type) {
+        case 'matched':
+          notificationData = {
+            userId,
+            type: 'match_found',
+            title: 'Match Found!',
+            message: `You've been matched with ${event.partner?.username || 'a partner'} for a focus session`,
+            read: 0,
+            relatedUserId: event.partner?.userId || null,
+            sessionId: event.sessionId || null,
+          };
+          break;
+
+        case 'participant-joined':
+          if (event.participant?.userId !== userId) {
+            notificationData = {
+              userId,
+              type: 'partner_joined',
+              title: 'Partner Joined',
+              message: `${event.participant?.username || 'Someone'} joined your session`,
+              read: 0,
+              relatedUserId: event.participant?.userId || null,
+              sessionId: event.sessionId || null,
+            };
+          }
+          break;
+
+        case 'participant-left':
+        case 'partner-disconnected':
+          if (event.participant?.userId !== userId) {
+            notificationData = {
+              userId,
+              type: 'partner_left',
+              title: 'Partner Left',
+              message: `${event.participant?.username || event.partnerUsername || 'Your partner'} left the session`,
+              read: 0,
+              relatedUserId: event.participant?.userId || null,
+              sessionId: event.sessionId || null,
+            };
+          }
+          break;
+      }
+
+      if (notificationData) {
+        await storage.createNotification(notificationData);
+      }
+    } catch (error) {
+      console.error('[SessionManager] Failed to create notification:', error);
     }
   }
 

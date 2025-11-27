@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { 
   Mic, 
   MicOff, 
@@ -231,17 +232,35 @@ export default function Session() {
         } else if (event.type === 'participant-joined' && event.participant) {
           if (event.participant.userId !== user.id) {
             await handleParticipantJoined(event.participant);
+            toast({
+              title: "Partner Joined",
+              description: `${event.participant.username || 'Someone'} joined the session`,
+            });
           }
         } else if (event.type === 'participant-left' && event.participant) {
           if (event.participant.userId !== user.id) {
             handleParticipantLeft(event.participant);
+            toast({
+              title: "Partner Left",
+              description: `${event.participant.username || 'Your partner'} left the session`,
+              variant: "destructive",
+            });
           }
         } else if (event.type === 'room-joined' && event.participants) {
           await handleRoomJoined(event.participants);
         } else if (event.type === 'partner-disconnected') {
           handlePartnerDisconnect();
+          toast({
+            title: "Partner Disconnected",
+            description: "Your partner has disconnected from the session",
+            variant: "destructive",
+          });
         } else if (event.type === 'matched' && event.partner) {
           await handleMatched(event.partner);
+          toast({
+            title: "Match Found!",
+            description: `You've been matched with ${event.partner.username || 'a partner'}`,
+          });
         }
       });
 
@@ -576,10 +595,11 @@ export default function Session() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="text-center">
-              <Clock className="h-16 w-16 mx-auto mb-4 text-primary" />
-              <p className="text-sm text-muted-foreground mb-2">Session starts in</p>
-              <p className="text-5xl font-bold mb-4" data-testid="text-countdown">
+            {/* Enhanced Countdown Timer */}
+            <div className="text-center p-6 rounded-lg bg-primary/5 border-2 border-primary/20">
+              <Clock className="h-12 w-12 mx-auto mb-3 text-primary" />
+              <p className="text-sm font-medium text-muted-foreground mb-2">Session starts in</p>
+              <p className="text-6xl font-bold mb-3 tracking-tight" data-testid="text-countdown">
                 {formatCountdown(countdown)}
               </p>
               <p className="text-sm text-muted-foreground">
@@ -587,25 +607,43 @@ export default function Session() {
               </p>
             </div>
 
+            {/* Participants with Avatars */}
             <div className="border-t pt-6">
-              <h3 className="font-semibold mb-3 flex items-center gap-2">
+              <h3 className="font-semibold mb-4 flex items-center gap-2">
                 <Users className="h-4 w-4" />
                 Participants ({sessionData.participantCount}/{sessionData.capacity})
               </h3>
               {sessionData.participants && sessionData.participants.length > 0 ? (
-                <div className="grid grid-cols-2 gap-2">
-                  {sessionData.participants.map((p: any) => (
-                    <div key={p.userId} className="flex items-center gap-2 p-2 rounded-lg border">
-                      <UserCheck className="h-4 w-4 text-status-online" />
-                      <span className="text-sm">{p.username || "Anonymous"}</span>
-                      {p.role === 'host' && <Badge variant="outline" className="text-xs">Host</Badge>}
-                    </div>
-                  ))}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {sessionData.participants.map((p: any) => {
+                    const initials = p.username?.[0]?.toUpperCase() || "?";
+                    return (
+                      <div key={p.userId} className="flex items-center gap-3 p-3 rounded-lg border bg-card">
+                        <Avatar className="h-10 w-10">
+                          <AvatarImage src={p.profileImageUrl || undefined} />
+                          <AvatarFallback>{initials}</AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium truncate">{p.username || "Anonymous"}</span>
+                            {p.role === 'host' && <Badge variant="secondary" className="text-xs">Host</Badge>}
+                          </div>
+                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                            <span className="h-1.5 w-1.5 rounded-full bg-status-online" />
+                            <span>Ready</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground text-center py-4">
-                  Waiting for participants to join...
-                </p>
+                <div className="text-center py-8 border rounded-lg bg-muted/30">
+                  <Users className="h-12 w-12 mx-auto mb-3 text-muted-foreground opacity-50" />
+                  <p className="text-sm text-muted-foreground">
+                    Waiting for participants to join...
+                  </p>
+                </div>
               )}
             </div>
 

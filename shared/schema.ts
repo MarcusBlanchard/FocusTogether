@@ -88,6 +88,21 @@ export const scheduledSessionParticipants = pgTable("scheduled_session_participa
   unique().on(table.sessionId, table.userId),
 ]);
 
+// Notifications table - stores user notifications
+export const notifications = pgTable("notifications", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  type: varchar("type").notNull(), // 'match_found', 'partner_canceled', 'partner_joined', 'partner_left'
+  title: varchar("title").notNull(),
+  message: text("message").notNull(),
+  read: integer("read").notNull().default(0), // 0 = unread, 1 = read (using integer for better compatibility)
+  relatedUserId: varchar("related_user_id").references(() => users.id), // user who triggered the notification
+  sessionId: uuid("session_id").references(() => scheduledSessions.id), // related session if any
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("IDX_notifications_user_read").on(table.userId, table.read),
+]);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   sessionsAsUser1: many(focusSessions, { relationName: "user1Sessions" }),
@@ -96,6 +111,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   friendOf: many(friends, { relationName: "friendOfUser" }),
   hostedSessions: many(scheduledSessions, { relationName: "hostedSessions" }),
   scheduledParticipations: many(scheduledSessionParticipants, { relationName: "userParticipations" }),
+  notifications: many(notifications, { relationName: "userNotifications" }),
 }));
 
 export const focusSessionsRelations = relations(focusSessions, ({ one }) => ({
@@ -150,6 +166,22 @@ export const scheduledSessionParticipantsRelations = relations(scheduledSessionP
   }),
 }));
 
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  user: one(users, {
+    fields: [notifications.userId],
+    references: [users.id],
+    relationName: "userNotifications",
+  }),
+  relatedUser: one(users, {
+    fields: [notifications.relatedUserId],
+    references: [users.id],
+  }),
+  session: one(scheduledSessions, {
+    fields: [notifications.sessionId],
+    references: [scheduledSessions.id],
+  }),
+}));
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -177,6 +209,11 @@ export const insertScheduledSessionParticipantSchema = createInsertSchema(schedu
   joinedAt: true,
 });
 
+export const insertNotificationSchema = createInsertSchema(notifications).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
@@ -193,3 +230,6 @@ export type InsertScheduledSession = z.infer<typeof insertScheduledSessionSchema
 
 export type ScheduledSessionParticipant = typeof scheduledSessionParticipants.$inferSelect;
 export type InsertScheduledSessionParticipant = z.infer<typeof insertScheduledSessionParticipantSchema>;
+
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
