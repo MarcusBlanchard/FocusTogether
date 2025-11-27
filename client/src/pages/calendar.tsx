@@ -472,9 +472,7 @@ export default function CalendarPage() {
                                 return (
                                   <div
                                     key={session.id}
-                                    className={`absolute left-1 right-1 rounded border-l-4 p-1 overflow-hidden cursor-pointer transition-all hover:shadow-md hover:scale-[1.02] active:scale-100 flex items-center justify-center ${
-                                      preferenceColors[session.bookingPreference as keyof typeof preferenceColors]
-                                    }`}
+                                    className="absolute left-1 right-1 overflow-hidden cursor-pointer flex items-center justify-center"
                                     style={{ top: `${top}px`, height: `${height}px`, zIndex: 10 }}
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -518,12 +516,7 @@ export default function CalendarPage() {
                                           )}
                                         </div>
                                       </TooltipProvider>
-                                    ) : (
-                                      <div className="text-muted-foreground flex items-center gap-1 text-xs">
-                                        <Users className="h-4 w-4" />
-                                        <span>{session.participantCount || 0}</span>
-                                      </div>
-                                    )}
+                                    ) : null}
                                   </div>
                                 );
                               }
