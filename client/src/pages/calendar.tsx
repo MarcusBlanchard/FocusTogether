@@ -44,7 +44,8 @@ type ScheduledSession = {
 };
 
 const HOURS = Array.from({ length: 14 }, (_, i) => i + 8); // 8 AM to 9 PM
-const TIME_SLOT_HEIGHT = 80; // pixels per hour
+const TIME_SLOT_HEIGHT = 200; // pixels per hour - tall enough for profile pictures in 15-min segments
+const SUB_SLOT_HEIGHT = TIME_SLOT_HEIGHT / 4; // 50px per 15-minute segment
 
 export default function CalendarPage() {
   const [location, setLocation] = useLocation();
@@ -450,8 +451,8 @@ export default function CalendarPage() {
                                     minuteIndex > 0 ? "border-t border-border/30" : ""
                                   } ${isPast ? "bg-muted/30 hover:bg-muted/40" : ""} ${hasExistingSession ? "pointer-events-none" : ""}`}
                                   style={{ 
-                                    top: `${minuteIndex * 20}px`, 
-                                    height: "20px",
+                                    top: `${minuteIndex * SUB_SLOT_HEIGHT}px`, 
+                                    height: `${SUB_SLOT_HEIGHT}px`,
                                     zIndex: 1
                                   }}
                                   onClick={() => !isPast && !hasExistingSession && handleSlotClick(day, hour, minute)}
