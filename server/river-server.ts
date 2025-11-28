@@ -8,8 +8,54 @@ import { storage } from './storage';
 import * as schema from '@shared/river-schema';
 
 // Map to track WebSocket connections by user ID
-const userConnections = new Map<string, WebSocket>();
+// Using a Set to support multiple connections from the same user (multiple tabs)
+const userConnections = new Map<string, Set<WebSocket>>();
 const connectionToUser = new Map<WebSocket, string>();
+
+function addUserConnection(userId: string, ws: WebSocket) {
+  let connections = userConnections.get(userId);
+  if (!connections) {
+    connections = new Set();
+    userConnections.set(userId, connections);
+  }
+  connections.add(ws);
+}
+
+function removeUserConnection(userId: string, ws: WebSocket) {
+  const connections = userConnections.get(userId);
+  if (connections) {
+    connections.delete(ws);
+    if (connections.size === 0) {
+      userConnections.delete(userId);
+      return true; // No more connections for this user
+    }
+  }
+  return false; // Still has other connections
+}
+
+function getUserConnection(userId: string): WebSocket | undefined {
+  const connections = userConnections.get(userId);
+  if (connections && connections.size > 0) {
+    // Return the first active connection
+    for (const ws of connections) {
+      if (ws.readyState === WebSocket.OPEN) {
+        return ws;
+      }
+    }
+  }
+  return undefined;
+}
+
+function broadcastToUser(userId: string, message: string) {
+  const connections = userConnections.get(userId);
+  if (connections) {
+    for (const ws of connections) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(message);
+      }
+    }
+  }
+}
 
 // Service schema for focus session operations
 const SessionServiceSchema = createServiceSchema();
@@ -279,10 +325,11 @@ export function setupRiverServer(httpServer: Server) {
     const userId = url.searchParams.get('userId');
 
     if (userId) {
-      userConnections.set(userId, ws);
+      addUserConnection(userId, ws);
       connectionToUser.set(ws, userId);
       sessionManager.registerUser(userId);
-      console.log(`[River] User ${userId} connected`);
+      const connCount = userConnections.get(userId)?.size || 0;
+      console.log(`[River] User ${userId} connected (${connCount} active connection(s))`);
     }
 
     // Handle incoming messages for signaling
@@ -319,37 +366,25 @@ export function setupRiverServer(httpServer: Server) {
           const participantIds = sessionManager.getSessionParticipantIds(message.sessionId);
           const targetId = message.targetId; // For WebRTC, we need to know who the signal is for
           
+          const signalPayload = JSON.stringify({
+            type: 'signal',
+            signal: {
+              type: message.type,
+              sessionId: message.sessionId,
+              senderId: senderId,
+              data: message.data,
+            },
+          });
+          
           if (targetId) {
             // Send to specific participant (for WebRTC signaling)
-            const targetWs = userConnections.get(targetId);
-            if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-              targetWs.send(JSON.stringify({
-                type: 'signal',
-                signal: {
-                  type: message.type,
-                  sessionId: message.sessionId,
-                  senderId: senderId,
-                  data: message.data,
-                },
-              }));
-              console.log(`[River] Forwarded ${message.type} signal from ${senderId} to ${targetId}`);
-            }
+            broadcastToUser(targetId, signalPayload);
+            console.log(`[River] Forwarded ${message.type} signal from ${senderId} to ${targetId}`);
           } else {
             // Broadcast to all other participants (for general messages)
             for (const participantId of participantIds) {
               if (participantId !== senderId) {
-                const participantWs = userConnections.get(participantId);
-                if (participantWs && participantWs.readyState === WebSocket.OPEN) {
-                  participantWs.send(JSON.stringify({
-                    type: 'signal',
-                    signal: {
-                      type: message.type,
-                      sessionId: message.sessionId,
-                      senderId: senderId,
-                      data: message.data,
-                    },
-                  }));
-                }
+                broadcastToUser(participantId, signalPayload);
               }
             }
             console.log(`[River] Broadcast ${message.type} from ${senderId} to ${participantIds.length - 1} participants`);
@@ -363,10 +398,17 @@ export function setupRiverServer(httpServer: Server) {
     ws.on('close', async () => {
       const disconnectedUserId = connectionToUser.get(ws);
       if (disconnectedUserId) {
-        userConnections.delete(disconnectedUserId);
         connectionToUser.delete(ws);
-        await sessionManager.disconnect(disconnectedUserId);
-        console.log(`[River] User ${disconnectedUserId} disconnected`);
+        const noMoreConnections = removeUserConnection(disconnectedUserId, ws);
+        
+        if (noMoreConnections) {
+          // Only disconnect from session manager when ALL tabs are closed
+          await sessionManager.disconnect(disconnectedUserId);
+          console.log(`[River] User ${disconnectedUserId} fully disconnected (no more connections)`);
+        } else {
+          const remainingCount = userConnections.get(disconnectedUserId)?.size || 0;
+          console.log(`[River] User ${disconnectedUserId} closed one connection (${remainingCount} remaining)`);
+        }
       }
     });
 
@@ -377,10 +419,7 @@ export function setupRiverServer(httpServer: Server) {
 
   // Set up event callback for session manager
   sessionManager.setEventCallback((userId: string, event: any) => {
-    const ws = userConnections.get(userId);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(event));
-    }
+    broadcastToUser(userId, JSON.stringify(event));
   });
 
   // Note: We're using raw WebSocket for messaging, not River RPC
