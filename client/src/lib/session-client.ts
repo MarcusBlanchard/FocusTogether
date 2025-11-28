@@ -44,14 +44,40 @@ class SessionClient {
   private reconnectDelay = 1000;
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private isConnecting = false;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
+  private shouldReconnect = true;
 
   connect(userId: string) {
-    if (this.isConnecting || (this.ws && this.ws.readyState === WebSocket.OPEN)) {
+    // If already connected with same user, don't reconnect
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.userId === userId) {
+      console.log('[SessionClient] Already connected for user:', userId);
       return;
+    }
+    
+    // If connecting, wait for it
+    if (this.isConnecting) {
+      console.log('[SessionClient] Connection in progress, skipping...');
+      return;
+    }
+    
+    // If connecting to different user, close existing connection first
+    if (this.userId && this.userId !== userId && this.ws) {
+      console.log('[SessionClient] Switching user, closing existing connection');
+      this.shouldReconnect = false;
+      this.ws.close();
+      this.ws = null;
     }
 
     this.userId = userId;
     this.isConnecting = true;
+    this.shouldReconnect = true;
+    this.reconnectAttempts = 0;
+
+    // Cancel any pending reconnect
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/river?userId=${userId}`;
@@ -62,7 +88,7 @@ class SessionClient {
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
-        console.log('[SessionClient] Connected');
+        console.log('[SessionClient] Connected successfully');
         this.isConnecting = false;
         this.reconnectAttempts = 0;
         this.startHeartbeat();
@@ -78,16 +104,21 @@ class SessionClient {
         }
       };
 
-      this.ws.onclose = () => {
-        console.log('[SessionClient] Disconnected');
+      this.ws.onclose = (event) => {
+        console.log('[SessionClient] Disconnected, code:', event.code, 'reason:', event.reason);
         this.isConnecting = false;
         this.stopHeartbeat();
-        this.attemptReconnect();
+        this.ws = null;
+        
+        // Only attempt reconnect if we should
+        if (this.shouldReconnect && this.userId) {
+          this.attemptReconnect();
+        }
       };
 
       this.ws.onerror = (error) => {
         console.error('[SessionClient] WebSocket error:', error);
-        this.isConnecting = false;
+        // Don't set isConnecting to false here - let onclose handle it
       };
     } catch (error) {
       console.error('[SessionClient] Failed to create WebSocket:', error);
@@ -96,9 +127,14 @@ class SessionClient {
   }
 
   private attemptReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts || !this.userId) {
-      console.log('[SessionClient] Max reconnect attempts reached');
+    if (this.reconnectAttempts >= this.maxReconnectAttempts || !this.userId || !this.shouldReconnect) {
+      console.log('[SessionClient] Stopping reconnect attempts');
       return;
+    }
+
+    // Cancel any existing reconnect timeout
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
     }
 
     this.reconnectAttempts++;
@@ -106,8 +142,10 @@ class SessionClient {
     
     console.log(`[SessionClient] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
     
-    setTimeout(() => {
-      if (this.userId) {
+    this.reconnectTimeout = setTimeout(() => {
+      this.reconnectTimeout = null;
+      if (this.userId && this.shouldReconnect && !this.isConnecting) {
+        this.isConnecting = false; // Reset to allow connect()
         this.connect(this.userId);
       }
     }, delay);
@@ -171,13 +209,23 @@ class SessionClient {
   }
 
   disconnect() {
+    console.log('[SessionClient] Disconnecting...');
+    this.shouldReconnect = false;
     this.stopHeartbeat();
+    
+    // Cancel any pending reconnect
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
     this.userId = null;
-    this.reconnectAttempts = this.maxReconnectAttempts; // Prevent reconnect
+    this.isConnecting = false;
+    this.reconnectAttempts = 0;
   }
 
   isConnected(): boolean {
