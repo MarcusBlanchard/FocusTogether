@@ -564,9 +564,24 @@ export default function CalendarPage() {
                               {/* 15-minute sub-slots */}
                               {[0, 15, 30, 45].map((minute, minuteIndex) => {
                                 const isPast = new Date(day).setHours(hour, minute, 0, 0) < new Date().getTime();
-                                const hasExistingSession = slotSessions.some((session) => {
+                                
+                                // Check if the CURRENT USER has a session that overlaps with this 15-min slot
+                                // Only block slots for the user's own sessions, not other users' sessions
+                                const slotTime = new Date(day);
+                                slotTime.setHours(hour, minute, 0, 0);
+                                const slotEndTime = new Date(slotTime);
+                                slotEndTime.setMinutes(slotEndTime.getMinutes() + 15);
+                                
+                                const userHasOverlappingSession = slotSessions.some((session) => {
+                                  // Check if user is a participant in this session
+                                  const isUserSession = session.hostId === user?.id || 
+                                    session.participants?.some(p => p.id === user?.id);
+                                  if (!isUserSession) return false;
+                                  
+                                  // Check if this session overlaps with the 15-min slot
                                   const sessionStart = parseISO(session.startAt);
-                                  return sessionStart.getHours() === hour && sessionStart.getMinutes() === minute;
+                                  const sessionEnd = parseISO(session.endAt);
+                                  return sessionStart < slotEndTime && sessionEnd > slotTime;
                                 });
                                 
                                 return (
@@ -574,13 +589,13 @@ export default function CalendarPage() {
                                     key={minute}
                                     className={`absolute w-full cursor-pointer transition-colors hover:bg-primary/10 ${
                                       minuteIndex > 0 ? "border-t border-border/30" : ""
-                                    } ${isPast ? "bg-muted/30 hover:bg-muted/40" : ""} ${hasExistingSession ? "pointer-events-none" : ""}`}
+                                    } ${isPast ? "bg-muted/30 hover:bg-muted/40" : ""} ${userHasOverlappingSession ? "pointer-events-none bg-muted/20" : ""}`}
                                     style={{ 
                                       top: `${minuteIndex * SUB_SLOT_HEIGHT}px`, 
                                       height: `${SUB_SLOT_HEIGHT}px`,
                                       zIndex: 1
                                     }}
-                                    onClick={() => !isPast && !hasExistingSession && handleSlotClick(day, hour, minute)}
+                                    onClick={() => !isPast && !userHasOverlappingSession && handleSlotClick(day, hour, minute)}
                                     data-testid={`slot-${format(day, "yyyy-MM-dd")}-${hour}-${minute}`}
                                   />
                                 );
@@ -597,21 +612,30 @@ export default function CalendarPage() {
                                   ? `${host.firstName[0]}${host.lastName[0]}`.toUpperCase()
                                   : host.username?.[0]?.toUpperCase() || "?") || "?";
                                 
+                                // Check if this is the current user's session
+                                const isUserSession = session.hostId === user?.id || 
+                                  session.participants?.some(p => p.id === user?.id);
+                                
                                 // Center avatar within the first 15-minute segment
                                 const avatarSize = 40;
-                                const avatarTop = top + (SUB_SLOT_HEIGHT - avatarSize) / 2;
                                 
-                                // Make the entire session duration area clickable
+                                // For other users' sessions, use pointer-events-none so clicks pass through
+                                // For user's own sessions, keep interactive to show session info
                                 return (
                                   <div
                                     key={session.id}
-                                    className="absolute left-0 right-0 cursor-pointer hover:bg-primary/5 transition-colors"
+                                    className={`absolute left-0 right-0 transition-colors ${
+                                      isUserSession 
+                                        ? "cursor-pointer hover:bg-primary/5" 
+                                        : "pointer-events-none"
+                                    }`}
                                     style={{ 
                                       top: `${top}px`, 
                                       height: `${height}px`,
-                                      zIndex: 5 
+                                      zIndex: isUserSession ? 5 : 2
                                     }}
                                     onClick={(e) => {
+                                      if (!isUserSession) return;
                                       e.stopPropagation();
                                       // Open booking dialog for the session's start time
                                       const sessionStart = parseISO(session.startAt);
@@ -621,7 +645,7 @@ export default function CalendarPage() {
                                   >
                                     {/* Profile picture centered at top of session */}
                                     <div
-                                      className="absolute"
+                                      className="absolute pointer-events-none"
                                       style={{ 
                                         top: `${(SUB_SLOT_HEIGHT - avatarSize) / 2}px`, 
                                         left: "50%", 

@@ -20,6 +20,7 @@ function AuthenticatedRoutes() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      <Route path="/home" component={Home} />
       <Route path="/waiting" component={Waiting} />
       <Route path="/session/:sessionId" component={Session} />
       <Route path="/friends" component={Friends} />
