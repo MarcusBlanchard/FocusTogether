@@ -237,8 +237,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Validate duration
-      if (![20, 40, 60].includes(durationMinutes)) {
-        return res.status(400).json({ message: "Invalid duration. Must be 20, 40, or 60 minutes" });
+      if (![20, 40, 60, 120].includes(durationMinutes)) {
+        return res.status(400).json({ message: "Invalid duration. Must be 20, 40, 60, or 120 minutes" });
       }
 
       // Validate time
@@ -303,18 +303,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
           status: 'joined',
         });
 
-        // Update status if session is now full
+        // Update status if session is now full (solo sessions have capacity 2)
         const participantCount = await storage.getParticipantCount(matchedSession.id);
         if (participantCount >= matchedSession.capacity) {
-          await storage.updateSessionStatus(matchedSession.id, 'ready');
+          await storage.updateSessionStatus(matchedSession.id, 'matched');
         }
 
         // Cancel the newly created session since user joined existing one
         await storage.updateSessionStatus(session.id, 'cancelled');
 
+        // Get the matched user's info (the host of the matched session)
+        const matchedUser = await storage.getUser(matchedSession.hostId);
+        const participants = await storage.getSessionParticipants(matchedSession.id);
+
         res.json({ 
           matched: true, 
-          session: matchedSession,
+          session: { ...matchedSession, participants, participantCount },
+          matchedUser: matchedUser ? {
+            id: matchedUser.id,
+            firstName: matchedUser.firstName,
+            lastName: matchedUser.lastName,
+            username: matchedUser.username,
+            profileImageUrl: matchedUser.profileImageUrl,
+          } : null,
           message: "Automatically matched with an existing session"
         });
       } else {
@@ -333,6 +344,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get upcoming sessions in a date range
   app.get('/api/scheduled-sessions', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.claims.sub;
       const { startDate, endDate } = req.query;
 
       if (!startDate || !endDate) {
@@ -356,7 +368,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
       );
 
-      res.json(enrichedSessions);
+      // Filter out matched sessions (status = 'matched') unless user is a participant
+      // This hides sessions that already have 2 matched users from everyone else
+      const filteredSessions = enrichedSessions.filter(session => {
+        // If session is matched, only show to participants
+        if (session.status === 'matched') {
+          return session.participants?.some((p: any) => p.id === userId);
+        }
+        return true;
+      });
+
+      res.json(filteredSessions);
     } catch (error) {
       console.error("Error fetching scheduled sessions:", error);
       res.status(500).json({ message: "Failed to fetch scheduled sessions" });
@@ -454,6 +476,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error leaving scheduled session:", error);
       res.status(500).json({ message: "Failed to leave scheduled session" });
+    }
+  });
+
+  // Cancel a scheduled session (for participants to cancel their booking)
+  app.delete('/api/scheduled-sessions/:sessionId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { sessionId } = req.params;
+
+      const session = await storage.getScheduledSession(sessionId);
+      if (!session) {
+        return res.status(404).json({ message: "Session not found" });
+      }
+
+      // Check if user is a participant
+      const participants = await storage.getSessionParticipants(sessionId);
+      if (!participants.some(p => p.id === userId)) {
+        return res.status(403).json({ message: "You are not a participant of this session" });
+      }
+
+      // If user is the host and only participant, cancel the session
+      if (session.hostId === userId) {
+        const participantCount = await storage.getParticipantCount(sessionId);
+        if (participantCount === 1) {
+          // Only host, cancel the session
+          await storage.updateSessionStatus(sessionId, 'cancelled');
+        } else {
+          // Other participants exist, just leave
+          await storage.removeParticipant(sessionId, userId);
+          // Update status back to scheduled if it was matched
+          if (session.status === 'matched') {
+            await storage.updateSessionStatus(sessionId, 'scheduled');
+          }
+        }
+      } else {
+        // Non-host participant, just leave
+        await storage.removeParticipant(sessionId, userId);
+        // Update status back to scheduled if it was matched
+        if (session.status === 'matched') {
+          await storage.updateSessionStatus(sessionId, 'scheduled');
+        }
+      }
+
+      res.json({ success: true, message: "Session cancelled successfully" });
+    } catch (error) {
+      console.error("Error cancelling scheduled session:", error);
+      res.status(500).json({ message: "Failed to cancel scheduled session" });
     }
   });
 

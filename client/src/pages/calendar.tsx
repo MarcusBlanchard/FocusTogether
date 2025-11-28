@@ -4,19 +4,19 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Calendar as CalendarIcon, Clock, Users, Monitor, Activity, Shuffle } from "lucide-react";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Calendar as CalendarIcon, Clock, Users, Monitor, Activity, Shuffle, X } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { format, startOfWeek, addDays, addWeeks, startOfDay, isSameDay, addMinutes, parseISO } from "date-fns";
+import { format, startOfWeek, addDays, addWeeks, isSameDay, parseISO, differenceInMinutes } from "date-fns";
 
 type BookingPreference = 'desk' | 'active' | 'any';
 type SessionDuration = 20 | 40 | 60 | 120;
@@ -43,9 +43,28 @@ type ScheduledSession = {
   }>;
 };
 
+type MatchedUser = {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  username: string | null;
+  profileImageUrl: string | null;
+};
+
 const HOURS = Array.from({ length: 14 }, (_, i) => i + 8); // 8 AM to 9 PM
 const TIME_SLOT_HEIGHT = 200; // pixels per hour - tall enough for profile pictures in 15-min segments
 const SUB_SLOT_HEIGHT = TIME_SLOT_HEIGHT / 4; // 50px per 15-minute segment
+
+const preferenceLabels: Record<string, string> = {
+  desk: "Desk Work",
+  active: "Active",
+  any: "Any",
+};
+
+const sessionTypeLabels: Record<string, string> = {
+  solo: "Solo (1-on-1)",
+  group: "Group (up to 5)",
+};
 
 export default function CalendarPage() {
   const [location, setLocation] = useLocation();
@@ -57,27 +76,24 @@ export default function CalendarPage() {
   );
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<{ day: Date; hour: number; minute: number } | null>(null);
+  const [matchConfirmation, setMatchConfirmation] = useState<{ session: ScheduledSession; matchedUser: MatchedUser | null } | null>(null);
 
-  // Form state
-  const [sessionType, setSessionType] = useState<string>("solo");
-  const [bookingPreference, setBookingPreference] = useState<string>("desk");
-  const [durationMinutes, setDurationMinutes] = useState<number>(60);
+  // Form state - only title and description are editable
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   
-  // Filter state - no "All" option, defaults to Solo
+  // Filter state - these determine the booking parameters (non-editable in dialog)
   const [filterSessionType, setFilterSessionType] = useState<'solo' | 'group'>('solo');
   const [filterPreference, setFilterPreference] = useState<BookingPreference>('desk');
   const [filterDuration, setFilterDuration] = useState<SessionDuration>(60);
 
-  // Update filter and form defaults when URL changes
+  // Update filter defaults when URL changes
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
     const urlSessionType = searchParams.get('type') as 'solo' | 'group' | null;
     
     if (urlSessionType) {
       setFilterSessionType(urlSessionType);
-      setSessionType(urlSessionType);
     }
   }, [location]);
 
@@ -97,6 +113,15 @@ export default function CalendarPage() {
     },
   });
 
+  // Get user's upcoming sessions
+  const { data: mySessions } = useQuery<ScheduledSession[]>({
+    queryKey: ['/api/scheduled-sessions/my-sessions'],
+  });
+
+  const upcomingSessions = mySessions
+    ?.filter(s => s.status !== 'cancelled' && new Date(s.startAt) > new Date())
+    .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()) || [];
+
   const createSessionMutation = useMutation({
     mutationFn: async (data: {
       sessionType: string;
@@ -112,13 +137,12 @@ export default function CalendarPage() {
       queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
       setIsDialogOpen(false);
       
-      if (response.matched) {
-        toast({
-          title: "Matched!",
-          description: response.message || "You've been matched with an existing session.",
+      if (response.matched && response.matchedUser) {
+        // Show match confirmation popup
+        setMatchConfirmation({
+          session: response.session,
+          matchedUser: response.matchedUser,
         });
-        // Navigate to the matched session
-        setLocation(`/session/${response.session.id}`);
       } else {
         toast({
           title: "Booking created",
@@ -135,6 +159,26 @@ export default function CalendarPage() {
       toast({
         title: "Error",
         description: error.message || "Failed to schedule session",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const cancelSessionMutation = useMutation({
+    mutationFn: async (sessionId: string) => {
+      return apiRequest("DELETE", `/api/scheduled-sessions/${sessionId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
+      toast({
+        title: "Session cancelled",
+        description: "Your booking has been cancelled.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to cancel session",
         variant: "destructive",
       });
     },
@@ -169,9 +213,9 @@ export default function CalendarPage() {
     }
 
     createSessionMutation.mutate({
-      sessionType,
-      bookingPreference,
-      durationMinutes,
+      sessionType: filterSessionType,
+      bookingPreference: filterPreference,
+      durationMinutes: filterDuration,
       title: title || undefined,
       description: description || undefined,
       startAt: startAt.toISOString(),
@@ -182,7 +226,6 @@ export default function CalendarPage() {
 
   // Helper to check if preferences match - STRICT matching only
   const arePreferencesCompatible = (sessionPref: string, filterPref: BookingPreference): boolean => {
-    // Strict matching: Desk only matches Desk, Active only matches Active, Any only matches Any
     return sessionPref === filterPref;
   };
 
@@ -205,7 +248,7 @@ export default function CalendarPage() {
       // Filter by session type (Solo/Group)
       const typeMatch = session.sessionType === filterSessionType;
       
-      // Filter by compatible booking preference (Desk ↔ Any, Active ↔ Any)
+      // Filter by compatible booking preference
       const preferenceMatch = arePreferencesCompatible(session.bookingPreference, filterPreference);
       
       // Filter by duration
@@ -231,10 +274,12 @@ export default function CalendarPage() {
     return { top: topOffset, height: heightPx };
   };
 
-  const preferenceColors = {
-    desk: "bg-blue-500/20 dark:bg-blue-500/30 border-blue-500 dark:border-blue-400 text-blue-900 dark:text-blue-100",
-    active: "bg-green-500/20 dark:bg-green-500/30 border-green-500 dark:border-green-400 text-green-900 dark:text-green-100",
-    any: "bg-purple-500/20 dark:bg-purple-500/30 border-purple-500 dark:border-purple-400 text-purple-900 dark:text-purple-100",
+  // Check if user can join a session (10 minutes before start)
+  const canJoinSession = (session: ScheduledSession) => {
+    const startTime = new Date(session.startAt);
+    const now = new Date();
+    const minutesUntilStart = differenceInMinutes(startTime, now);
+    return minutesUntilStart <= 10 && minutesUntilStart >= -session.durationMinutes;
   };
 
   return (
@@ -254,287 +299,366 @@ export default function CalendarPage() {
       </header>
 
       <main className="max-w-full mx-auto px-4 py-6">
-        {/* Week navigation and filters */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setCurrentWeekStart(addWeeks(currentWeekStart, -1))}
-              data-testid="button-prev-week"
-            >
-              <ChevronLeft className="h-5 w-5" />
-            </Button>
-            <div className="min-w-[200px] text-center">
-              <h2 className="text-lg font-semibold">
-                {format(currentWeekStart, "MMM d")} - {format(addDays(currentWeekStart, 6), "MMM d, yyyy")}
-              </h2>
-            </div>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setCurrentWeekStart(addWeeks(currentWeekStart, 1))}
-              data-testid="button-next-week"
-            >
-              <ChevronRight className="h-5 w-5" />
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setCurrentWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }))}
-              data-testid="button-today"
-            >
-              Today
-            </Button>
-          </div>
-
-          {/* Filters Row */}
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Session Type Filter (Solo/Group) */}
-            <div className="flex items-center gap-1 bg-muted rounded-md p-1">
-              <Button
-                variant={filterSessionType === 'solo' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => {
-                  setFilterSessionType('solo');
-                  setSessionType('solo');
-                }}
-                data-testid="filter-solo"
-                className="h-7 px-3"
-              >
-                <Users className="h-3.5 w-3.5 mr-1.5" />
-                Solo
-              </Button>
-              <Button
-                variant={filterSessionType === 'group' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => {
-                  setFilterSessionType('group');
-                  setSessionType('group');
-                }}
-                data-testid="filter-group"
-                className="h-7 px-3"
-              >
-                <Users className="h-3.5 w-3.5 mr-1.5" />
-                Group
-              </Button>
-            </div>
-
-            {/* Booking Preference Filter */}
-            <div className="flex items-center gap-1 bg-muted rounded-md p-1">
-              <Button
-                variant={filterPreference === 'desk' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => {
-                  setFilterPreference('desk');
-                  setBookingPreference('desk');
-                }}
-                data-testid="filter-desk"
-                className="h-7 px-3"
-              >
-                <Monitor className="h-3.5 w-3.5 mr-1.5" />
-                Desk
-              </Button>
-              <Button
-                variant={filterPreference === 'active' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => {
-                  setFilterPreference('active');
-                  setBookingPreference('active');
-                }}
-                data-testid="filter-active"
-                className="h-7 px-3"
-              >
-                <Activity className="h-3.5 w-3.5 mr-1.5" />
-                Active
-              </Button>
-              <Button
-                variant={filterPreference === 'any' ? 'default' : 'ghost'}
-                size="sm"
-                onClick={() => {
-                  setFilterPreference('any');
-                  setBookingPreference('any');
-                }}
-                data-testid="filter-any"
-                className="h-7 px-3"
-              >
-                <Shuffle className="h-3.5 w-3.5 mr-1.5" />
-                Any
-              </Button>
-            </div>
-
-            {/* Duration Filter */}
-            <div className="flex items-center gap-1 bg-muted rounded-md p-1">
-              {([20, 40, 60, 120] as SessionDuration[]).map((duration) => (
-                <Button
-                  key={duration}
-                  variant={filterDuration === duration ? 'default' : 'ghost'}
-                  size="sm"
-                  onClick={() => {
-                    setFilterDuration(duration);
-                    setDurationMinutes(duration);
-                  }}
-                  data-testid={`filter-${duration}min`}
-                  className="h-7 px-2.5"
-                >
-                  {duration}m
-                </Button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Calendar Grid */}
-        <div className="border rounded-lg overflow-hidden bg-card">
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <div className="min-w-[800px]">
-                {/* Day headers */}
-                <div className="grid grid-cols-8 border-b bg-muted/50">
-                  <div className="p-2 text-xs font-medium text-muted-foreground">Time</div>
-                  {weekDays.map((day, index) => (
-                    <div
-                      key={index}
-                      className={`p-2 text-center border-l ${
-                        isSameDay(day, new Date()) ? "bg-primary/5" : ""
-                      }`}
-                    >
-                      <div className="text-xs font-medium text-muted-foreground">
-                        {format(day, "EEE")}
-                      </div>
-                      <div className={`text-lg font-semibold ${
-                        isSameDay(day, new Date()) ? "text-primary" : ""
-                      }`}>
-                        {format(day, "d")}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Time slots */}
-                <div>
-                  {HOURS.map((hour) => (
-                    <div key={hour} className="grid grid-cols-8 border-b">
-                      {/* Time label */}
-                      <div className="p-2 text-xs text-muted-foreground">
-                        {format(new Date().setHours(hour, 0, 0, 0), "h:mm a")}
-                      </div>
-                      
-                      {/* Day slots */}
-                      {weekDays.map((day, dayIndex) => {
-                        const slotSessions = getSessionsForSlot(day, hour);
+        <div className="flex gap-6">
+          {/* Upcoming Sessions Sidebar */}
+          <div className="w-80 flex-shrink-0">
+            <Card className="h-fit">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <CalendarIcon className="h-5 w-5" />
+                  Upcoming Sessions
+                </CardTitle>
+                <CardDescription>Your scheduled sessions</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-[calc(100vh-300px)]">
+                  {upcomingSessions.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-8">
+                      No upcoming sessions
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {upcomingSessions.map((session) => {
+                        const canJoin = canJoinSession(session);
+                        const startTime = new Date(session.startAt);
                         
                         return (
-                          <div
-                            key={dayIndex}
-                            className={`relative border-l ${isSameDay(day, new Date()) ? "bg-primary/5" : ""}`}
-                            style={{ height: `${TIME_SLOT_HEIGHT}px` }}
-                          >
-                            {/* 15-minute sub-slots */}
-                            {[0, 15, 30, 45].map((minute, minuteIndex) => {
-                              const isPast = new Date(day).setHours(hour, minute, 0, 0) < new Date().getTime();
-                              const hasExistingSession = slotSessions.some((session) => {
-                                const sessionStart = parseISO(session.startAt);
-                                return sessionStart.getHours() === hour && sessionStart.getMinutes() === minute;
-                              });
-                              
-                              return (
-                                <div
-                                  key={minute}
-                                  className={`absolute w-full cursor-pointer transition-colors hover:bg-primary/10 ${
-                                    minuteIndex > 0 ? "border-t border-border/30" : ""
-                                  } ${isPast ? "bg-muted/30 hover:bg-muted/40" : ""} ${hasExistingSession ? "pointer-events-none" : ""}`}
-                                  style={{ 
-                                    top: `${minuteIndex * SUB_SLOT_HEIGHT}px`, 
-                                    height: `${SUB_SLOT_HEIGHT}px`,
-                                    zIndex: 1
-                                  }}
-                                  onClick={() => !isPast && !hasExistingSession && handleSlotClick(day, hour, minute)}
-                                  data-testid={`slot-${format(day, "yyyy-MM-dd")}-${hour}-${minute}`}
-                                />
-                              );
-                            })}
-                            
-                            {/* Render sessions on top of sub-slots */}
-                            {/* Render sessions in this slot - show only profile pictures for all sessions */}
-                            {slotSessions.map((session) => {
-                              const { top, height } = getSessionPosition(session, day, hour);
-                              const host = session.participants?.find(p => p.id === session.hostId);
-                              const displayName = host && (host.firstName && host.lastName
-                                ? `${host.firstName} ${host.lastName}`
-                                : host.username || "Anonymous") || "Anonymous";
-                              const initials = host && (host.firstName && host.lastName
-                                ? `${host.firstName[0]}${host.lastName[0]}`.toUpperCase()
-                                : host.username?.[0]?.toUpperCase() || "?") || "?";
-                              
-                              // Show only profile picture for all sessions
-                              // Center avatar within the first 15-minute segment (white space between lines)
-                              const avatarSize = 40;
-                              const avatarTop = top + (SUB_SLOT_HEIGHT - avatarSize) / 2; // Center in first sub-slot
-                              
-                              return (
-                                <div
-                                  key={session.id}
-                                  className="absolute cursor-pointer"
-                                  style={{ top: `${avatarTop}px`, left: "50%", transform: "translateX(-50%)", zIndex: 10 }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setLocation(`/session/${session.id}`);
-                                  }}
-                                  data-testid={`session-${session.id}`}
-                                >
-                                  <TooltipProvider>
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Avatar className="h-10 w-10 border-2 border-background shadow-sm">
-                                          <AvatarImage src={host?.profileImageUrl || undefined} />
-                                          <AvatarFallback className="text-sm font-medium">{initials}</AvatarFallback>
-                                        </Avatar>
-                                      </TooltipTrigger>
-                                      <TooltipContent side="top">
-                                        <p className="text-xs">{displayName}</p>
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  </TooltipProvider>
+                          <Card key={session.id} className="p-3">
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <Badge variant="outline" className="text-xs">
+                                  {session.sessionType === 'solo' ? 'Solo' : 'Group'}
+                                </Badge>
+                                <Badge variant="secondary" className="text-xs">
+                                  {session.durationMinutes}m
+                                </Badge>
+                              </div>
+                              <div className="text-sm font-medium">
+                                {format(startTime, "EEE, MMM d")}
+                              </div>
+                              <div className="text-sm text-muted-foreground">
+                                {format(startTime, "h:mm a")}
+                              </div>
+                              {session.participants && session.participants.length > 1 && (
+                                <div className="flex items-center gap-1 mt-1">
+                                  <span className="text-xs text-muted-foreground">With:</span>
+                                  <div className="flex -space-x-2">
+                                    {session.participants.filter(p => p.id !== user?.id).slice(0, 3).map((p) => (
+                                      <Avatar key={p.id} className="h-6 w-6 border-2 border-background">
+                                        <AvatarImage src={p.profileImageUrl || undefined} />
+                                        <AvatarFallback className="text-[10px]">
+                                          {p.firstName?.[0]}{p.lastName?.[0]}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                    ))}
+                                  </div>
                                 </div>
-                              );
-                            })}
-                          </div>
+                              )}
+                              <div className="flex gap-2 mt-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="flex-1"
+                                  onClick={() => cancelSessionMutation.mutate(session.id)}
+                                  disabled={cancelSessionMutation.isPending}
+                                  data-testid={`button-cancel-${session.id}`}
+                                >
+                                  Cancel
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  className="flex-1"
+                                  disabled={!canJoin}
+                                  onClick={() => setLocation(`/session/${session.id}`)}
+                                  data-testid={`button-join-${session.id}`}
+                                >
+                                  {canJoin ? "Join" : "Not yet"}
+                                </Button>
+                              </div>
+                            </div>
+                          </Card>
                         );
                       })}
                     </div>
+                  )}
+                </ScrollArea>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Calendar */}
+          <div className="flex-1">
+            {/* Week navigation and filters */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setCurrentWeekStart(addWeeks(currentWeekStart, -1))}
+                  data-testid="button-prev-week"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </Button>
+                <div className="min-w-[200px] text-center">
+                  <h2 className="text-lg font-semibold">
+                    {format(currentWeekStart, "MMM d")} - {format(addDays(currentWeekStart, 6), "MMM d, yyyy")}
+                  </h2>
+                </div>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setCurrentWeekStart(addWeeks(currentWeekStart, 1))}
+                  data-testid="button-next-week"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </Button>
+              </div>
+
+              {/* Filters Row */}
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Session Type Filter */}
+                <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
+                  <Button
+                    size="sm"
+                    variant={filterSessionType === 'solo' ? 'default' : 'ghost'}
+                    onClick={() => setFilterSessionType('solo')}
+                    className="h-8 px-3"
+                    data-testid="filter-solo"
+                  >
+                    Solo
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={filterSessionType === 'group' ? 'default' : 'ghost'}
+                    onClick={() => setFilterSessionType('group')}
+                    className="h-8 px-3"
+                    data-testid="filter-group"
+                  >
+                    Group
+                  </Button>
+                </div>
+
+                {/* Preference Filter with Icons */}
+                <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="sm"
+                          variant={filterPreference === 'desk' ? 'default' : 'ghost'}
+                          onClick={() => setFilterPreference('desk')}
+                          className="h-8 w-8 p-0"
+                          data-testid="filter-desk"
+                        >
+                          <Monitor className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Desk Work</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="sm"
+                          variant={filterPreference === 'active' ? 'default' : 'ghost'}
+                          onClick={() => setFilterPreference('active')}
+                          className="h-8 w-8 p-0"
+                          data-testid="filter-active"
+                        >
+                          <Activity className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Active</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="sm"
+                          variant={filterPreference === 'any' ? 'default' : 'ghost'}
+                          onClick={() => setFilterPreference('any')}
+                          className="h-8 w-8 p-0"
+                          data-testid="filter-any"
+                        >
+                          <Shuffle className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Any</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+
+                {/* Duration Filter */}
+                <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
+                  {[20, 40, 60, 120].map((duration) => (
+                    <Button
+                      key={duration}
+                      size="sm"
+                      variant={filterDuration === duration ? 'default' : 'ghost'}
+                      onClick={() => setFilterDuration(duration as SessionDuration)}
+                      className="h-8 px-2"
+                      data-testid={`filter-duration-${duration}`}
+                    >
+                      {duration}m
+                    </Button>
                   ))}
                 </div>
               </div>
             </div>
-          )}
+
+            {/* Calendar Grid */}
+            {isLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <div className="border rounded-lg overflow-hidden bg-card">
+                <div className="overflow-x-auto">
+                  {/* Day headers */}
+                  <div className="grid grid-cols-8 border-b bg-muted/50 sticky top-0 z-20">
+                    <div className="p-2 text-xs text-muted-foreground font-medium">Time</div>
+                    {weekDays.map((day) => (
+                      <div
+                        key={day.toISOString()}
+                        className={`p-2 text-center border-l ${
+                          isSameDay(day, new Date()) ? "bg-primary/10" : ""
+                        }`}
+                      >
+                        <div className="text-xs text-muted-foreground font-medium">
+                          {format(day, "EEE")}
+                        </div>
+                        <div className={`text-lg font-semibold ${
+                          isSameDay(day, new Date()) ? "text-primary" : ""
+                        }`}>
+                          {format(day, "d")}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Time slots */}
+                  <div>
+                    {HOURS.map((hour) => (
+                      <div key={hour} className="grid grid-cols-8 border-b">
+                        {/* Time label */}
+                        <div className="p-2 text-xs text-muted-foreground">
+                          {format(new Date().setHours(hour, 0, 0, 0), "h:mm a")}
+                        </div>
+                        
+                        {/* Day slots */}
+                        {weekDays.map((day, dayIndex) => {
+                          const slotSessions = getSessionsForSlot(day, hour);
+                          
+                          return (
+                            <div
+                              key={dayIndex}
+                              className={`relative border-l ${isSameDay(day, new Date()) ? "bg-primary/5" : ""}`}
+                              style={{ height: `${TIME_SLOT_HEIGHT}px` }}
+                            >
+                              {/* 15-minute sub-slots */}
+                              {[0, 15, 30, 45].map((minute, minuteIndex) => {
+                                const isPast = new Date(day).setHours(hour, minute, 0, 0) < new Date().getTime();
+                                const hasExistingSession = slotSessions.some((session) => {
+                                  const sessionStart = parseISO(session.startAt);
+                                  return sessionStart.getHours() === hour && sessionStart.getMinutes() === minute;
+                                });
+                                
+                                return (
+                                  <div
+                                    key={minute}
+                                    className={`absolute w-full cursor-pointer transition-colors hover:bg-primary/10 ${
+                                      minuteIndex > 0 ? "border-t border-border/30" : ""
+                                    } ${isPast ? "bg-muted/30 hover:bg-muted/40" : ""} ${hasExistingSession ? "pointer-events-none" : ""}`}
+                                    style={{ 
+                                      top: `${minuteIndex * SUB_SLOT_HEIGHT}px`, 
+                                      height: `${SUB_SLOT_HEIGHT}px`,
+                                      zIndex: 1
+                                    }}
+                                    onClick={() => !isPast && !hasExistingSession && handleSlotClick(day, hour, minute)}
+                                    data-testid={`slot-${format(day, "yyyy-MM-dd")}-${hour}-${minute}`}
+                                  />
+                                );
+                              })}
+                              
+                              {/* Render sessions - show only profile pictures */}
+                              {slotSessions.map((session) => {
+                                const { top, height } = getSessionPosition(session, day, hour);
+                                const host = session.participants?.find(p => p.id === session.hostId);
+                                const displayName = host && (host.firstName && host.lastName
+                                  ? `${host.firstName} ${host.lastName}`
+                                  : host.username || "Anonymous") || "Anonymous";
+                                const initials = host && (host.firstName && host.lastName
+                                  ? `${host.firstName[0]}${host.lastName[0]}`.toUpperCase()
+                                  : host.username?.[0]?.toUpperCase() || "?") || "?";
+                                
+                                // Center avatar within the first 15-minute segment
+                                const avatarSize = 40;
+                                const avatarTop = top + (SUB_SLOT_HEIGHT - avatarSize) / 2;
+                                
+                                // Make the entire session duration area clickable
+                                return (
+                                  <div
+                                    key={session.id}
+                                    className="absolute left-0 right-0 cursor-pointer hover:bg-primary/5 transition-colors"
+                                    style={{ 
+                                      top: `${top}px`, 
+                                      height: `${height}px`,
+                                      zIndex: 5 
+                                    }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      // Open booking dialog for the session's start time
+                                      const sessionStart = parseISO(session.startAt);
+                                      handleSlotClick(day, sessionStart.getHours(), sessionStart.getMinutes());
+                                    }}
+                                    data-testid={`session-${session.id}`}
+                                  >
+                                    {/* Profile picture centered at top of session */}
+                                    <div
+                                      className="absolute"
+                                      style={{ 
+                                        top: `${(SUB_SLOT_HEIGHT - avatarSize) / 2}px`, 
+                                        left: "50%", 
+                                        transform: "translateX(-50%)",
+                                        zIndex: 10 
+                                      }}
+                                    >
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Avatar className="h-10 w-10 border-2 border-background shadow-sm">
+                                              <AvatarImage src={host?.profileImageUrl || undefined} />
+                                              <AvatarFallback className="text-sm font-medium">{initials}</AvatarFallback>
+                                            </Avatar>
+                                          </TooltipTrigger>
+                                          <TooltipContent side="top">
+                                            <p className="text-xs">{displayName}</p>
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Legend */}
-        <div className="mt-4 flex flex-wrap items-center gap-4 text-sm">
-          <span className="font-medium text-muted-foreground">Work Preferences:</span>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 border-l-4 bg-blue-500/20 dark:bg-blue-500/30 border-blue-500"></div>
-            <span>Desk</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 border-l-4 bg-green-500/20 dark:bg-green-500/30 border-green-500"></div>
-            <span>Active</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 border-l-4 bg-purple-500/20 dark:bg-purple-500/30 border-purple-500"></div>
-            <span>Any</span>
-          </div>
-        </div>
-
-        {/* Schedule Session Dialog */}
+        {/* Schedule Session Dialog - Non-editable labels for type/preference/duration */}
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogContent className="sm:max-w-[500px]">
             <DialogHeader>
-              <DialogTitle>Schedule a Work Session</DialogTitle>
+              <DialogTitle>Book a Work Session</DialogTitle>
               <DialogDescription>
                 {selectedSlot && (
                   <>
@@ -545,46 +669,31 @@ export default function CalendarPage() {
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label htmlFor="session-type">Session Type</Label>
-                <Select value={sessionType} onValueChange={setSessionType}>
-                  <SelectTrigger data-testid="select-session-type">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="solo">Solo (1-on-1)</SelectItem>
-                    <SelectItem value="group">Group (up to 5)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="booking-preference">Booking Preference</Label>
-                <Select value={bookingPreference} onValueChange={setBookingPreference}>
-                  <SelectTrigger data-testid="select-booking-preference">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="desk">Desk Work (matches with Desk or Any)</SelectItem>
-                    <SelectItem value="active">Active (matches with Active or Any)</SelectItem>
-                    <SelectItem value="any">Any (matches with all)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="duration">Session Length</Label>
-                <Select value={durationMinutes.toString()} onValueChange={(value) => setDurationMinutes(Number(value))}>
-                  <SelectTrigger data-testid="select-duration">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="20">20 minutes</SelectItem>
-                    <SelectItem value="40">40 minutes</SelectItem>
-                    <SelectItem value="60">60 minutes</SelectItem>
-                    <SelectItem value="120">120 minutes (2 hours)</SelectItem>
-                  </SelectContent>
-                </Select>
+              {/* Non-editable session parameters - shown as labels */}
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Session Type</Label>
+                  <div className="flex items-center gap-2 p-2 bg-muted rounded-md">
+                    <Users className="h-4 w-4" />
+                    <span className="text-sm font-medium">{sessionTypeLabels[filterSessionType]}</span>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Preference</Label>
+                  <div className="flex items-center gap-2 p-2 bg-muted rounded-md">
+                    {filterPreference === 'desk' && <Monitor className="h-4 w-4" />}
+                    {filterPreference === 'active' && <Activity className="h-4 w-4" />}
+                    {filterPreference === 'any' && <Shuffle className="h-4 w-4" />}
+                    <span className="text-sm font-medium">{preferenceLabels[filterPreference]}</span>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Duration</Label>
+                  <div className="flex items-center gap-2 p-2 bg-muted rounded-md">
+                    <Clock className="h-4 w-4" />
+                    <span className="text-sm font-medium">{filterDuration} min</span>
+                  </div>
+                </div>
               </div>
 
               <div className="grid gap-2">
@@ -624,6 +733,50 @@ export default function CalendarPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Match Confirmation Dialog */}
+        <AlertDialog open={!!matchConfirmation} onOpenChange={(open) => !open && setMatchConfirmation(null)}>
+          <AlertDialogContent className="sm:max-w-[400px]">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-center">You've been matched!</AlertDialogTitle>
+              <AlertDialogDescription className="text-center">
+                <div className="py-6 flex flex-col items-center gap-4">
+                  {matchConfirmation?.matchedUser && (
+                    <>
+                      <Avatar className="h-20 w-20 border-4 border-primary">
+                        <AvatarImage src={matchConfirmation.matchedUser.profileImageUrl || undefined} />
+                        <AvatarFallback className="text-xl">
+                          {matchConfirmation.matchedUser.firstName?.[0]}
+                          {matchConfirmation.matchedUser.lastName?.[0]}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="text-lg font-semibold text-foreground">
+                        {matchConfirmation.matchedUser.firstName} {matchConfirmation.matchedUser.lastName}
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        Your session partner for{" "}
+                        {matchConfirmation.session && format(parseISO(matchConfirmation.session.startAt), "h:mm a 'on' EEE, MMM d")}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="sm:justify-center">
+              <AlertDialogAction
+                onClick={() => {
+                  if (matchConfirmation?.session) {
+                    setLocation(`/session/${matchConfirmation.session.id}`);
+                  }
+                  setMatchConfirmation(null);
+                }}
+                data-testid="button-view-session"
+              >
+                View Session
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </main>
     </div>
   );
