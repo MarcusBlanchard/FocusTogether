@@ -286,6 +286,32 @@ export default function CalendarPage() {
     return minutesUntilStart <= 10 && minutesUntilStart >= -session.durationMinutes;
   };
 
+  // Check if user has ANY overlapping session at a given time slot (unfiltered by type/preference/duration)
+  // This prevents double-booking regardless of the current filter view
+  const userHasOverlappingSessionAtSlot = (day: Date, hour: number, minute: number): boolean => {
+    if (!mySessions) return false;
+    
+    const slotTime = new Date(day);
+    slotTime.setHours(hour, minute, 0, 0);
+    const slotEndTime = new Date(slotTime);
+    slotEndTime.setMinutes(slotEndTime.getMinutes() + 15);
+    const now = new Date();
+    
+    return mySessions.some((session) => {
+      // Skip cancelled sessions
+      if (session.status === 'cancelled') return false;
+      
+      const sessionStart = parseISO(session.startAt);
+      const sessionEnd = parseISO(session.endAt);
+      
+      // Skip sessions that have already ended
+      if (sessionEnd <= now) return false;
+      
+      // Check if this session overlaps with the 15-min slot
+      return sessionStart < slotEndTime && sessionEnd > slotTime;
+    });
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b">
@@ -565,37 +591,22 @@ export default function CalendarPage() {
                               {[0, 15, 30, 45].map((minute, minuteIndex) => {
                                 const isPast = new Date(day).setHours(hour, minute, 0, 0) < new Date().getTime();
                                 
-                                // Check if the CURRENT USER has a session that overlaps with this 15-min slot
-                                // Only block slots for the user's own sessions, not other users' sessions
-                                const slotTime = new Date(day);
-                                slotTime.setHours(hour, minute, 0, 0);
-                                const slotEndTime = new Date(slotTime);
-                                slotEndTime.setMinutes(slotEndTime.getMinutes() + 15);
-                                
-                                const userHasOverlappingSession = slotSessions.some((session) => {
-                                  // Check if user is a participant in this session
-                                  const isUserSession = session.hostId === user?.id || 
-                                    session.participants?.some(p => p.id === user?.id);
-                                  if (!isUserSession) return false;
-                                  
-                                  // Check if this session overlaps with the 15-min slot
-                                  const sessionStart = parseISO(session.startAt);
-                                  const sessionEnd = parseISO(session.endAt);
-                                  return sessionStart < slotEndTime && sessionEnd > slotTime;
-                                });
+                                // Check if the CURRENT USER has ANY session that overlaps with this 15-min slot
+                                // Uses unfiltered mySessions to prevent double-booking regardless of current filter view
+                                const userHasOverlapping = userHasOverlappingSessionAtSlot(day, hour, minute);
                                 
                                 return (
                                   <div
                                     key={minute}
                                     className={`absolute w-full cursor-pointer transition-colors hover:bg-primary/10 ${
                                       minuteIndex > 0 ? "border-t border-border/30" : ""
-                                    } ${isPast ? "bg-muted/30 hover:bg-muted/40" : ""} ${userHasOverlappingSession ? "pointer-events-none bg-muted/20" : ""}`}
+                                    } ${isPast ? "bg-muted/30 hover:bg-muted/40" : ""} ${userHasOverlapping ? "pointer-events-none bg-muted/20" : ""}`}
                                     style={{ 
                                       top: `${minuteIndex * SUB_SLOT_HEIGHT}px`, 
                                       height: `${SUB_SLOT_HEIGHT}px`,
                                       zIndex: 1
                                     }}
-                                    onClick={() => !isPast && !userHasOverlappingSession && handleSlotClick(day, hour, minute)}
+                                    onClick={() => !isPast && !userHasOverlapping && handleSlotClick(day, hour, minute)}
                                     data-testid={`slot-${format(day, "yyyy-MM-dd")}-${hour}-${minute}`}
                                   />
                                 );
