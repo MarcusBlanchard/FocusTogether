@@ -13,6 +13,13 @@ export interface MediaStreamState {
   screenStream: MediaStream | null;
 }
 
+export interface MediaCapabilities {
+  hasVideo: boolean;
+  hasAudio: boolean;
+  videoError?: string;
+  audioError?: string;
+}
+
 export type SignalType = 'offer' | 'answer' | 'ice-candidate';
 
 export interface SignalData {
@@ -28,9 +35,14 @@ export class WebRTCManager {
   private onRemoteStream: ((stream: MediaStream) => void) | null = null;
   private onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
   private onConnectionStateChange: ((state: RTCPeerConnectionState) => void) | null = null;
+  private mediaCapabilities: MediaCapabilities = { hasVideo: false, hasAudio: false };
 
   constructor() {
     this.peerConnection = null;
+  }
+
+  getMediaCapabilities(): MediaCapabilities {
+    return { ...this.mediaCapabilities };
   }
 
   setCallbacks(callbacks: {
@@ -71,17 +83,66 @@ export class WebRTCManager {
     return this.peerConnection;
   }
 
-  async getUserMedia(): Promise<MediaStream> {
+  async getUserMedia(): Promise<MediaStream | null> {
+    this.mediaCapabilities = { hasVideo: false, hasAudio: false };
+    
+    // Try to get both video and audio first
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: true,
       });
+      this.mediaCapabilities = { hasVideo: true, hasAudio: true };
+      console.log('[WebRTC] Got both video and audio');
       return this.localStream;
     } catch (error) {
-      console.error('Error getting user media:', error);
-      throw error;
+      console.warn('[WebRTC] Failed to get video+audio, trying fallbacks:', error);
     }
+
+    // Fallback: Try audio only
+    try {
+      this.localStream = await navigator.mediaDevices.getUserMedia({
+        video: false,
+        audio: true,
+      });
+      this.mediaCapabilities = { hasVideo: false, hasAudio: true, videoError: 'Camera not available' };
+      console.log('[WebRTC] Got audio only (no video)');
+      return this.localStream;
+    } catch (error) {
+      console.warn('[WebRTC] Failed to get audio only:', error);
+      this.mediaCapabilities.audioError = 'Microphone not available';
+    }
+
+    // Fallback: Try video only
+    try {
+      this.localStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+      this.mediaCapabilities = { 
+        hasVideo: true, 
+        hasAudio: false, 
+        audioError: 'Microphone not available' 
+      };
+      console.log('[WebRTC] Got video only (no audio)');
+      return this.localStream;
+    } catch (error) {
+      console.warn('[WebRTC] Failed to get video only:', error);
+      this.mediaCapabilities.videoError = 'Camera not available';
+    }
+
+    // No media available - create empty stream so WebRTC can still work
+    console.log('[WebRTC] No media devices available, continuing without local media');
+    this.mediaCapabilities = {
+      hasVideo: false,
+      hasAudio: false,
+      videoError: 'Camera not available',
+      audioError: 'Microphone not available',
+    };
+    
+    // Create an empty MediaStream so the session can still proceed
+    this.localStream = new MediaStream();
+    return this.localStream;
   }
 
   async getDisplayMedia(): Promise<MediaStream> {
@@ -100,9 +161,16 @@ export class WebRTCManager {
   addLocalStream() {
     if (!this.peerConnection || !this.localStream) return;
 
-    this.localStream.getTracks().forEach((track) => {
+    const tracks = this.localStream.getTracks();
+    if (tracks.length === 0) {
+      console.log('[WebRTC] No local tracks to add (no media available)');
+      return;
+    }
+
+    tracks.forEach((track) => {
       this.peerConnection!.addTrack(track, this.localStream!);
     });
+    console.log(`[WebRTC] Added ${tracks.length} local tracks`);
   }
 
   async createOffer(): Promise<RTCSessionDescriptionInit> {

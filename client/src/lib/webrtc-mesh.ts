@@ -32,6 +32,13 @@ export interface MeshCallbacks {
   onConnectionStateChange?: (peerId: string, state: RTCPeerConnectionState) => void;
 }
 
+export interface MediaCapabilities {
+  hasVideo: boolean;
+  hasAudio: boolean;
+  videoError?: string;
+  audioError?: string;
+}
+
 class MeshWebRTCManager {
   private peerConnections: Map<string, RTCPeerConnection> = new Map();
   private remoteStreams: Map<string, MediaStream> = new Map();
@@ -41,6 +48,7 @@ class MeshWebRTCManager {
   private sessionId: string = '';
   private myUserId: string = '';
   private iceCandidateBuffer: Map<string, RTCIceCandidateInit[]> = new Map();
+  private mediaCapabilities: MediaCapabilities = { hasVideo: false, hasAudio: false };
 
   setCallbacks(callbacks: MeshCallbacks) {
     this.callbacks = callbacks;
@@ -54,17 +62,70 @@ class MeshWebRTCManager {
     this.myUserId = userId;
   }
 
+  getMediaCapabilities(): MediaCapabilities {
+    return { ...this.mediaCapabilities };
+  }
+
   async getUserMedia(): Promise<MediaStream> {
+    this.mediaCapabilities = { hasVideo: false, hasAudio: false };
+    
+    // Try to get both video and audio first
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: true,
       });
+      this.mediaCapabilities = { hasVideo: true, hasAudio: true };
+      console.log('[WebRTC Mesh] Got both video and audio');
       return this.localStream;
     } catch (error) {
-      console.error('[WebRTC Mesh] Error getting user media:', error);
-      throw error;
+      console.warn('[WebRTC Mesh] Failed to get video+audio, trying fallbacks:', error);
     }
+
+    // Fallback: Try audio only
+    try {
+      this.localStream = await navigator.mediaDevices.getUserMedia({
+        video: false,
+        audio: true,
+      });
+      this.mediaCapabilities = { hasVideo: false, hasAudio: true, videoError: 'Camera not available' };
+      console.log('[WebRTC Mesh] Got audio only (no video)');
+      return this.localStream;
+    } catch (error) {
+      console.warn('[WebRTC Mesh] Failed to get audio only:', error);
+      this.mediaCapabilities.audioError = 'Microphone not available';
+    }
+
+    // Fallback: Try video only
+    try {
+      this.localStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+      this.mediaCapabilities = { 
+        hasVideo: true, 
+        hasAudio: false, 
+        audioError: 'Microphone not available' 
+      };
+      console.log('[WebRTC Mesh] Got video only (no audio)');
+      return this.localStream;
+    } catch (error) {
+      console.warn('[WebRTC Mesh] Failed to get video only:', error);
+      this.mediaCapabilities.videoError = 'Camera not available';
+    }
+
+    // No media available - create empty stream so WebRTC can still work
+    console.log('[WebRTC Mesh] No media devices available, continuing without local media');
+    this.mediaCapabilities = {
+      hasVideo: false,
+      hasAudio: false,
+      videoError: 'Camera not available',
+      audioError: 'Microphone not available',
+    };
+    
+    // Create an empty MediaStream so the session can still proceed
+    this.localStream = new MediaStream();
+    return this.localStream;
   }
 
   async getDisplayMedia(): Promise<MediaStream> {
@@ -114,11 +175,17 @@ class MeshWebRTCManager {
     const pc = new RTCPeerConnection(rtcConfig);
     this.peerConnections.set(peerId, pc);
 
-    // Add local stream tracks if available
+    // Add local stream tracks if available (handles empty streams gracefully)
     if (this.localStream) {
-      this.localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, this.localStream!);
-      });
+      const tracks = this.localStream.getTracks();
+      if (tracks.length > 0) {
+        tracks.forEach((track) => {
+          pc.addTrack(track, this.localStream!);
+        });
+        console.log(`[WebRTC Mesh] Added ${tracks.length} local tracks to peer ${peerId}`);
+      } else {
+        console.log(`[WebRTC Mesh] No local tracks available for peer ${peerId} (no camera/mic)`);
+      }
     }
     
     // Add screen share tracks if available

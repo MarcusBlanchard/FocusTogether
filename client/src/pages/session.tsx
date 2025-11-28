@@ -68,6 +68,7 @@ export default function Session() {
   const [screenBlurred, setScreenBlurred] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [mediaCapabilities, setMediaCapabilities] = useState<{ hasVideo: boolean; hasAudio: boolean; videoError?: string; audioError?: string }>({ hasVideo: true, hasAudio: true });
 
   const [sessionDuration, setSessionDuration] = useState(0);
   const [countdown, setCountdown] = useState(0);
@@ -182,12 +183,34 @@ export default function Session() {
 
       await waitForConnection();
 
-      // Get local media (camera + mic)
+      // Get local media (camera + mic) - this now gracefully handles failures
       const stream = await meshWebRTCManager.getUserMedia();
       setLocalStream(stream);
-
-      // Screen share is optional - don't block session if user declines
-      // Users can toggle it on later if desired
+      
+      // Get media capabilities and update state
+      const capabilities = meshWebRTCManager.getMediaCapabilities();
+      setMediaCapabilities(capabilities);
+      
+      // Update UI state based on what's actually available
+      if (!capabilities.hasVideo) {
+        setVideoEnabled(false);
+      }
+      if (!capabilities.hasAudio) {
+        setAudioEnabled(false);
+      }
+      
+      // Show toast if media is limited
+      if (!capabilities.hasVideo || !capabilities.hasAudio) {
+        toast({
+          title: "Limited Media Access",
+          description: capabilities.hasVideo ? 
+            "Microphone unavailable - video only mode" : 
+            capabilities.hasAudio ? 
+              "Camera unavailable - audio only mode" : 
+              "Camera and microphone unavailable - you can still view others",
+          variant: "default",
+        });
+      }
 
       meshWebRTCManager.setCallbacks({
         onPeerStream: (info) => {
@@ -272,9 +295,11 @@ export default function Session() {
       console.log('[Session] Initialization complete');
     } catch (error) {
       console.error('[Session] Error initializing:', error);
+      // Only show error toast for actual connection failures, not media issues
+      // (media issues are handled gracefully with fallbacks)
       toast({
         title: "Connection Error",
-        description: "Failed to access camera/microphone/screen. Please check permissions.",
+        description: error instanceof Error ? error.message : "Failed to connect to session. Please try again.",
         variant: "destructive",
       });
     }
@@ -807,25 +832,39 @@ export default function Session() {
 
       {/* Bottom Controls */}
       <footer className="h-20 border-t flex items-center justify-center gap-4">
-        <Button
-          variant={audioEnabled ? "outline" : "destructive"}
-          size="icon"
-          className="h-12 w-12 rounded-full"
-          onClick={handleToggleAudio}
-          data-testid="button-toggle-audio"
-        >
-          {audioEnabled ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
-        </Button>
+        <div className="relative">
+          <Button
+            variant={!mediaCapabilities.hasAudio ? "secondary" : audioEnabled ? "outline" : "destructive"}
+            size="icon"
+            className="h-12 w-12 rounded-full"
+            onClick={handleToggleAudio}
+            disabled={!mediaCapabilities.hasAudio}
+            title={mediaCapabilities.audioError || (audioEnabled ? "Mute" : "Unmute")}
+            data-testid="button-toggle-audio"
+          >
+            {audioEnabled && mediaCapabilities.hasAudio ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
+          </Button>
+          {!mediaCapabilities.hasAudio && (
+            <span className="absolute -top-1 -right-1 h-3 w-3 bg-destructive rounded-full" title="Microphone unavailable" />
+          )}
+        </div>
 
-        <Button
-          variant={videoEnabled ? "outline" : "destructive"}
-          size="icon"
-          className="h-12 w-12 rounded-full"
-          onClick={handleToggleVideo}
-          data-testid="button-toggle-video"
-        >
-          {videoEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
-        </Button>
+        <div className="relative">
+          <Button
+            variant={!mediaCapabilities.hasVideo ? "secondary" : videoEnabled ? "outline" : "destructive"}
+            size="icon"
+            className="h-12 w-12 rounded-full"
+            onClick={handleToggleVideo}
+            disabled={!mediaCapabilities.hasVideo}
+            title={mediaCapabilities.videoError || (videoEnabled ? "Turn off camera" : "Turn on camera")}
+            data-testid="button-toggle-video"
+          >
+            {videoEnabled && mediaCapabilities.hasVideo ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+          </Button>
+          {!mediaCapabilities.hasVideo && (
+            <span className="absolute -top-1 -right-1 h-3 w-3 bg-destructive rounded-full" title="Camera unavailable" />
+          )}
+        </div>
 
         <div className="flex items-center gap-2">
           <Button
