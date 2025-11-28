@@ -134,7 +134,9 @@ export default function CalendarPage() {
       return apiRequest("POST", "/api/scheduled-sessions", data);
     },
     onSuccess: (response: any) => {
+      // Invalidate both the calendar sessions and user's sessions to update UI immediately
       queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
       setIsDialogOpen(false);
       
       if (response.matched && response.matchedUser) {
@@ -169,7 +171,9 @@ export default function CalendarPage() {
       return apiRequest("DELETE", `/api/scheduled-sessions/${sessionId}`);
     },
     onSuccess: () => {
+      // Invalidate both the calendar sessions and user's sessions to update UI immediately
       queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
       toast({
         title: "Session cancelled",
         description: "Your booking has been cancelled.",
@@ -330,9 +334,9 @@ export default function CalendarPage() {
 
       <main className="max-w-full mx-auto px-4 py-6">
         <div className="flex gap-6">
-          {/* Upcoming Sessions Sidebar */}
+          {/* Upcoming Sessions Sidebar - Sticky */}
           <div className="w-80 flex-shrink-0">
-            <Card className="h-fit">
+            <Card className="sticky top-6 z-10">
               <CardHeader className="pb-3">
                 <CardTitle className="text-lg flex items-center gap-2">
                   <CalendarIcon className="h-5 w-5" />
