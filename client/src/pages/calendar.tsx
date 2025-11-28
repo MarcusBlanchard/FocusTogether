@@ -237,10 +237,14 @@ export default function CalendarPage() {
     slotStart.setHours(hour, 0, 0, 0);
     const slotEnd = new Date(slotStart);
     slotEnd.setHours(hour + 1, 0, 0, 0);
+    const now = new Date();
 
     return sessions.filter((session) => {
       const sessionStart = parseISO(session.startAt);
       const sessionEnd = parseISO(session.endAt);
+      
+      // Filter out sessions that have already ended
+      if (sessionEnd <= now) return false;
       
       // Check if session overlaps with this hour slot
       const overlaps = sessionStart < slotEnd && sessionEnd > slotStart;
