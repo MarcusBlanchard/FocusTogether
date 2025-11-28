@@ -846,13 +846,13 @@ export default function Session() {
 
         <div className="flex items-center gap-2">
           <Button
-            variant="default"
+            variant={screenSharing ? "destructive" : "default"}
             className="px-6 py-3 rounded-lg"
-            disabled
-            data-testid="button-screen-share-status"
+            onClick={handleToggleScreenShare}
+            data-testid="button-screen-share"
           >
-            <Monitor className="mr-2 h-5 w-5" />
-            Screen Sharing
+            {screenSharing ? <MonitorOff className="mr-2 h-5 w-5" /> : <Monitor className="mr-2 h-5 w-5" />}
+            {screenSharing ? "Stop Sharing" : "Share Screen"}
           </Button>
           
           <div className="flex items-center gap-2 px-4 py-2 rounded-lg border bg-background">
