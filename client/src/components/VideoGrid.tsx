@@ -1,10 +1,12 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { VideoOff, MicOff } from "lucide-react";
+import { VideoOff, MicOff, Monitor, Maximize2 } from "lucide-react";
 import { ParticipantInfo } from "@/lib/session-client";
 
 export interface VideoParticipant extends ParticipantInfo {
   stream: MediaStream | null;
+  screenStream?: MediaStream | null;
+  screenBlurred?: boolean;
   audioEnabled?: boolean;
   videoEnabled?: boolean;
 }
@@ -23,6 +25,8 @@ interface VideoGridProps {
   screenBlurred?: boolean;
 }
 
+type MaximizedView = 'none' | 'local-screen' | `remote-screen-${string}` | `remote-video-${string}`;
+
 export function VideoGrid({ 
   participants, 
   localStream, 
@@ -32,7 +36,29 @@ export function VideoGrid({
   screenStream,
   screenBlurred 
 }: VideoGridProps) {
-  const totalParticipants = participants.length + 1; // +1 for local user
+  const [maximizedView, setMaximizedView] = useState<MaximizedView>('none');
+  const totalParticipants = participants.length + 1;
+
+  // Check if any remote participant is sharing their screen
+  const remoteScreenSharers = participants.filter(p => p.screenStream);
+  
+  // Auto-maximize remote screen share if one exists and nothing is maximized
+  useEffect(() => {
+    if (remoteScreenSharers.length > 0 && maximizedView === 'none') {
+      setMaximizedView(`remote-screen-${remoteScreenSharers[0].userId}`);
+    } else if (remoteScreenSharers.length === 0 && maximizedView.startsWith('remote-screen-')) {
+      setMaximizedView('none');
+    }
+  }, [remoteScreenSharers.length]);
+
+  // If local screen share starts and no remote shares, maximize local
+  useEffect(() => {
+    if (screenStream && remoteScreenSharers.length === 0 && maximizedView === 'none') {
+      setMaximizedView('local-screen');
+    } else if (!screenStream && maximizedView === 'local-screen') {
+      setMaximizedView('none');
+    }
+  }, [screenStream, remoteScreenSharers.length]);
 
   const getGridClass = () => {
     if (totalParticipants === 1) return "grid-cols-1";
@@ -42,24 +68,55 @@ export function VideoGrid({
     return "grid-cols-4";
   };
 
-  return (
-    <div className="h-full w-full relative">
-      {/* Screen Share Display (when active) */}
-      {screenStream && (
-        <div className="absolute inset-0 bg-background">
-          <ScreenShareTile stream={screenStream} blurred={screenBlurred} />
-        </div>
-      )}
+  const hasMaximizedView = maximizedView !== 'none';
 
-      {/* Video Grid - positioned at bottom right when screen sharing */}
+  // Get the maximized content
+  const renderMaximizedContent = () => {
+    if (maximizedView === 'local-screen' && screenStream) {
+      return <ScreenShareTile stream={screenStream} blurred={screenBlurred} isLocal={true} />;
+    }
+    
+    if (maximizedView.startsWith('remote-screen-')) {
+      const participantId = maximizedView.replace('remote-screen-', '');
+      const participant = participants.find(p => p.userId === participantId);
+      if (participant?.screenStream) {
+        return <ScreenShareTile stream={participant.screenStream} blurred={participant.screenBlurred} isLocal={false} />;
+      }
+    }
+
+    if (maximizedView.startsWith('remote-video-')) {
+      const participantId = maximizedView.replace('remote-video-', '');
+      const participant = participants.find(p => p.userId === participantId);
+      if (participant) {
+        return (
+          <div className="w-full h-full">
+            <VideoTile
+              stream={participant.stream}
+              user={participant}
+              isLocal={false}
+              audioEnabled={participant.audioEnabled}
+              videoEnabled={participant.videoEnabled}
+              isMaximized={true}
+            />
+          </div>
+        );
+      }
+    }
+
+    return null;
+  };
+
+  // Build the list of thumbnail tiles
+  const renderThumbnails = () => {
+    const thumbnails: JSX.Element[] = [];
+
+    // Local video tile
+    thumbnails.push(
       <div 
-        className={
-          screenStream
-            ? "absolute bottom-4 right-4 grid grid-cols-2 gap-2 max-w-md"
-            : `grid ${getGridClass()} gap-2 h-full w-full p-4`
-        }
+        key="local-video" 
+        className="cursor-pointer hover:ring-2 hover:ring-primary rounded-lg transition-all"
+        onClick={() => setMaximizedView('none')}
       >
-        {/* Local video */}
         <VideoTile
           stream={localStream}
           user={localUser}
@@ -67,19 +124,109 @@ export function VideoGrid({
           audioEnabled={localAudioEnabled}
           videoEnabled={localVideoEnabled}
         />
-
-        {/* Remote videos */}
-        {participants.map((participant) => (
-          <VideoTile
-            key={participant.userId}
-            stream={participant.stream}
-            user={participant}
-            isLocal={false}
-            audioEnabled={participant.audioEnabled}
-            videoEnabled={participant.videoEnabled}
-          />
-        ))}
       </div>
+    );
+
+    // Local screen share tile (if sharing)
+    if (screenStream && maximizedView !== 'local-screen') {
+      thumbnails.push(
+        <div 
+          key="local-screen" 
+          className="cursor-pointer hover:ring-2 hover:ring-primary rounded-lg transition-all relative"
+          onClick={() => setMaximizedView('local-screen')}
+        >
+          <ScreenShareThumbnail stream={screenStream} label="Your Screen" blurred={screenBlurred} />
+        </div>
+      );
+    }
+
+    // Remote participant tiles
+    participants.forEach((participant) => {
+      // Remote video tile
+      const isVideoMaximized = maximizedView === `remote-video-${participant.userId}`;
+      if (!isVideoMaximized) {
+        thumbnails.push(
+          <div 
+            key={`video-${participant.userId}`}
+            className="cursor-pointer hover:ring-2 hover:ring-primary rounded-lg transition-all"
+            onClick={() => setMaximizedView(`remote-video-${participant.userId}`)}
+          >
+            <VideoTile
+              stream={participant.stream}
+              user={participant}
+              isLocal={false}
+              audioEnabled={participant.audioEnabled}
+              videoEnabled={participant.videoEnabled}
+            />
+          </div>
+        );
+      }
+
+      // Remote screen share tile (if sharing)
+      const isScreenMaximized = maximizedView === `remote-screen-${participant.userId}`;
+      if (participant.screenStream && !isScreenMaximized) {
+        thumbnails.push(
+          <div 
+            key={`screen-${participant.userId}`}
+            className="cursor-pointer hover:ring-2 hover:ring-primary rounded-lg transition-all"
+            onClick={() => setMaximizedView(`remote-screen-${participant.userId}`)}
+          >
+            <ScreenShareThumbnail 
+              stream={participant.screenStream} 
+              label={`${participant.username || 'Participant'}'s Screen`}
+              blurred={participant.screenBlurred}
+            />
+          </div>
+        );
+      }
+    });
+
+    return thumbnails;
+  };
+
+  return (
+    <div className="h-full w-full relative">
+      {hasMaximizedView ? (
+        <>
+          {/* Maximized view takes up most of the screen */}
+          <div className="absolute inset-0 bg-black">
+            {renderMaximizedContent()}
+          </div>
+
+          {/* Thumbnails in bottom right corner */}
+          <div className="absolute bottom-4 right-4 flex gap-2 z-10">
+            {renderThumbnails().map((thumb, i) => (
+              <div key={i} className="w-32 h-24">
+                {thumb}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        /* Normal grid layout when nothing is maximized */
+        <div className={`grid ${getGridClass()} gap-2 h-full w-full p-4`}>
+          {/* Local video */}
+          <VideoTile
+            stream={localStream}
+            user={localUser}
+            isLocal={true}
+            audioEnabled={localAudioEnabled}
+            videoEnabled={localVideoEnabled}
+          />
+
+          {/* Remote videos */}
+          {participants.map((participant) => (
+            <VideoTile
+              key={participant.userId}
+              stream={participant.stream}
+              user={participant}
+              isLocal={false}
+              audioEnabled={participant.audioEnabled}
+              videoEnabled={participant.videoEnabled}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -87,9 +234,10 @@ export function VideoGrid({
 interface ScreenShareTileProps {
   stream: MediaStream;
   blurred?: boolean;
+  isLocal?: boolean;
 }
 
-function ScreenShareTile({ stream, blurred }: ScreenShareTileProps) {
+function ScreenShareTile({ stream, blurred, isLocal }: ScreenShareTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -104,6 +252,7 @@ function ScreenShareTile({ stream, blurred }: ScreenShareTileProps) {
         ref={videoRef}
         autoPlay
         playsInline
+        muted={isLocal}
         className="w-full h-full object-contain"
         style={blurred ? { filter: 'blur(20px)' } : undefined}
         data-testid="screen-share-video"
@@ -115,6 +264,46 @@ function ScreenShareTile({ stream, blurred }: ScreenShareTileProps) {
           </div>
         </div>
       )}
+      <div className="absolute top-2 left-2 bg-background/80 backdrop-blur-sm px-2 py-1 rounded-md text-xs font-medium flex items-center gap-1">
+        <Monitor className="h-3 w-3" />
+        {isLocal ? "Your Screen" : "Screen Share"}
+      </div>
+    </div>
+  );
+}
+
+interface ScreenShareThumbnailProps {
+  stream: MediaStream;
+  label: string;
+  blurred?: boolean;
+}
+
+function ScreenShareThumbnail({ stream, label, blurred }: ScreenShareThumbnailProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  return (
+    <div className="w-full h-full rounded-lg overflow-hidden relative" style={{ backgroundColor: '#1a1a2e' }}>
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className="w-full h-full object-cover"
+        style={blurred ? { filter: 'blur(8px)' } : undefined}
+      />
+      <div className="absolute inset-0 flex items-center justify-center">
+        <Maximize2 className="h-6 w-6 text-white/70" />
+      </div>
+      <div className="absolute bottom-1 left-1 bg-background/80 backdrop-blur-sm px-1.5 py-0.5 rounded text-xs font-medium flex items-center gap-1">
+        <Monitor className="h-2.5 w-2.5" />
+        <span className="truncate max-w-[60px]">{label}</span>
+      </div>
     </div>
   );
 }
@@ -130,9 +319,10 @@ interface VideoTileProps {
   isLocal: boolean;
   audioEnabled?: boolean;
   videoEnabled?: boolean;
+  isMaximized?: boolean;
 }
 
-function VideoTile({ stream, user, isLocal, audioEnabled = true, videoEnabled = true }: VideoTileProps) {
+function VideoTile({ stream, user, isLocal, audioEnabled = true, videoEnabled = true, isMaximized }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const userId = user.userId || user.id || '';
 
@@ -145,9 +335,12 @@ function VideoTile({ stream, user, isLocal, audioEnabled = true, videoEnabled = 
   const userInitials = user.username?.[0]?.toUpperCase() || "?";
   const hasVideoStream = stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled;
 
+  const avatarSize = isMaximized ? "h-32 w-32" : "h-24 w-24";
+  const initialsSize = isMaximized ? "text-5xl" : "text-3xl";
+
   return (
     <div 
-      className="relative rounded-lg overflow-hidden aspect-video"
+      className={`relative rounded-lg overflow-hidden ${isMaximized ? 'h-full w-full' : 'aspect-video'}`}
       style={{ backgroundColor: '#1a1a2e' }}
       data-testid={`video-tile-${userId}`}
     >
@@ -162,9 +355,9 @@ function VideoTile({ stream, user, isLocal, audioEnabled = true, videoEnabled = 
         />
       ) : (
         <div className="w-full h-full flex items-center justify-center" style={{ backgroundColor: '#1a1a2e' }}>
-          <Avatar className="h-24 w-24 border-2 border-white/20">
+          <Avatar className={`${avatarSize} border-2 border-white/20`}>
             <AvatarImage src={user.profileImageUrl || undefined} />
-            <AvatarFallback className="text-3xl bg-gray-700 text-white">{userInitials}</AvatarFallback>
+            <AvatarFallback className={`${initialsSize} bg-gray-700 text-white`}>{userInitials}</AvatarFallback>
           </Avatar>
         </div>
       )}

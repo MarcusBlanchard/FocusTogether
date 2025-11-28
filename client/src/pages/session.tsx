@@ -197,6 +197,18 @@ export default function Session() {
           });
           setConnectionState('connected');
         },
+        onPeerScreenStream: (peerId, stream) => {
+          console.log('[Session] Remote screen stream from:', peerId, stream ? 'started' : 'stopped');
+          setParticipants(prev => prev.map(p => 
+            p.userId === peerId ? { ...p, screenStream: stream || undefined } : p
+          ));
+        },
+        onPeerScreenBlur: (peerId, blurred) => {
+          console.log('[Session] Remote screen blur from:', peerId, blurred);
+          setParticipants(prev => prev.map(p => 
+            p.userId === peerId ? { ...p, screenBlurred: blurred } : p
+          ));
+        },
         onSignal: (signal) => {
           const userId = getUserId();
           if (!userId) {
@@ -217,7 +229,7 @@ export default function Session() {
             setConnectionState('connected');
           } else if (state === 'failed' || state === 'disconnected') {
             setParticipants(prev => prev.map(p => 
-              p.userId === peerId ? { ...p, stream: null } : p
+              p.userId === peerId ? { ...p, stream: null, screenStream: undefined } : p
             ));
           }
         },
@@ -478,13 +490,8 @@ export default function Session() {
     const newState = !screenBlurred;
     setScreenBlurred(newState);
     
-    if (screenStream) {
-      const videoTrack = screenStream.getVideoTracks()[0];
-      if (videoTrack) {
-        // Apply CSS filter to blur the screen share
-        // This will be handled in VideoGrid component
-      }
-    }
+    // Broadcast blur state to all peers via WebRTC data channel
+    meshWebRTCManager.setScreenBlurred(newState);
   };
 
   const handleEndSession = () => {

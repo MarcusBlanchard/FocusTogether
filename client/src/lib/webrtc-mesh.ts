@@ -21,12 +21,20 @@ export interface SignalData {
 export interface PeerStreamInfo {
   peerId: string;
   stream: MediaStream;
+  isScreenShare?: boolean;
   username?: string;
   profileImageUrl?: string;
 }
 
+export interface DataChannelMessage {
+  type: 'screen-blur' | 'screen-share-start' | 'screen-share-stop';
+  data?: unknown;
+}
+
 export interface MeshCallbacks {
   onPeerStream?: (info: PeerStreamInfo) => void;
+  onPeerScreenStream?: (peerId: string, stream: MediaStream | null) => void;
+  onPeerScreenBlur?: (peerId: string, blurred: boolean) => void;
   onPeerDisconnected?: (peerId: string) => void;
   onSignal?: (signal: SignalData) => void;
   onConnectionStateChange?: (peerId: string, state: RTCPeerConnectionState) => void;
@@ -39,11 +47,18 @@ export interface MediaCapabilities {
   audioError?: string;
 }
 
+// Track kind used to identify screen share streams
+const SCREEN_SHARE_STREAM_ID_PREFIX = 'screen-share-';
+
 class MeshWebRTCManager {
   private peerConnections: Map<string, RTCPeerConnection> = new Map();
+  private dataChannels: Map<string, RTCDataChannel> = new Map();
   private remoteStreams: Map<string, MediaStream> = new Map();
+  private remoteScreenStreams: Map<string, MediaStream> = new Map();
+  private remoteScreenBlurred: Map<string, boolean> = new Map();
   private localStream: MediaStream | null = null;
   private screenStream: MediaStream | null = null;
+  private screenBlurred: boolean = false;
   private callbacks: MeshCallbacks = {};
   private sessionId: string = '';
   private myUserId: string = '';
@@ -64,6 +79,14 @@ class MeshWebRTCManager {
 
   getMediaCapabilities(): MediaCapabilities {
     return { ...this.mediaCapabilities };
+  }
+
+  getRemoteScreenBlurred(peerId: string): boolean {
+    return this.remoteScreenBlurred.get(peerId) || false;
+  }
+
+  getRemoteScreenStream(peerId: string): MediaStream | null {
+    return this.remoteScreenStreams.get(peerId) || null;
   }
 
   async getUserMedia(): Promise<MediaStream> {
@@ -135,6 +158,15 @@ class MeshWebRTCManager {
         audio: false,
       });
       
+      // Create a new stream with a specific ID to identify it as screen share
+      const screenShareStream = new MediaStream();
+      this.screenStream.getTracks().forEach(track => {
+        screenShareStream.addTrack(track);
+      });
+      
+      // Store reference and add to all peer connections
+      this.screenStream = screenShareStream;
+      
       // Add screen tracks to all existing peer connections
       this.screenStream.getTracks().forEach((track) => {
         this.peerConnections.forEach((pc) => {
@@ -142,11 +174,20 @@ class MeshWebRTCManager {
         });
       });
       
+      // Notify all peers that screen share started
+      this.broadcastDataMessage({ type: 'screen-share-start' });
+      
       return this.screenStream;
     } catch (error) {
       console.error('[WebRTC Mesh] Error getting display media:', error);
       throw error;
     }
+  }
+
+  setScreenBlurred(blurred: boolean) {
+    this.screenBlurred = blurred;
+    // Broadcast blur state to all peers
+    this.broadcastDataMessage({ type: 'screen-blur', data: blurred });
   }
 
   getLocalStream(): MediaStream | null {
@@ -161,8 +202,68 @@ class MeshWebRTCManager {
     return this.remoteStreams;
   }
 
+  getRemoteScreenStreams(): Map<string, MediaStream> {
+    return this.remoteScreenStreams;
+  }
+
   getPeerConnection(peerId: string): RTCPeerConnection | undefined {
     return this.peerConnections.get(peerId);
+  }
+
+  private broadcastDataMessage(message: DataChannelMessage) {
+    const messageStr = JSON.stringify(message);
+    this.dataChannels.forEach((channel, peerId) => {
+      if (channel.readyState === 'open') {
+        channel.send(messageStr);
+        console.log(`[WebRTC Mesh] Sent data message to ${peerId}:`, message);
+      }
+    });
+  }
+
+  private setupDataChannel(peerId: string, channel: RTCDataChannel) {
+    this.dataChannels.set(peerId, channel);
+    
+    channel.onopen = () => {
+      console.log(`[WebRTC Mesh] Data channel opened with ${peerId}`);
+      // Send current screen share state if we're sharing
+      if (this.screenStream) {
+        channel.send(JSON.stringify({ type: 'screen-share-start' }));
+        channel.send(JSON.stringify({ type: 'screen-blur', data: this.screenBlurred }));
+      }
+    };
+    
+    channel.onmessage = (event) => {
+      try {
+        const message: DataChannelMessage = JSON.parse(event.data);
+        console.log(`[WebRTC Mesh] Received data message from ${peerId}:`, message);
+        
+        switch (message.type) {
+          case 'screen-blur':
+            this.remoteScreenBlurred.set(peerId, message.data as boolean);
+            if (this.callbacks.onPeerScreenBlur) {
+              this.callbacks.onPeerScreenBlur(peerId, message.data as boolean);
+            }
+            break;
+          case 'screen-share-start':
+            // The screen stream will be received via ontrack
+            break;
+          case 'screen-share-stop':
+            this.remoteScreenStreams.delete(peerId);
+            this.remoteScreenBlurred.delete(peerId);
+            if (this.callbacks.onPeerScreenStream) {
+              this.callbacks.onPeerScreenStream(peerId, null);
+            }
+            break;
+        }
+      } catch (error) {
+        console.error('[WebRTC Mesh] Error parsing data channel message:', error);
+      }
+    };
+    
+    channel.onclose = () => {
+      console.log(`[WebRTC Mesh] Data channel closed with ${peerId}`);
+      this.dataChannels.delete(peerId);
+    };
   }
 
   async initializePeerConnection(peerId: string): Promise<RTCPeerConnection> {
@@ -174,6 +275,15 @@ class MeshWebRTCManager {
 
     const pc = new RTCPeerConnection(rtcConfig);
     this.peerConnections.set(peerId, pc);
+
+    // Create data channel for signaling screen share blur state
+    const dataChannel = pc.createDataChannel('control');
+    this.setupDataChannel(peerId, dataChannel);
+
+    // Handle incoming data channel (for when we receive connection)
+    pc.ondatachannel = (event) => {
+      this.setupDataChannel(peerId, event.channel);
+    };
 
     // Add local stream tracks if available (handles empty streams gracefully)
     if (this.localStream) {
@@ -229,15 +339,59 @@ class MeshWebRTCManager {
       }
     };
 
+    // Track stream IDs we've seen to distinguish between camera and screen
+    const seenStreamIds = new Set<string>();
+
     // Handle incoming tracks
     pc.ontrack = (event) => {
       if (event.streams[0]) {
-        this.remoteStreams.set(peerId, event.streams[0]);
-        if (this.callbacks.onPeerStream) {
-          this.callbacks.onPeerStream({
-            peerId,
-            stream: event.streams[0],
-          });
+        const stream = event.streams[0];
+        const streamId = stream.id;
+        const track = event.track;
+        
+        console.log(`[WebRTC Mesh] Received track from ${peerId}:`, {
+          kind: track.kind,
+          label: track.label,
+          streamId,
+          trackId: track.id,
+        });
+
+        // Check if this is a new stream (likely screen share)
+        // The first stream we receive is usually the camera stream
+        // Subsequent streams are likely screen shares
+        if (!seenStreamIds.has(streamId)) {
+          const streamCount = seenStreamIds.size;
+          seenStreamIds.add(streamId);
+          
+          if (streamCount === 0) {
+            // First stream is camera
+            this.remoteStreams.set(peerId, stream);
+            if (this.callbacks.onPeerStream) {
+              this.callbacks.onPeerStream({
+                peerId,
+                stream,
+                isScreenShare: false,
+              });
+            }
+          } else {
+            // Subsequent streams are screen shares
+            this.remoteScreenStreams.set(peerId, stream);
+            if (this.callbacks.onPeerScreenStream) {
+              this.callbacks.onPeerScreenStream(peerId, stream);
+            }
+          }
+        } else {
+          // Update existing stream
+          if (seenStreamIds.size === 1) {
+            this.remoteStreams.set(peerId, stream);
+            if (this.callbacks.onPeerStream) {
+              this.callbacks.onPeerStream({
+                peerId,
+                stream,
+                isScreenShare: false,
+              });
+            }
+          }
         }
       }
     };
@@ -358,6 +512,9 @@ class MeshWebRTCManager {
     }
 
     this.remoteStreams.delete(peerId);
+    this.remoteScreenStreams.delete(peerId);
+    this.remoteScreenBlurred.delete(peerId);
+    this.dataChannels.delete(peerId);
     console.log(`[WebRTC Mesh] Removed peer ${peerId}`);
   }
 
@@ -379,6 +536,9 @@ class MeshWebRTCManager {
 
   stopScreenShare() {
     if (this.screenStream) {
+      // Notify all peers that screen share stopped
+      this.broadcastDataMessage({ type: 'screen-share-stop' });
+      
       // Remove screen tracks from all peer connections
       const screenTracks = this.screenStream.getTracks();
       this.peerConnections.forEach((pc) => {
@@ -393,6 +553,7 @@ class MeshWebRTCManager {
       // Stop the screen tracks
       screenTracks.forEach((track) => track.stop());
       this.screenStream = null;
+      this.screenBlurred = false;
     }
   }
 
@@ -402,6 +563,9 @@ class MeshWebRTCManager {
       pc.close();
       this.peerConnections.delete(peerId);
     }
+
+    // Clear data channels
+    this.dataChannels.clear();
 
     // Stop local media
     if (this.localStream) {
@@ -416,6 +580,8 @@ class MeshWebRTCManager {
 
     // Clear remote streams
     this.remoteStreams.clear();
+    this.remoteScreenStreams.clear();
+    this.remoteScreenBlurred.clear();
 
     console.log('[WebRTC Mesh] Closed all connections');
   }
