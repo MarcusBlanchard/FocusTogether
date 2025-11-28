@@ -4,6 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/useAuth";
+import { SessionClientProvider } from "@/contexts/session-client-context";
 import Landing from "@/pages/landing";
 import Home from "@/pages/home";
 import Waiting from "@/pages/waiting";
@@ -18,19 +19,21 @@ import NotFound from "@/pages/not-found";
 
 function AuthenticatedRoutes() {
   return (
-    <Switch>
-      <Route path="/" component={Home} />
-      <Route path="/home" component={Home} />
-      <Route path="/waiting" component={Waiting} />
-      <Route path="/session/:sessionId" component={Session} />
-      <Route path="/friends" component={Friends} />
-      <Route path="/history" component={HistoryPage} />
-      <Route path="/search" component={SearchPage} />
-      <Route path="/profile" component={Profile} />
-      <Route path="/calendar" component={CalendarPage} />
-      <Route path="/free-rooms" component={FreeRooms} />
-      <Route component={NotFound} />
-    </Switch>
+    <SessionClientProvider>
+      <Switch>
+        <Route path="/" component={Home} />
+        <Route path="/home" component={Home} />
+        <Route path="/waiting" component={Waiting} />
+        <Route path="/session/:sessionId" component={Session} />
+        <Route path="/friends" component={Friends} />
+        <Route path="/history" component={HistoryPage} />
+        <Route path="/search" component={SearchPage} />
+        <Route path="/profile" component={Profile} />
+        <Route path="/calendar" component={CalendarPage} />
+        <Route path="/free-rooms" component={FreeRooms} />
+        <Route component={NotFound} />
+      </Switch>
+    </SessionClientProvider>
   );
 }
 

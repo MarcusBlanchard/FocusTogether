@@ -23,7 +23,8 @@ import {
   Eye,
   EyeOff
 } from "lucide-react";
-import { sessionClient, type SessionEvent, type ParticipantInfo } from "@/lib/session-client";
+import { type SessionEvent, type ParticipantInfo } from "@/lib/session-client";
+import { useSessionClient } from "@/contexts/session-client-context";
 import { meshWebRTCManager } from "@/lib/webrtc-mesh";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -57,6 +58,7 @@ export default function Session() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { isConnected, onEvent, sendSignal, joinScheduledSession, getUserId, waitForConnection } = useSessionClient();
 
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('pre-session');
   const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
@@ -151,36 +153,7 @@ export default function Session() {
     initializingRef.current = true;
     let unsubscribe: (() => void) | null = null;
 
-    const waitForConnection = (): Promise<void> => {
-      return new Promise((resolve, reject) => {
-        if (sessionClient.isConnected() && sessionClient.getUserId()) {
-          resolve();
-          return;
-        }
-
-        const checkInterval = setInterval(() => {
-          if (sessionClient.isConnected() && sessionClient.getUserId()) {
-            clearInterval(checkInterval);
-            resolve();
-          }
-        }, 100);
-
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          if (!sessionClient.isConnected() || !sessionClient.getUserId()) {
-            reject(new Error('Failed to establish WebSocket connection'));
-          } else {
-            resolve();
-          }
-        }, 10000);
-      });
-    };
-
     try {
-      if (!sessionClient.isConnected()) {
-        sessionClient.connect(user.id);
-      }
-
       await waitForConnection();
 
       // Get local media (camera + mic) - this now gracefully handles failures
@@ -225,12 +198,12 @@ export default function Session() {
           setConnectionState('connected');
         },
         onSignal: (signal) => {
-          const userId = sessionClient.getUserId();
+          const userId = getUserId();
           if (!userId) {
             console.error('[Session] Cannot send signal - user ID not available');
             return;
           }
-          sessionClient.sendSignal(
+          sendSignal(
             params.sessionId!,
             signal.type,
             signal.data,
@@ -255,10 +228,10 @@ export default function Session() {
 
       // Join the scheduled session to register in the server's room
       // This enables WebRTC signaling between participants
-      sessionClient.joinScheduledSession(params.sessionId!);
+      joinScheduledSession(params.sessionId!);
       console.log('[Session] Requested to join scheduled session:', params.sessionId);
 
-      unsubscribe = sessionClient.onEvent(async (event: SessionEvent) => {
+      unsubscribe = onEvent(async (event: SessionEvent) => {
         if (event.type === 'signal' && event.signal) {
           await handleSignal(event.signal);
         } else if (event.type === 'participant-joined' && event.participant) {
@@ -320,9 +293,9 @@ export default function Session() {
       
       if (signal.type === 'offer') {
         const answer = await meshWebRTCManager.handleOffer(peerId, signal.data);
-        const userId = sessionClient.getUserId();
+        const userId = getUserId();
         if (userId) {
-          sessionClient.sendSignal(params.sessionId!, 'answer', answer, userId, peerId);
+          sendSignal(params.sessionId!, 'answer', answer, userId, peerId);
         }
       } else if (signal.type === 'answer') {
         await meshWebRTCManager.handleAnswer(peerId, signal.data);
@@ -350,14 +323,14 @@ export default function Session() {
       videoEnabled: true,
     }]);
 
-    const userId = sessionClient.getUserId();
+    const userId = getUserId();
     if (!userId) return;
 
     const shouldInitiate = userId < participantId;
     if (shouldInitiate) {
       try {
         const offer = await meshWebRTCManager.createOffer(participantId);
-        sessionClient.sendSignal(params.sessionId!, 'offer', offer, userId, participantId);
+        sendSignal(params.sessionId!, 'offer', offer, userId, participantId);
       } catch (error) {
         console.error('[Session] Error creating offer:', error);
       }
@@ -384,14 +357,14 @@ export default function Session() {
       description: `${participant.username || "A participant"} joined the session.`,
     });
 
-    const userId = sessionClient.getUserId();
+    const userId = getUserId();
     if (!userId) return;
 
     const shouldInitiate = userId < participant.userId;
     if (shouldInitiate) {
       try {
         const offer = await meshWebRTCManager.createOffer(participant.userId);
-        sessionClient.sendSignal(params.sessionId!, 'offer', offer, userId, participant.userId);
+        sendSignal(params.sessionId!, 'offer', offer, userId, participant.userId);
       } catch (error) {
         console.error('[Session] Error creating offer for new participant:', error);
       }
@@ -410,7 +383,7 @@ export default function Session() {
   };
 
   const handleRoomJoined = async (participants: ParticipantInfo[]) => {
-    const userId = sessionClient.getUserId();
+    const userId = getUserId();
     if (!userId) return;
     
     const otherParticipants = participants.filter(p => p.userId && p.userId !== userId);
@@ -430,7 +403,7 @@ export default function Session() {
       if (shouldInitiate) {
         try {
           const offer = await meshWebRTCManager.createOffer(participant.userId);
-          sessionClient.sendSignal(params.sessionId!, 'offer', offer, userId, participant.userId);
+          sendSignal(params.sessionId!, 'offer', offer, userId, participant.userId);
         } catch (error) {
           console.error('[Session] Error creating offer for participant:', error);
         }
@@ -525,7 +498,7 @@ export default function Session() {
     }
 
     meshWebRTCManager.close();
-    sessionClient.disconnect();
+    // Note: Don't disconnect sessionClient here - the provider manages connection lifecycle
     
     if (sessionStartRef.current) {
       setSessionStatus('post-session');

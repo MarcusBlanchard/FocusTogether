@@ -1,9 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { sessionClient } from "@/lib/session-client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -114,13 +113,6 @@ export default function FreeRooms() {
       });
     },
   });
-
-  useEffect(() => {
-    if (user && !authLoading) {
-      // Connect to WebSocket
-      sessionClient.connect(user.id);
-    }
-  }, [user, authLoading]);
 
   const handleCreateRoom = () => {
     if (!roomTitle.trim()) {

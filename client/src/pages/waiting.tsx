@@ -4,7 +4,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, X, User, UsersRound } from "lucide-react";
-import { sessionClient, type SessionEvent } from "@/lib/session-client";
+import { type SessionEvent } from "@/lib/session-client";
+import { useSessionClient } from "@/contexts/session-client-context";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -14,6 +15,7 @@ type SessionType = "solo" | "group";
 export default function Waiting() {
   const { user, isLoading } = useAuth();
   const [location, setLocation] = useLocation();
+  const { isConnected, onEvent } = useSessionClient();
   const [status, setStatus] = useState<WaitingStatus>('connecting');
   const [partnerInfo, setPartnerInfo] = useState<{ userId: string; username: string | null } | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -44,11 +46,8 @@ export default function Waiting() {
   useEffect(() => {
     if (!user || isLoading) return;
 
-    // Connect to WebSocket
-    sessionClient.connect(user.id);
-
-    // Set up event listener
-    const unsubscribe = sessionClient.onEvent((event: SessionEvent) => {
+    // Set up event listener - connection is managed by SessionClientProvider
+    const unsubscribe = onEvent((event: SessionEvent) => {
       console.log('[Waiting] Event received:', event);
       
       // Solo matching (1-on-1)
@@ -100,11 +99,11 @@ export default function Waiting() {
       unsubscribe();
       clearTimeout(joinTimer);
     };
-  }, [user, isLoading, sessionType]);
+  }, [user, isLoading, sessionType, onEvent]);
 
   const handleCancel = () => {
     leaveQueueMutation.mutate();
-    sessionClient.disconnect();
+    // Note: Don't disconnect sessionClient - the provider manages connection lifecycle
     setLocation("/");
   };
 

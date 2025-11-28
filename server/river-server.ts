@@ -383,16 +383,13 @@ export function setupRiverServer(httpServer: Server) {
     }
   });
 
-  // Create River transport and server
-  const transport = new WebSocketServerTransport(wss, 'focus-session-server');
-  
-  const server = createServer(transport, {
-    session: SessionService,
-  });
+  // Note: We're using raw WebSocket for messaging, not River RPC
+  // The River service schema is defined above for documentation purposes
+  // but we handle WebSocket messages directly in the 'message' event handler
 
   console.log('[River] Server initialized');
 
-  return server;
+  return wss;
 }
 
 export type RiverServer = ReturnType<typeof setupRiverServer>;
