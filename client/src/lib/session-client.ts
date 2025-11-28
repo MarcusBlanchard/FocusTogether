@@ -154,6 +154,18 @@ class SessionClient {
     }
   }
 
+  joinScheduledSession(sessionId: string) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.log('[SessionClient] Joining scheduled session:', sessionId);
+      this.ws.send(JSON.stringify({
+        action: 'joinScheduledSession',
+        sessionId,
+      }));
+    } else {
+      console.error('[SessionClient] Cannot join session - WebSocket not connected');
+    }
+  }
+
   getUserId(): string | null {
     return this.userId;
   }

@@ -475,6 +475,92 @@ class SessionManager {
     console.log(`[SessionManager] User ${userId} joined room ${sessionId}. Total: ${room.participantIds.length}`);
   }
 
+  // Join a scheduled session (creates room in memory if needed)
+  async joinScheduledSession(userId: string, sessionId: string): Promise<{ success: boolean; participants?: Array<{ userId: string; username: string | null; profileImageUrl: string | null }>; error?: string }> {
+    console.log(`[SessionManager] User ${userId} joining scheduled session ${sessionId}`);
+    
+    // Check if room already exists in memory
+    let room = this.roomSessions.get(sessionId);
+    
+    if (!room) {
+      // Look up the scheduled session from database
+      const scheduledSession = await storage.getScheduledSession(sessionId);
+      if (!scheduledSession) {
+        console.log(`[SessionManager] Scheduled session ${sessionId} not found`);
+        return { success: false, error: 'Session not found' };
+      }
+      
+      // Check if the session is active (started but not ended)
+      const now = new Date();
+      const startTime = new Date(scheduledSession.startAt);
+      const endTime = new Date(scheduledSession.endAt);
+      
+      if (now < startTime) {
+        console.log(`[SessionManager] Session ${sessionId} hasn't started yet`);
+        return { success: false, error: 'Session has not started yet' };
+      }
+      
+      if (now > endTime) {
+        console.log(`[SessionManager] Session ${sessionId} has ended`);
+        return { success: false, error: 'Session has ended' };
+      }
+      
+      // Create the room in memory
+      room = {
+        sessionId,
+        sessionType: scheduledSession.sessionType === 'solo' ? 'solo' : 'group',
+        participantIds: [],
+        maxCapacity: scheduledSession.capacity,
+        state: 'in-session',
+        startedAt: startTime,
+        title: scheduledSession.title || undefined,
+        hostId: scheduledSession.hostId,
+      };
+      
+      this.roomSessions.set(sessionId, room);
+      console.log(`[SessionManager] Created room for scheduled session ${sessionId}`);
+    }
+    
+    // Check if user is already in the room
+    if (room.participantIds.includes(userId)) {
+      console.log(`[SessionManager] User ${userId} already in session ${sessionId}`);
+      // Return current participants
+      const participantsInfo = await Promise.all(
+        room.participantIds.map(id => storage.getUser(id))
+      );
+      
+      return {
+        success: true,
+        participants: participantsInfo
+          .filter(p => p && p.id !== userId)
+          .map(p => ({
+            userId: p!.id,
+            username: p!.username,
+            profileImageUrl: p!.profileImageUrl,
+          })),
+      };
+    }
+    
+    // Add user to room
+    await this.joinRoom(userId, sessionId);
+    
+    // Get current participants to return
+    const participantsInfo = await Promise.all(
+      room.participantIds.map(id => storage.getUser(id))
+    );
+    
+    return {
+      success: true,
+      participants: participantsInfo
+        .filter(p => p && p.id !== userId)
+        .map(p => ({
+          userId: p!.id,
+          username: p!.username,
+          profileImageUrl: p!.profileImageUrl,
+        })),
+    };
+  }
+
   // Get available free rooms
   getFreeRooms(): Array<{ sessionId: string; title: string; participantCount: number; maxCapacity: number; hostId: string }> {
     const rooms: Array<{ sessionId: string; title: string; participantCount: number; maxCapacity: number; hostId: string }> = [];

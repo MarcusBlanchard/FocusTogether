@@ -219,6 +219,18 @@ export const LeaveRoomResponse = Type.Object({
   success: Type.Boolean(),
 });
 
+// Join scheduled session request/response types
+export const JoinScheduledSessionRequest = Type.Object({
+  userId: Type.String(),
+  sessionId: Type.String(),
+});
+
+export const JoinScheduledSessionResponse = Type.Object({
+  success: Type.Boolean(),
+  participants: Type.Optional(Type.Array(UserInfo)),
+  error: Type.Optional(Type.String()),
+});
+
 // Subscription event types
 export const MatchedEvent = Type.Object({
   type: Type.Literal('matched'),

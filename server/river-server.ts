@@ -240,6 +240,26 @@ export const SessionService = SessionServiceSchema.define(
         return Ok({ success: true });
       },
     }),
+
+    // Join a scheduled session
+    joinScheduledSession: Procedure.rpc({
+      requestInit: schema.JoinScheduledSessionRequest,
+      responseData: schema.JoinScheduledSessionResponse,
+      async handler({ reqInit }) {
+        const result = await sessionManager.joinScheduledSession(reqInit.userId, reqInit.sessionId);
+        if (result.success) {
+          return Ok({ 
+            success: true, 
+            participants: result.participants?.map(p => ({
+              id: p.userId,
+              username: p.username,
+              profileImageUrl: p.profileImageUrl,
+            }))
+          });
+        }
+        return Ok({ success: false, error: result.error });
+      },
+    }),
   }
 );
 
@@ -276,7 +296,25 @@ export function setupRiverServer(httpServer: Server) {
           return;
         }
 
-        if (message.action === 'sendSignal' && message.sessionId) {
+        if (message.action === 'joinScheduledSession' && message.sessionId) {
+          // Join scheduled session and get participants
+          const result = await sessionManager.joinScheduledSession(senderId, message.sessionId);
+          
+          // Send response back to the user
+          ws.send(JSON.stringify({
+            type: 'room-joined',
+            sessionId: message.sessionId,
+            success: result.success,
+            error: result.error,
+            participants: result.participants?.map(p => ({
+              userId: p.userId,
+              username: p.username,
+              profileImageUrl: p.profileImageUrl,
+            })) || [],
+          }));
+          
+          console.log(`[River] User ${senderId} join scheduled session result: ${result.success}`);
+        } else if (message.action === 'sendSignal' && message.sessionId) {
           // Get all participants in this session
           const participantIds = sessionManager.getSessionParticipantIds(message.sessionId);
           const targetId = message.targetId; // For WebRTC, we need to know who the signal is for

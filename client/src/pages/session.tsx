@@ -253,6 +253,11 @@ export default function Session() {
       meshWebRTCManager.setSessionId(params.sessionId!);
       meshWebRTCManager.setMyUserId(user.id);
 
+      // Join the scheduled session to register in the server's room
+      // This enables WebRTC signaling between participants
+      sessionClient.joinScheduledSession(params.sessionId!);
+      console.log('[Session] Requested to join scheduled session:', params.sessionId);
+
       unsubscribe = sessionClient.onEvent(async (event: SessionEvent) => {
         if (event.type === 'signal' && event.signal) {
           await handleSignal(event.signal);
