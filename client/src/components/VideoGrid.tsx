@@ -99,18 +99,18 @@ function ScreenShareTile({ stream, blurred }: ScreenShareTileProps) {
   }, [stream]);
 
   return (
-    <div className="w-full h-full flex items-center justify-center bg-black">
+    <div className="w-full h-full flex items-center justify-center bg-black relative">
       <video
         ref={videoRef}
         autoPlay
         playsInline
-        className={`w-full h-full object-contain ${blurred ? 'blur-md' : ''}`}
+        className="w-full h-full object-contain"
+        style={blurred ? { filter: 'blur(20px)' } : undefined}
         data-testid="screen-share-video"
-        style={blurred ? { filter: 'blur(8px)' } : undefined}
       />
       {blurred && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="bg-background/80 backdrop-blur-sm px-4 py-2 rounded-lg text-sm font-medium">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/30">
+          <div className="bg-background/90 backdrop-blur-sm px-6 py-3 rounded-lg text-base font-medium shadow-lg">
             Screen is blurred
           </div>
         </div>
@@ -143,13 +143,15 @@ function VideoTile({ stream, user, isLocal, audioEnabled = true, videoEnabled = 
   }, [stream]);
 
   const userInitials = user.username?.[0]?.toUpperCase() || "?";
+  const hasVideoStream = stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled;
 
   return (
     <div 
-      className="relative bg-muted rounded-lg overflow-hidden aspect-video"
+      className="relative rounded-lg overflow-hidden aspect-video"
+      style={{ backgroundColor: '#1a1a2e' }}
       data-testid={`video-tile-${userId}`}
     >
-      {videoEnabled && stream ? (
+      {videoEnabled && hasVideoStream ? (
         <video
           ref={videoRef}
           autoPlay
@@ -159,10 +161,10 @@ function VideoTile({ stream, user, isLocal, audioEnabled = true, videoEnabled = 
           data-testid={`video-stream-${userId}`}
         />
       ) : (
-        <div className="w-full h-full flex items-center justify-center bg-muted">
-          <Avatar className="h-20 w-20">
+        <div className="w-full h-full flex items-center justify-center" style={{ backgroundColor: '#1a1a2e' }}>
+          <Avatar className="h-24 w-24 border-2 border-white/20">
             <AvatarImage src={user.profileImageUrl || undefined} />
-            <AvatarFallback className="text-2xl">{userInitials}</AvatarFallback>
+            <AvatarFallback className="text-3xl bg-gray-700 text-white">{userInitials}</AvatarFallback>
           </Avatar>
         </div>
       )}
