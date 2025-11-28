@@ -343,7 +343,10 @@ export function setupRiverServer(httpServer: Server) {
           return;
         }
 
-        if (message.action === 'joinScheduledSession' && message.sessionId) {
+        if (message.action === 'heartbeat') {
+          // Update heartbeat for the user
+          sessionManager.heartbeat(senderId);
+        } else if (message.action === 'joinScheduledSession' && message.sessionId) {
           // Join scheduled session and get participants
           const result = await sessionManager.joinScheduledSession(senderId, message.sessionId);
           

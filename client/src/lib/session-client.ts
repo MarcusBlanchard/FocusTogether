@@ -167,8 +167,10 @@ class SessionClient {
 
   private sendHeartbeat() {
     if (this.ws && this.ws.readyState === WebSocket.OPEN && this.userId) {
-      // For now, just send a ping - the server handles via River RPC
-      // This keeps the connection alive
+      this.ws.send(JSON.stringify({
+        action: 'heartbeat',
+        userId: this.userId,
+      }));
     }
   }
 
