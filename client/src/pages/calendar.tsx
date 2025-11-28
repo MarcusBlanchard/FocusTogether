@@ -122,6 +122,7 @@ export default function CalendarPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
       toast({
         title: "Session cancelled",
         description: "Your booking has been cancelled.",
@@ -149,6 +150,7 @@ export default function CalendarPage() {
     },
     onSuccess: (response: any) => {
       queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
       setIsDialogOpen(false);
       
       if (response.matched) {
