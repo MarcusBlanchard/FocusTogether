@@ -37,7 +37,7 @@ function getUserConnection(userId: string): WebSocket | undefined {
   const connections = userConnections.get(userId);
   if (connections && connections.size > 0) {
     // Return the first active connection
-    for (const ws of connections) {
+    for (const ws of Array.from(connections)) {
       if (ws.readyState === WebSocket.OPEN) {
         return ws;
       }
@@ -49,7 +49,7 @@ function getUserConnection(userId: string): WebSocket | undefined {
 function broadcastToUser(userId: string, message: string) {
   const connections = userConnections.get(userId);
   if (connections) {
-    for (const ws of connections) {
+    for (const ws of Array.from(connections)) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(message);
       }
@@ -112,17 +112,27 @@ export const SessionService = SessionServiceSchema.define(
       responseData: schema.SendSignalResponse,
       async handler({ reqInit }) {
         const targetId = reqInit.targetId;
+        const signalPayload = JSON.stringify({
+          type: 'signal',
+          signal: reqInit,
+        });
         
         if (targetId) {
           // Send to specific participant (mesh networking)
-          const targetWs = userConnections.get(targetId);
-          if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-            targetWs.send(JSON.stringify({
-              type: 'signal',
-              signal: reqInit,
-            }));
-            return Ok({ delivered: true });
+          // Use broadcastToUser which properly iterates over the Set of connections
+          const connections = userConnections.get(targetId);
+          if (connections && connections.size > 0) {
+            let delivered = false;
+            for (const ws of Array.from(connections)) {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(signalPayload);
+                delivered = true;
+              }
+            }
+            console.log(`[River] Delivered ${reqInit.type} signal to ${targetId}: ${delivered}`);
+            return Ok({ delivered });
           }
+          console.log(`[River] No connections found for target ${targetId}`);
           return Ok({ delivered: false });
         } else {
           // Broadcast to all other participants (for legacy 1-on-1 support)
@@ -131,13 +141,14 @@ export const SessionService = SessionServiceSchema.define(
           
           for (const participantId of participantIds) {
             if (participantId !== reqInit.senderId) {
-              const participantWs = userConnections.get(participantId);
-              if (participantWs && participantWs.readyState === WebSocket.OPEN) {
-                participantWs.send(JSON.stringify({
-                  type: 'signal',
-                  signal: reqInit,
-                }));
-                delivered = true;
+              const connections = userConnections.get(participantId);
+              if (connections) {
+                for (const ws of Array.from(connections)) {
+                  if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(signalPayload);
+                    delivered = true;
+                  }
+                }
               }
             }
           }
