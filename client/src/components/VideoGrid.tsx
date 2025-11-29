@@ -25,7 +25,7 @@ interface VideoGridProps {
   screenBlurred?: boolean;
 }
 
-type MaximizedView = 'none' | 'local-screen' | `remote-screen-${string}` | `remote-video-${string}`;
+type MaximizedView = 'none' | 'local-screen' | 'local-video' | `remote-screen-${string}` | `remote-video-${string}`;
 
 export function VideoGrid({ 
   participants, 
@@ -75,6 +75,21 @@ export function VideoGrid({
     if (maximizedView === 'local-screen' && screenStream) {
       return <ScreenShareTile stream={screenStream} blurred={screenBlurred} isLocal={true} />;
     }
+
+    if (maximizedView === 'local-video') {
+      return (
+        <div className="w-full h-full">
+          <VideoTile
+            stream={localStream}
+            user={localUser}
+            isLocal={true}
+            audioEnabled={localAudioEnabled}
+            videoEnabled={localVideoEnabled}
+            isMaximized={true}
+          />
+        </div>
+      );
+    }
     
     if (maximizedView.startsWith('remote-screen-')) {
       const participantId = maximizedView.replace('remote-screen-', '');
@@ -110,24 +125,36 @@ export function VideoGrid({
   const renderThumbnails = () => {
     const thumbnails: JSX.Element[] = [];
 
-    // Local video tile
-    thumbnails.push(
-      <div 
-        key="local-video" 
-        className="cursor-pointer hover:ring-2 hover:ring-primary rounded-lg transition-all"
-        onClick={() => setMaximizedView('none')}
-      >
-        <VideoTile
-          stream={localStream}
-          user={localUser}
-          isLocal={true}
-          audioEnabled={localAudioEnabled}
-          videoEnabled={localVideoEnabled}
-        />
-      </div>
-    );
+    // Local video tile - when screen sharing, clicking switches views
+    // When not screen sharing, clicking returns to grid
+    const localVideoMaximized = maximizedView === 'local-video';
+    if (!localVideoMaximized) {
+      thumbnails.push(
+        <div 
+          key="local-video" 
+          className="cursor-pointer hover:ring-2 hover:ring-primary rounded-lg transition-all"
+          onClick={() => {
+            // If there's a screen share active, switch to local video maximized
+            // Otherwise, return to grid view
+            if (screenStream || remoteScreenSharers.length > 0) {
+              setMaximizedView('local-video');
+            } else {
+              setMaximizedView('none');
+            }
+          }}
+        >
+          <VideoTile
+            stream={localStream}
+            user={localUser}
+            isLocal={true}
+            audioEnabled={localAudioEnabled}
+            videoEnabled={localVideoEnabled}
+          />
+        </div>
+      );
+    }
 
-    // Local screen share tile (if sharing)
+    // Local screen share tile (if sharing) - always show when not maximized
     if (screenStream && maximizedView !== 'local-screen') {
       thumbnails.push(
         <div 
@@ -188,8 +215,17 @@ export function VideoGrid({
     <div className="h-full w-full relative">
       {hasMaximizedView ? (
         <>
-          {/* Maximized view takes up most of the screen */}
-          <div className="absolute inset-0 bg-black">
+          {/* Maximized view takes up most of the screen - click to return to grid when no screen shares */}
+          <div 
+            className="absolute inset-0 bg-black cursor-pointer"
+            onClick={() => {
+              // Only return to grid if there's no active screen sharing
+              // Otherwise, clicking should do nothing (use thumbnails to switch views)
+              if (!screenStream && remoteScreenSharers.length === 0) {
+                setMaximizedView('none');
+              }
+            }}
+          >
             {renderMaximizedContent()}
           </div>
 

@@ -2,10 +2,30 @@
 
 export const rtcConfig: RTCConfiguration = {
   iceServers: [
+    // STUN servers for NAT traversal
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
+    // Free TURN servers from OpenRelay project for relay fallback
+    // These enable connections when direct P2P fails (different networks, restrictive NATs)
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
   ],
+  // Prefer relay candidates when direct connection fails
+  iceCandidatePoolSize: 10,
 };
 
 export type SignalType = 'offer' | 'answer' | 'ice-candidate';
@@ -411,6 +431,24 @@ class MeshWebRTCManager {
           this.callbacks.onPeerDisconnected(peerId);
         }
       }
+    };
+
+    // Handle ICE connection state for better debugging
+    pc.oniceconnectionstatechange = () => {
+      const iceState = pc.iceConnectionState;
+      console.log(`[WebRTC Mesh] Peer ${peerId} ICE state: ${iceState}`);
+      
+      // Log more details when ICE fails
+      if (iceState === 'failed') {
+        console.error(`[WebRTC Mesh] ICE failed for ${peerId} - check STUN/TURN configuration`);
+      } else if (iceState === 'connected') {
+        console.log(`[WebRTC Mesh] ICE connected to ${peerId} - media should flow`);
+      }
+    };
+
+    // Log ICE gathering state
+    pc.onicegatheringstatechange = () => {
+      console.log(`[WebRTC Mesh] Peer ${peerId} ICE gathering: ${pc.iceGatheringState}`);
     };
 
     console.log(`[WebRTC Mesh] Initialized peer connection for ${peerId}`);
