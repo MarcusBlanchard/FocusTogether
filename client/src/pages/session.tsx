@@ -132,7 +132,7 @@ export default function Session() {
 
   // Countdown timer for pre-session
   useEffect(() => {
-    if (!sessionData?.startAt) return;
+    if (!sessionData?.startAt || !user) return;
 
     const interval = setInterval(() => {
       const startTime = new Date(sessionData.startAt);
@@ -143,6 +143,7 @@ export default function Session() {
         setCountdown(0);
         // Auto-enter session when time is reached
         if (sessionStatus === 'pre-session' && !initializingRef.current) {
+          console.log('[Session] Countdown reached zero, entering session');
           setSessionStatus('active');
           initSession();
         }
@@ -152,7 +153,7 @@ export default function Session() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [sessionData, sessionStatus]);
+  }, [sessionData, sessionStatus, user]);
 
   // Session duration timer
   useEffect(() => {
@@ -166,13 +167,18 @@ export default function Session() {
     return () => clearInterval(interval);
   }, [sessionStatus]);
 
-  // Determine initial session status
+  // Determine initial session status - must wait for BOTH sessionData AND user to be available
   useEffect(() => {
-    if (!sessionData) return;
+    if (!sessionData || !user) {
+      console.log('[Session] Status check skipped - sessionData:', !!sessionData, 'user:', !!user);
+      return;
+    }
 
     const startTime = new Date(sessionData.startAt);
     const endTime = new Date(sessionData.endAt);
     const now = new Date();
+
+    console.log('[Session] Determining status - start:', startTime, 'end:', endTime, 'now:', now);
 
     if (isPast(endTime)) {
       setSessionStatus('ended');
@@ -180,11 +186,12 @@ export default function Session() {
       setSessionStatus('pre-session');
     } else if (!initializingRef.current) {
       // Session time has arrived, auto-enter
+      console.log('[Session] Session time has arrived, setting status to active');
       setSessionStatus('active');
       sessionStartRef.current = startTime;
       initSession();
     }
-  }, [sessionData]);
+  }, [sessionData, user]);
 
   const initSession = async () => {
     console.log('[Session] initSession called, user:', user?.id, 'sessionId:', params.sessionId, 'initializing:', initializingRef.current);
