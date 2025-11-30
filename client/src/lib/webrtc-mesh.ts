@@ -7,20 +7,29 @@ export const rtcConfig: RTCConfiguration = {
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
-    // FreeTURN.net - free public TURN server for relay fallback
-    // Enables connections when direct P2P fails (different networks, restrictive NATs)
+    // Metered.ca free TURN servers (generous free tier)
     {
-      urls: 'stun:freestun.net:3478',
+      urls: 'stun:stun.relay.metered.ca:80',
     },
     {
-      urls: 'turn:freestun.net:3478',
-      username: 'free',
-      credential: 'free',
+      urls: 'turn:global.relay.metered.ca:80',
+      username: 'e8dd65d92de6ad1e38cce953',
+      credential: 'dJGq9j3cQZKf/Bwo',
     },
     {
-      urls: 'turns:freestun.net:5350',
-      username: 'free',
-      credential: 'free',
+      urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+      username: 'e8dd65d92de6ad1e38cce953',
+      credential: 'dJGq9j3cQZKf/Bwo',
+    },
+    {
+      urls: 'turn:global.relay.metered.ca:443',
+      username: 'e8dd65d92de6ad1e38cce953',
+      credential: 'dJGq9j3cQZKf/Bwo',
+    },
+    {
+      urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+      username: 'e8dd65d92de6ad1e38cce953',
+      credential: 'dJGq9j3cQZKf/Bwo',
     },
   ],
   // Allow more ICE candidate gathering time
