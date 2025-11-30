@@ -360,13 +360,27 @@ interface VideoTileProps {
 
 function VideoTile({ stream, user, isLocal, audioEnabled = true, videoEnabled = true, isMaximized }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const userId = user.userId || user.id || '';
 
+  // Handle video stream
   useEffect(() => {
-    if (videoRef.current) {
+    if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
     }
   }, [stream]);
+
+  // Handle audio separately for remote participants
+  // This ensures audio plays even when video is disabled
+  useEffect(() => {
+    if (!isLocal && audioRef.current && stream) {
+      audioRef.current.srcObject = stream;
+      // Try to play audio - browsers may require user interaction
+      audioRef.current.play().catch(err => {
+        console.log('[VideoTile] Audio autoplay blocked, waiting for user interaction:', err);
+      });
+    }
+  }, [stream, isLocal]);
 
   const userInitials = user.username?.[0]?.toUpperCase() || "?";
   const hasVideoStream = stream && stream.getVideoTracks().length > 0 && stream.getVideoTracks()[0].enabled;
@@ -380,12 +394,22 @@ function VideoTile({ stream, user, isLocal, audioEnabled = true, videoEnabled = 
       style={{ backgroundColor: '#1a1a2e' }}
       data-testid={`video-tile-${userId}`}
     >
+      {/* Always render audio element for remote participants */}
+      {!isLocal && stream && (
+        <audio
+          ref={audioRef}
+          autoPlay
+          playsInline
+          data-testid={`audio-stream-${userId}`}
+        />
+      )}
+      
       {videoEnabled && hasVideoStream ? (
         <video
           ref={videoRef}
           autoPlay
           playsInline
-          muted={isLocal}
+          muted={true}
           className="w-full h-full object-cover"
           data-testid={`video-stream-${userId}`}
         />
