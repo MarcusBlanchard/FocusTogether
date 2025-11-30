@@ -2,29 +2,28 @@
 
 export const rtcConfig: RTCConfiguration = {
   iceServers: [
-    // STUN servers for NAT traversal
+    // STUN servers for NAT traversal (public, no auth required)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
-    // Free TURN servers from OpenRelay project for relay fallback
-    // These enable connections when direct P2P fails (different networks, restrictive NATs)
+    // FreeTURN.net - free public TURN server for relay fallback
+    // Enables connections when direct P2P fails (different networks, restrictive NATs)
     {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
+      urls: 'stun:freestun.net:3478',
     },
     {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
+      urls: 'turn:freestun.net:3478',
+      username: 'free',
+      credential: 'free',
     },
     {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
+      urls: 'turns:freestun.net:5350',
+      username: 'free',
+      credential: 'free',
     },
   ],
-  // Prefer relay candidates when direct connection fails
+  // Allow more ICE candidate gathering time
   iceCandidatePoolSize: 10,
 };
 

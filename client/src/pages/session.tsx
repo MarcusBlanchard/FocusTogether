@@ -387,11 +387,7 @@ export default function Session() {
     console.log('[Session] Participant left:', participant);
     setParticipants(prev => prev.filter(p => p.userId !== participant.userId));
     meshWebRTCManager.removePeer(participant.userId);
-    
-    toast({
-      title: "Participant left",
-      description: `${participant.username || "A participant"} has left the session.`,
-    });
+    // Note: Toast is shown by the event handler to avoid duplicates
   };
 
   const handleRoomJoined = async (participants: ParticipantInfo[]) => {

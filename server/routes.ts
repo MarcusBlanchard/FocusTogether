@@ -549,7 +549,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Log session completion
+  // Log session completion and remove user from room
   app.post('/api/sessions/complete', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -557,10 +557,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(`[Session Complete] User ${userId} completed session ${sessionId} (${duration}s)`);
       
-      // Note: For now we just log it. In the future we could:
-      // - Update scheduled_sessions status to 'completed'
-      // - Create focus_sessions records for pairwise participant tracking
-      // - Track analytics and session stats
+      // Remove user from the room so other participants see them leave
+      await sessionManager.leaveRoom(userId, sessionId);
+      console.log(`[Session Complete] User ${userId} removed from room ${sessionId}`);
       
       res.json({ success: true });
     } catch (error) {
