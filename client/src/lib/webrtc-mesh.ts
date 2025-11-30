@@ -1,40 +1,65 @@
 // Enhanced WebRTC manager for mesh networking (up to 5 participants)
 
-export const rtcConfig: RTCConfiguration = {
+// Default fallback config (STUN only - may not work across all networks)
+const fallbackRtcConfig: RTCConfiguration = {
   iceServers: [
-    // STUN servers for NAT traversal (public, no auth required)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
-    // Metered.ca free TURN servers (generous free tier)
-    {
-      urls: 'stun:stun.relay.metered.ca:80',
-    },
-    {
-      urls: 'turn:global.relay.metered.ca:80',
-      username: 'e8dd65d92de6ad1e38cce953',
-      credential: 'dJGq9j3cQZKf/Bwo',
-    },
-    {
-      urls: 'turn:global.relay.metered.ca:80?transport=tcp',
-      username: 'e8dd65d92de6ad1e38cce953',
-      credential: 'dJGq9j3cQZKf/Bwo',
-    },
-    {
-      urls: 'turn:global.relay.metered.ca:443',
-      username: 'e8dd65d92de6ad1e38cce953',
-      credential: 'dJGq9j3cQZKf/Bwo',
-    },
-    {
-      urls: 'turns:global.relay.metered.ca:443?transport=tcp',
-      username: 'e8dd65d92de6ad1e38cce953',
-      credential: 'dJGq9j3cQZKf/Bwo',
-    },
   ],
-  // Allow more ICE candidate gathering time
   iceCandidatePoolSize: 10,
 };
+
+// Dynamic config that will be populated with fresh TURN credentials
+let dynamicRtcConfig: RTCConfiguration | null = null;
+
+// Fetch fresh TURN credentials from the server
+export async function fetchTurnCredentials(): Promise<RTCConfiguration> {
+  try {
+    const response = await fetch('/api/turn-credentials', {
+      credentials: 'include',
+    });
+    
+    if (!response.ok) {
+      console.warn('[WebRTC] Failed to fetch TURN credentials, using fallback');
+      return fallbackRtcConfig;
+    }
+    
+    const data = await response.json();
+    
+    if (data.iceServers && data.iceServers.length > 0) {
+      dynamicRtcConfig = {
+        iceServers: data.iceServers,
+        iceCandidatePoolSize: 10,
+      };
+      
+      // Log what types of servers we got
+      const hasRelay = data.iceServers.some((s: any) => 
+        s.urls?.includes('turn:') || s.urls?.includes('turns:')
+      );
+      console.log(`[WebRTC] Fetched ICE servers: ${data.iceServers.length} servers, TURN available: ${hasRelay}`);
+      
+      return dynamicRtcConfig;
+    }
+    
+    console.warn('[WebRTC] No ICE servers in response, using fallback');
+    return fallbackRtcConfig;
+  } catch (error) {
+    console.error('[WebRTC] Error fetching TURN credentials:', error);
+    return fallbackRtcConfig;
+  }
+}
+
+// Get current RTC config (fetches if not already loaded)
+export async function getRtcConfig(): Promise<RTCConfiguration> {
+  if (dynamicRtcConfig) {
+    return dynamicRtcConfig;
+  }
+  return fetchTurnCredentials();
+}
+
+// Export for backward compatibility
+export const rtcConfig = fallbackRtcConfig;
 
 export type SignalType = 'offer' | 'answer' | 'ice-candidate';
 
@@ -301,8 +326,13 @@ class MeshWebRTCManager {
       existing.close();
     }
 
-    const pc = new RTCPeerConnection(rtcConfig);
+    // Fetch fresh TURN credentials for each connection
+    const config = await getRtcConfig();
+    const pc = new RTCPeerConnection(config);
     this.peerConnections.set(peerId, pc);
+    
+    // Log ICE servers being used
+    console.log(`[WebRTC Mesh] Creating peer connection for ${peerId} with ${config.iceServers?.length || 0} ICE servers`);
 
     // Create data channel for signaling screen share blur state
     const dataChannel = pc.createDataChannel('control');

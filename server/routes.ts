@@ -9,6 +9,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
 
+  // TURN credentials endpoint - fetches fresh credentials from Metered.ca
+  app.get('/api/turn-credentials', isAuthenticated, async (req: any, res) => {
+    try {
+      const apiKey = process.env.METERED_API_KEY;
+      
+      if (!apiKey) {
+        // Fallback to STUN-only if no API key configured
+        console.warn('[TURN] No METERED_API_KEY configured, using STUN-only fallback');
+        return res.json({
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun.cloudflare.com:3478' },
+          ]
+        });
+      }
+
+      // Fetch fresh TURN credentials from Metered.ca API
+      const response = await fetch(
+        `https://focussession.metered.live/api/v1/turn/credentials?apiKey=${apiKey}`
+      );
+      
+      if (!response.ok) {
+        console.error('[TURN] Failed to fetch credentials:', response.status, response.statusText);
+        throw new Error('Failed to fetch TURN credentials');
+      }
+
+      const iceServers = await response.json();
+      console.log('[TURN] Fetched fresh credentials, servers:', iceServers.length);
+      
+      res.json({ iceServers });
+    } catch (error) {
+      console.error('[TURN] Error fetching credentials:', error);
+      // Fallback to STUN-only
+      res.json({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' },
+        ]
+      });
+    }
+  });
+
   // Auth routes
   app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
     try {
