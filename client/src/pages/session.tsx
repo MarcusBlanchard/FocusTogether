@@ -187,13 +187,19 @@ export default function Session() {
   }, [sessionData]);
 
   const initSession = async () => {
-    if (!user || !params.sessionId || initializingRef.current) return;
+    console.log('[Session] initSession called, user:', user?.id, 'sessionId:', params.sessionId, 'initializing:', initializingRef.current);
+    if (!user || !params.sessionId || initializingRef.current) {
+      console.log('[Session] initSession skipped - missing user/sessionId or already initializing');
+      return;
+    }
     
     initializingRef.current = true;
     let unsubscribe: (() => void) | null = null;
 
     try {
+      console.log('[Session] Waiting for connection...');
       await waitForConnection();
+      console.log('[Session] Connection ready, getting media...');
 
       // Get local media (camera + mic) - this now gracefully handles failures
       const stream = await meshWebRTCManager.getUserMedia();
@@ -282,7 +288,9 @@ export default function Session() {
       joinScheduledSession(params.sessionId!);
       console.log('[Session] Requested to join scheduled session:', params.sessionId);
 
+      console.log('[Session] Setting up event listener...');
       unsubscribe = onEvent(async (event: SessionEvent) => {
+        console.log('[Session] Event received:', event.type);
         if (event.type === 'signal' && event.signal) {
           await handleSignal(event.signal);
         } else if (event.type === 'participant-joined' && event.participant) {
@@ -339,16 +347,20 @@ export default function Session() {
   };
 
   const handleSignal = async (signal: { type: string; sessionId: string; senderId: string; targetId?: string; data: any }) => {
+    console.log('[Session] handleSignal called:', signal.type, 'from:', signal.senderId);
     try {
       const peerId = signal.senderId;
       
       if (signal.type === 'offer') {
+        console.log('[Session] Processing offer from:', peerId);
         const answer = await meshWebRTCManager.handleOffer(peerId, signal.data);
         const userId = getUserId();
         if (userId) {
+          console.log('[Session] Sending answer to:', peerId);
           sendSignal(params.sessionId!, 'answer', answer, userId, peerId);
         }
       } else if (signal.type === 'answer') {
+        console.log('[Session] Processing answer from:', peerId);
         await meshWebRTCManager.handleAnswer(peerId, signal.data);
       } else if (signal.type === 'ice-candidate') {
         await meshWebRTCManager.handleIceCandidate(peerId, signal.data);
