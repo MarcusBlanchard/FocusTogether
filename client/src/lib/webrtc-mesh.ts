@@ -441,14 +441,25 @@ class MeshWebRTCManager {
       }
     };
 
-    // Handle ICE connection state for better debugging
+    // Handle ICE connection state for better debugging and ICE restart
     pc.oniceconnectionstatechange = () => {
       const iceState = pc.iceConnectionState;
       console.log(`[WebRTC Mesh] Peer ${peerId} ICE state: ${iceState}`);
       
-      // Log more details when ICE fails
       if (iceState === 'failed') {
-        console.error(`[WebRTC Mesh] ICE failed for ${peerId} - check STUN/TURN configuration`);
+        console.error(`[WebRTC Mesh] ICE failed for ${peerId} - attempting ICE restart`);
+        // Attempt ICE restart
+        this.restartIce(peerId);
+      } else if (iceState === 'disconnected') {
+        console.warn(`[WebRTC Mesh] ICE disconnected for ${peerId} - will attempt restart if it doesn't recover`);
+        // Give it a few seconds to recover before restarting
+        setTimeout(() => {
+          const currentPc = this.peerConnections.get(peerId);
+          if (currentPc && currentPc.iceConnectionState === 'disconnected') {
+            console.log(`[WebRTC Mesh] ICE still disconnected for ${peerId} - attempting restart`);
+            this.restartIce(peerId);
+          }
+        }, 3000);
       } else if (iceState === 'connected') {
         console.log(`[WebRTC Mesh] ICE connected to ${peerId} - media should flow`);
       }
@@ -548,6 +559,38 @@ class MeshWebRTCManager {
     }
 
     this.iceCandidateBuffer.delete(peerId);
+  }
+
+  // Restart ICE when connection fails
+  private async restartIce(peerId: string) {
+    const pc = this.peerConnections.get(peerId);
+    if (!pc) {
+      console.warn(`[WebRTC Mesh] Cannot restart ICE - no connection for ${peerId}`);
+      return;
+    }
+
+    try {
+      console.log(`[WebRTC Mesh] Restarting ICE for ${peerId}`);
+      
+      // Create a new offer with ICE restart flag
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+      
+      // Signal the new offer to the peer
+      if (this.callbacks.onSignal) {
+        this.callbacks.onSignal({
+          type: 'offer',
+          sessionId: this.sessionId,
+          senderId: this.myUserId,
+          targetId: peerId,
+          data: offer,
+        });
+      }
+      
+      console.log(`[WebRTC Mesh] ICE restart offer sent to ${peerId}`);
+    } catch (error) {
+      console.error(`[WebRTC Mesh] ICE restart failed for ${peerId}:`, error);
+    }
   }
 
   removePeer(peerId: string) {

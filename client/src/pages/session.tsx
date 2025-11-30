@@ -76,6 +76,45 @@ export default function Session() {
   const [countdown, setCountdown] = useState(0);
   const sessionStartRef = useRef<Date | null>(null);
   const initializingRef = useRef(false);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  // Wake Lock to prevent screen sleep on mobile/tablet (keeps audio working)
+  useEffect(() => {
+    const requestWakeLock = async () => {
+      if ('wakeLock' in navigator && sessionStatus === 'active') {
+        try {
+          wakeLockRef.current = await navigator.wakeLock.request('screen');
+          console.log('[Session] Wake Lock activated - screen will stay on');
+          
+          wakeLockRef.current.addEventListener('release', () => {
+            console.log('[Session] Wake Lock released');
+          });
+        } catch (err) {
+          console.log('[Session] Wake Lock request failed:', err);
+        }
+      }
+    };
+
+    if (sessionStatus === 'active') {
+      requestWakeLock();
+    }
+
+    // Re-acquire wake lock if page becomes visible again
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && sessionStatus === 'active') {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release();
+        wakeLockRef.current = null;
+      }
+    };
+  }, [sessionStatus]);
 
   // Fetch scheduled session details
   const { data: sessionData, isLoading: sessionLoading } = useQuery<ScheduledSessionData>({
