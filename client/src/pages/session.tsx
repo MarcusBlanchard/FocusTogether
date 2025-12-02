@@ -78,6 +78,25 @@ export default function Session() {
   const initializingRef = useRef(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
+  // Reset initialization state when session ID changes or component mounts
+  useEffect(() => {
+    console.log('[Session] Component mounted/session changed, resetting init state for session:', params.sessionId);
+    initializingRef.current = false;
+    setSessionStatus('pre-session');
+    setParticipants([]);
+    setLocalStream(null);
+    setConnectionState('connecting');
+    
+    // Cleanup WebRTC connections when session changes
+    meshWebRTCManager.closeAll();
+    
+    return () => {
+      console.log('[Session] Component unmounting, cleaning up...');
+      initializingRef.current = false;
+      meshWebRTCManager.closeAll();
+    };
+  }, [params.sessionId]);
+
   // Wake Lock to prevent screen sleep on mobile/tablet (keeps audio working)
   useEffect(() => {
     const requestWakeLock = async () => {

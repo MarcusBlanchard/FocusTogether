@@ -637,6 +637,12 @@ class MeshWebRTCManager {
     console.log(`[WebRTC Mesh] Removed peer ${peerId}`);
   }
 
+  // Close all connections (alias for close, used when switching sessions)
+  closeAll() {
+    console.log('[WebRTC Mesh] Closing all connections');
+    this.close();
+  }
+
   toggleAudio(enabled: boolean) {
     if (this.localStream) {
       this.localStream.getAudioTracks().forEach((track) => {
