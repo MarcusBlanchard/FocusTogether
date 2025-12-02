@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -142,6 +142,50 @@ export default function Session() {
 
   // Event queue for buffering ALL events that depend on mesh readiness
   const eventQueueRef = useRef<SessionEvent[]>([]);
+  
+  // Track if we've subscribed to events
+  const eventSubscriptionRef = useRef<(() => void) | null>(null);
+  const lastEventTimeRef = useRef<number>(Date.now());
+
+  // Event handler function (extracted to allow re-use)
+  const handleEvent = useCallback(async (event: SessionEvent) => {
+    lastEventTimeRef.current = Date.now();
+    console.log('[Session] Event received:', event.type, 'ready:', isReadyForSignalsRef.current, 'initializing:', initializingRef.current);
+    
+    // Events that require mesh to be ready
+    const meshDependentEvents = ['signal', 'participant-joined', 'room-joined', 'matched'];
+    
+    if (meshDependentEvents.includes(event.type)) {
+      // Only process if fully ready AND not currently initializing
+      if (isReadyForSignalsRef.current && !initializingRef.current) {
+        // Process event immediately
+        await processEvent(event);
+      } else {
+        // Buffer event for later processing (either not ready or still initializing)
+        console.log('[Session] Buffering event:', event.type);
+        eventQueueRef.current.push(event);
+      }
+    } else if (event.type === 'participant-left' && event.participant) {
+      // These can be processed immediately as they don't depend on mesh
+      if (event.participant.userId !== user?.id) {
+        handleParticipantLeft(event.participant);
+        toast({
+          title: "Partner Left",
+          description: `${event.participant.username || 'Your partner'} left the session`,
+          variant: "destructive",
+        });
+      }
+    } else if (event.type === 'partner-disconnected') {
+      handlePartnerDisconnect();
+      toast({
+        title: "Partner Disconnected",
+        description: "Your partner has disconnected from the session",
+        variant: "destructive",
+      });
+    } else if (event.type === 'room-ended') {
+      console.log('[Session] Room ended event received');
+    }
+  }, [user?.id]);
 
   // CRITICAL: Set up event subscription immediately when component mounts
   // Buffer ALL mesh-dependent events until initSession completes
@@ -151,49 +195,46 @@ export default function Session() {
       return;
     }
 
-    console.log('[Session] Setting up EARLY event listener for user:', user.id);
+    console.log('[Session] Setting up event listener for user:', user.id);
     
-    const unsubscribe = onEvent(async (event: SessionEvent) => {
-      console.log('[Session] Event received (early listener):', event.type, 'ready:', isReadyForSignalsRef.current, 'initializing:', initializingRef.current);
-      
-      // Events that require mesh to be ready
-      const meshDependentEvents = ['signal', 'participant-joined', 'room-joined', 'matched'];
-      
-      if (meshDependentEvents.includes(event.type)) {
-        // Only process if fully ready AND not currently initializing
-        if (isReadyForSignalsRef.current && !initializingRef.current) {
-          // Process event immediately
-          await processEvent(event);
-        } else {
-          // Buffer event for later processing (either not ready or still initializing)
-          console.log('[Session] Buffering event:', event.type);
-          eventQueueRef.current.push(event);
-        }
-      } else if (event.type === 'participant-left' && event.participant) {
-        // These can be processed immediately as they don't depend on mesh
-        if (event.participant.userId !== user.id) {
-          handleParticipantLeft(event.participant);
-          toast({
-            title: "Partner Left",
-            description: `${event.participant.username || 'Your partner'} left the session`,
-            variant: "destructive",
-          });
-        }
-      } else if (event.type === 'partner-disconnected') {
-        handlePartnerDisconnect();
-        toast({
-          title: "Partner Disconnected",
-          description: "Your partner has disconnected from the session",
-          variant: "destructive",
-        });
-      }
-    });
+    // Cleanup any existing subscription
+    if (eventSubscriptionRef.current) {
+      eventSubscriptionRef.current();
+    }
+    
+    const unsubscribe = onEvent(handleEvent);
+    eventSubscriptionRef.current = unsubscribe;
 
     return () => {
-      console.log('[Session] Cleaning up early event listener');
-      unsubscribe();
+      console.log('[Session] Cleaning up event listener');
+      if (eventSubscriptionRef.current) {
+        eventSubscriptionRef.current();
+        eventSubscriptionRef.current = null;
+      }
     };
-  }, [user, params.sessionId, onEvent]);
+  }, [user, params.sessionId, onEvent, handleEvent]);
+  
+  // Handle tab visibility changes - re-sync when tab becomes visible after being hidden
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[Session] Tab became visible, checking connection state');
+        const timeSinceLastEvent = Date.now() - lastEventTimeRef.current;
+        
+        // If we've been hidden for more than 5 seconds, re-establish session
+        if (timeSinceLastEvent > 5000 && isReadyForSignalsRef.current && params.sessionId) {
+          console.log('[Session] Reconnecting after tab was hidden for', timeSinceLastEvent, 'ms');
+          // Re-join the session to ensure we're properly registered
+          joinScheduledSession(params.sessionId);
+        }
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [params.sessionId, joinScheduledSession]);
 
   // Process a single event (called when mesh is ready)
   const processEvent = async (event: SessionEvent) => {
