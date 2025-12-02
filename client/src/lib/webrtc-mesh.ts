@@ -532,6 +532,24 @@ class MeshWebRTCManager {
       pc = await this.initializePeerConnection(peerId);
     }
 
+    // Handle "glare" condition using perfect negotiation pattern
+    // We're "polite" if our user ID is lower than the peer's
+    const isPolite = this.myUserId < peerId;
+    const isCollision = pc.signalingState !== 'stable';
+    
+    console.log(`[WebRTC Mesh] Handling offer from ${peerId}, signalingState: ${pc.signalingState}, isPolite: ${isPolite}, isCollision: ${isCollision}`);
+    
+    if (isCollision) {
+      if (!isPolite) {
+        // We're impolite and in collision - ignore this offer
+        console.log(`[WebRTC Mesh] Ignoring offer from ${peerId} due to collision (we're impolite)`);
+        throw new Error('Offer collision - ignoring as impolite peer');
+      }
+      // We're polite and in collision - rollback our offer and accept theirs
+      console.log(`[WebRTC Mesh] Rolling back our offer to accept ${peerId}'s offer (we're polite)`);
+      await pc.setLocalDescription({ type: 'rollback' });
+    }
+
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     
     // Flush any buffered ICE candidates
@@ -543,9 +561,17 @@ class MeshWebRTCManager {
   async handleAnswer(peerId: string, answer: RTCSessionDescriptionInit): Promise<void> {
     const pc = this.peerConnections.get(peerId);
     if (!pc) {
-      throw new Error(`No peer connection found for ${peerId}`);
+      console.warn(`[WebRTC Mesh] No peer connection found for ${peerId}, ignoring answer`);
+      return;
     }
 
+    // Only accept answer if we're in have-local-offer state
+    if (pc.signalingState !== 'have-local-offer') {
+      console.warn(`[WebRTC Mesh] Ignoring answer from ${peerId} - not in have-local-offer state (current: ${pc.signalingState})`);
+      return;
+    }
+
+    console.log(`[WebRTC Mesh] Setting remote description (answer) from ${peerId}`);
     await pc.setRemoteDescription(new RTCSessionDescription(answer));
     
     // Flush any buffered ICE candidates
