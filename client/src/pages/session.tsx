@@ -78,10 +78,14 @@ export default function Session() {
   const initializingRef = useRef(false);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
+  // Ready flag for when mesh is fully initialized
+  const isReadyForSignalsRef = useRef(false);
+
   // Reset initialization state when session ID changes or component mounts
   useEffect(() => {
     console.log('[Session] Component mounted/session changed, resetting init state for session:', params.sessionId);
     initializingRef.current = false;
+    isReadyForSignalsRef.current = false;
     setSessionStatus('pre-session');
     setParticipants([]);
     setLocalStream(null);
@@ -93,6 +97,7 @@ export default function Session() {
     return () => {
       console.log('[Session] Component unmounting, cleaning up...');
       initializingRef.current = false;
+      isReadyForSignalsRef.current = false;
       meshWebRTCManager.closeAll();
     };
   }, [params.sessionId]);
@@ -134,6 +139,119 @@ export default function Session() {
       }
     };
   }, [sessionStatus]);
+
+  // Event queue for buffering ALL events that depend on mesh readiness
+  const eventQueueRef = useRef<SessionEvent[]>([]);
+
+  // CRITICAL: Set up event subscription immediately when component mounts
+  // Buffer ALL mesh-dependent events until initSession completes
+  useEffect(() => {
+    if (!user || !params.sessionId) {
+      console.log('[Session] Event subscription skipped - no user or sessionId');
+      return;
+    }
+
+    console.log('[Session] Setting up EARLY event listener for user:', user.id);
+    
+    const unsubscribe = onEvent(async (event: SessionEvent) => {
+      console.log('[Session] Event received (early listener):', event.type, 'ready:', isReadyForSignalsRef.current, 'initializing:', initializingRef.current);
+      
+      // Events that require mesh to be ready
+      const meshDependentEvents = ['signal', 'participant-joined', 'room-joined', 'matched'];
+      
+      if (meshDependentEvents.includes(event.type)) {
+        // Only process if fully ready AND not currently initializing
+        if (isReadyForSignalsRef.current && !initializingRef.current) {
+          // Process event immediately
+          await processEvent(event);
+        } else {
+          // Buffer event for later processing (either not ready or still initializing)
+          console.log('[Session] Buffering event:', event.type);
+          eventQueueRef.current.push(event);
+        }
+      } else if (event.type === 'participant-left' && event.participant) {
+        // These can be processed immediately as they don't depend on mesh
+        if (event.participant.userId !== user.id) {
+          handleParticipantLeft(event.participant);
+          toast({
+            title: "Partner Left",
+            description: `${event.participant.username || 'Your partner'} left the session`,
+            variant: "destructive",
+          });
+        }
+      } else if (event.type === 'partner-disconnected') {
+        handlePartnerDisconnect();
+        toast({
+          title: "Partner Disconnected",
+          description: "Your partner has disconnected from the session",
+          variant: "destructive",
+        });
+      }
+    });
+
+    return () => {
+      console.log('[Session] Cleaning up early event listener');
+      unsubscribe();
+    };
+  }, [user, params.sessionId, onEvent]);
+
+  // Process a single event (called when mesh is ready)
+  const processEvent = async (event: SessionEvent) => {
+    try {
+      if (event.type === 'signal' && event.signal) {
+        await handleSignal(event.signal);
+      } else if (event.type === 'participant-joined' && event.participant) {
+        if (event.participant.userId !== user?.id) {
+          console.log('[Session] Processing participant joined:', event.participant.userId);
+          await handleParticipantJoined(event.participant);
+          toast({
+            title: "Partner Joined",
+            description: `${event.participant.username || 'Someone'} joined the session`,
+          });
+        }
+      } else if (event.type === 'room-joined' && event.participants) {
+        console.log('[Session] Processing room joined with participants:', event.participants);
+        await handleRoomJoined(event.participants);
+      } else if (event.type === 'matched' && event.partner) {
+        await handleMatched(event.partner);
+        toast({
+          title: "Match Found!",
+          description: `You've been matched with ${event.partner.username || 'a partner'}`,
+        });
+      }
+    } catch (error) {
+      console.error('[Session] Error processing event:', event.type, error);
+    }
+  };
+
+  // Handle WebRTC signals
+  const handleSignal = async (signal: { type: string; sessionId: string; senderId: string; targetId?: string; data: any }) => {
+    console.log('[Session] handleSignal:', signal.type, 'from:', signal.senderId);
+    try {
+      const peerId = signal.senderId;
+      
+      if (signal.type === 'offer') {
+        console.log('[Session] Processing offer from:', peerId);
+        const answer = await meshWebRTCManager.handleOffer(peerId, signal.data);
+        // If handleOffer returns null, it means the offer was ignored (collision)
+        if (answer) {
+          const userId = getUserId();
+          if (userId) {
+            console.log('[Session] Sending answer to:', peerId);
+            sendSignal(params.sessionId!, 'answer', answer, userId, peerId);
+          }
+        }
+      } else if (signal.type === 'answer') {
+        console.log('[Session] Processing answer from:', peerId);
+        await meshWebRTCManager.handleAnswer(peerId, signal.data);
+      } else if (signal.type === 'ice-candidate') {
+        console.log('[Session] Processing ICE candidate from:', peerId);
+        await meshWebRTCManager.handleIceCandidate(peerId, signal.data);
+      }
+    } catch (error) {
+      console.error('[Session] Error handling signal:', error);
+    }
+  };
 
   // Fetch scheduled session details
   const { data: sessionData, isLoading: sessionLoading } = useQuery<ScheduledSessionData>({
@@ -220,7 +338,6 @@ export default function Session() {
     }
     
     initializingRef.current = true;
-    let unsubscribe: (() => void) | null = null;
 
     try {
       console.log('[Session] Waiting for connection...');
@@ -314,45 +431,20 @@ export default function Session() {
       joinScheduledSession(params.sessionId!);
       console.log('[Session] Requested to join scheduled session:', params.sessionId);
 
-      console.log('[Session] Setting up event listener...');
-      unsubscribe = onEvent(async (event: SessionEvent) => {
-        console.log('[Session] Event received:', event.type);
-        if (event.type === 'signal' && event.signal) {
-          await handleSignal(event.signal);
-        } else if (event.type === 'participant-joined' && event.participant) {
-          if (event.participant.userId !== user.id) {
-            await handleParticipantJoined(event.participant);
-            toast({
-              title: "Partner Joined",
-              description: `${event.participant.username || 'Someone'} joined the session`,
-            });
-          }
-        } else if (event.type === 'participant-left' && event.participant) {
-          if (event.participant.userId !== user.id) {
-            handleParticipantLeft(event.participant);
-            toast({
-              title: "Partner Left",
-              description: `${event.participant.username || 'Your partner'} left the session`,
-              variant: "destructive",
-            });
-          }
-        } else if (event.type === 'room-joined' && event.participants) {
-          await handleRoomJoined(event.participants);
-        } else if (event.type === 'partner-disconnected') {
-          handlePartnerDisconnect();
-          toast({
-            title: "Partner Disconnected",
-            description: "Your partner has disconnected from the session",
-            variant: "destructive",
-          });
-        } else if (event.type === 'matched' && event.partner) {
-          await handleMatched(event.partner);
-          toast({
-            title: "Match Found!",
-            description: `You've been matched with ${event.partner.username || 'a partner'}`,
-          });
-        }
-      });
+      // Mark as ready for events and clear initializing flag
+      isReadyForSignalsRef.current = true;
+      initializingRef.current = false; // Clear initializing flag so events can be processed
+      console.log('[Session] Now ready to process events');
+
+      // Process any buffered events that arrived before we were ready
+      const bufferedEvents = [...eventQueueRef.current];
+      eventQueueRef.current = [];
+      console.log('[Session] Processing', bufferedEvents.length, 'buffered events');
+      
+      for (const event of bufferedEvents) {
+        console.log('[Session] Processing buffered event:', event.type);
+        await processEvent(event);
+      }
 
       sessionStartRef.current = new Date();
       console.log('[Session] Initialization complete');
@@ -365,34 +457,6 @@ export default function Session() {
         description: error instanceof Error ? error.message : "Failed to connect to session. Please try again.",
         variant: "destructive",
       });
-    }
-
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
-  };
-
-  const handleSignal = async (signal: { type: string; sessionId: string; senderId: string; targetId?: string; data: any }) => {
-    console.log('[Session] handleSignal called:', signal.type, 'from:', signal.senderId);
-    try {
-      const peerId = signal.senderId;
-      
-      if (signal.type === 'offer') {
-        console.log('[Session] Processing offer from:', peerId);
-        const answer = await meshWebRTCManager.handleOffer(peerId, signal.data);
-        const userId = getUserId();
-        if (userId) {
-          console.log('[Session] Sending answer to:', peerId);
-          sendSignal(params.sessionId!, 'answer', answer, userId, peerId);
-        }
-      } else if (signal.type === 'answer') {
-        console.log('[Session] Processing answer from:', peerId);
-        await meshWebRTCManager.handleAnswer(peerId, signal.data);
-      } else if (signal.type === 'ice-candidate') {
-        await meshWebRTCManager.handleIceCandidate(peerId, signal.data);
-      }
-    } catch (error) {
-      console.error('[Session] Error handling signal:', error);
     }
   };
 
