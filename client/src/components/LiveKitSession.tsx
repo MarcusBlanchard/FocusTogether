@@ -95,7 +95,7 @@ function VideoGrid() {
                 <VideoTrack
                   trackRef={cameraTrack}
                   className="w-full h-full object-cover"
-                  style={isLocal ? { transform: 'scaleX(-1)' } : undefined}
+                  style={{ transform: 'scaleX(-1)' }}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-muted">
