@@ -362,24 +362,22 @@ export default function Session() {
 
   // Active session with LiveKit
   return (
-    <div className="flex flex-col h-screen" data-testid="session-active">
-      <header className="h-14 border-b flex items-center justify-between px-4">
-        <div className="flex items-center gap-4">
-          <h1 className="font-semibold">{sessionData.title || 'Focus Session'}</h1>
-          <Badge variant="outline" className="flex items-center gap-1">
+    <div className="flex flex-col h-[100dvh] overflow-hidden" data-testid="session-active">
+      <header className="flex-shrink-0 h-10 sm:h-12 border-b flex items-center justify-between px-2 sm:px-4">
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+          <h1 className="font-semibold text-sm sm:text-base truncate">{sessionData.title || 'Focus Session'}</h1>
+          <Badge variant="outline" className="flex items-center gap-1 flex-shrink-0">
             <Clock className="h-3 w-3" />
-            {formatTime(sessionDuration)}
+            <span className="text-xs sm:text-sm">{formatTime(sessionDuration)}</span>
           </Badge>
         </div>
-        <div className="flex items-center gap-2">
-          <Badge variant="secondary" className="flex items-center gap-1">
-            <Users className="h-3 w-3" />
-            {sessionData.participantCount} participants
-          </Badge>
-        </div>
+        <Badge variant="secondary" className="flex items-center gap-1 flex-shrink-0">
+          <Users className="h-3 w-3" />
+          <span className="text-xs sm:text-sm">{sessionData.participantCount}</span>
+        </Badge>
       </header>
 
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 min-h-0 overflow-hidden">
         {livekitToken && livekitUrl ? (
           <LiveKitSession
             token={livekitToken}

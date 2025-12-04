@@ -51,14 +51,15 @@ function VideoGrid() {
 
   const allParticipants = [localParticipant, ...remoteParticipants].filter(Boolean);
   const participantCount = allParticipants.length;
-  const gridCols = participantCount <= 1 ? 1 : participantCount <= 4 ? 2 : 3;
+  
+  const hasScreenShare = screenShareTracks.length > 0;
 
   return (
-    <div className="flex-1 p-4 overflow-auto">
-      {screenShareTracks.length > 0 && (
-        <div className="mb-4">
+    <div className="flex-1 flex flex-col p-2 gap-2 min-h-0">
+      {hasScreenShare && (
+        <div className="flex-1 min-h-0">
           {screenShareTracks.map((trackRef) => (
-            <div key={trackRef.publication?.trackSid || trackRef.participant?.identity} className="relative bg-muted rounded-lg overflow-hidden aspect-video max-h-[60vh]">
+            <div key={trackRef.publication?.trackSid || trackRef.participant?.identity} className="relative bg-muted rounded-lg overflow-hidden h-full">
               <VideoTrack trackRef={trackRef} className="w-full h-full object-contain" />
               <div className="absolute bottom-2 left-2">
                 <span className="bg-background/80 px-2 py-1 rounded text-sm font-medium">
@@ -71,8 +72,11 @@ function VideoGrid() {
       )}
       
       <div 
-        className="grid gap-4"
-        style={{ gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))` }}
+        className={`${hasScreenShare ? 'h-24 flex gap-2 flex-shrink-0' : 'flex-1 grid gap-2 min-h-0'}`}
+        style={!hasScreenShare ? { 
+          gridTemplateColumns: participantCount <= 1 ? '1fr' : participantCount <= 2 ? 'repeat(2, 1fr)' : 'repeat(2, 1fr)',
+          gridTemplateRows: participantCount <= 2 ? '1fr' : 'repeat(2, 1fr)'
+        } : undefined}
       >
         {allParticipants.map((participant) => {
           if (!participant) return null;
@@ -86,7 +90,7 @@ function VideoGrid() {
           const isMuted = !participant.isMicrophoneEnabled;
 
           return (
-            <div key={identity} className="relative bg-muted rounded-lg overflow-hidden aspect-video">
+            <div key={identity} className={`relative bg-muted rounded-lg overflow-hidden ${hasScreenShare ? 'w-32 h-24' : ''}`}>
               {isCameraOn && cameraTrack ? (
                 <VideoTrack
                   trackRef={cameraTrack}
@@ -94,27 +98,27 @@ function VideoGrid() {
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-muted">
-                  <Avatar className="h-20 w-20">
-                    <AvatarFallback className="text-2xl">
+                  <Avatar className={hasScreenShare ? "h-10 w-10" : "h-16 w-16"}>
+                    <AvatarFallback className={hasScreenShare ? "text-lg" : "text-xl"}>
                       {displayName.charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
                 </div>
               )}
               
-              <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
-                <span className="bg-background/80 px-2 py-1 rounded text-sm font-medium">
+              <div className="absolute bottom-1 left-1 right-1 flex items-center justify-between">
+                <span className="bg-background/80 px-1.5 py-0.5 rounded text-xs font-medium truncate max-w-[70%]">
                   {isLocal ? "You" : displayName}
                 </span>
-                <div className="flex gap-1">
+                <div className="flex gap-0.5">
                   {isMuted && (
-                    <span className="bg-destructive/80 p-1 rounded">
-                      <MicOff className="h-3 w-3 text-white" />
+                    <span className="bg-destructive/80 p-0.5 rounded">
+                      <MicOff className="h-2.5 w-2.5 text-white" />
                     </span>
                   )}
                   {!isCameraOn && (
-                    <span className="bg-destructive/80 p-1 rounded">
-                      <VideoOff className="h-3 w-3 text-white" />
+                    <span className="bg-destructive/80 p-0.5 rounded">
+                      <VideoOff className="h-2.5 w-2.5 text-white" />
                     </span>
                   )}
                 </div>
@@ -138,10 +142,22 @@ function SessionControls({
 }) {
   const { localParticipant } = useLocalParticipant();
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [supportsScreenShare, setSupportsScreenShare] = useState(false);
   const { toast } = useToast();
 
   const isCameraEnabled = localParticipant?.isCameraEnabled ?? false;
   const isMicEnabled = localParticipant?.isMicrophoneEnabled ?? false;
+
+  // Check if screen sharing is supported (not available on most mobile browsers)
+  useEffect(() => {
+    const checkScreenShareSupport = () => {
+      const hasGetDisplayMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+      // Also check if it's likely a mobile device where screen share usually fails
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      setSupportsScreenShare(hasGetDisplayMedia && !isMobile);
+    };
+    checkScreenShareSupport();
+  }, []);
 
   const handleToggleCamera = async () => {
     try {
@@ -190,60 +206,63 @@ function SessionControls({
   };
 
   return (
-    <footer className="h-20 border-t flex items-center justify-center gap-4">
+    <footer className="flex-shrink-0 py-3 px-2 border-t flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
       <Button
         variant={isMicEnabled ? "outline" : "destructive"}
         size="icon"
-        className="h-12 w-12 rounded-full"
+        className="h-10 w-10 sm:h-12 sm:w-12 rounded-full"
         onClick={handleToggleMic}
         data-testid="button-toggle-audio"
       >
-        {isMicEnabled ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
+        {isMicEnabled ? <Mic className="h-4 w-4 sm:h-5 sm:w-5" /> : <MicOff className="h-4 w-4 sm:h-5 sm:w-5" />}
       </Button>
 
       <Button
         variant={isCameraEnabled ? "outline" : "destructive"}
         size="icon"
-        className="h-12 w-12 rounded-full"
+        className="h-10 w-10 sm:h-12 sm:w-12 rounded-full"
         onClick={handleToggleCamera}
         data-testid="button-toggle-video"
       >
-        {isCameraEnabled ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+        {isCameraEnabled ? <Video className="h-4 w-4 sm:h-5 sm:w-5" /> : <VideoOff className="h-4 w-4 sm:h-5 sm:w-5" />}
       </Button>
 
-      <div className="flex items-center gap-2">
-        <Button
-          variant={isScreenSharing ? "destructive" : "default"}
-          className="px-6 py-3 rounded-lg"
-          onClick={handleToggleScreenShare}
-          data-testid="button-screen-share"
-        >
-          {isScreenSharing ? <MonitorOff className="mr-2 h-5 w-5" /> : <Monitor className="mr-2 h-5 w-5" />}
-          {isScreenSharing ? "Stop Sharing" : "Share Screen"}
-        </Button>
-        
-        <div className="flex items-center gap-2 px-4 py-2 rounded-lg border bg-background">
-          <Label htmlFor="blur-screen" className="text-sm cursor-pointer flex items-center gap-2">
-            {screenBlurred ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            Blur
-          </Label>
-          <Switch
-            id="blur-screen"
-            checked={screenBlurred}
-            onCheckedChange={onToggleBlur}
-            data-testid="switch-blur-screen"
-          />
+      {supportsScreenShare && (
+        <div className="flex items-center gap-2">
+          <Button
+            variant={isScreenSharing ? "destructive" : "default"}
+            size="sm"
+            onClick={handleToggleScreenShare}
+            data-testid="button-screen-share"
+          >
+            {isScreenSharing ? <MonitorOff className="mr-1.5 h-4 w-4" /> : <Monitor className="mr-1.5 h-4 w-4" />}
+            <span className="hidden sm:inline">{isScreenSharing ? "Stop" : "Share"}</span>
+          </Button>
+          
+          <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-md border bg-background">
+            <Label htmlFor="blur-screen" className="text-xs cursor-pointer flex items-center gap-1">
+              {screenBlurred ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              Blur
+            </Label>
+            <Switch
+              id="blur-screen"
+              checked={screenBlurred}
+              onCheckedChange={onToggleBlur}
+              className="scale-75"
+              data-testid="switch-blur-screen"
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       <Button
         variant="destructive"
-        className="px-6 py-3 rounded-lg"
+        size="sm"
         onClick={onLeave}
         data-testid="button-end-session"
       >
-        <PhoneOff className="mr-2 h-5 w-5" />
-        End Session
+        <PhoneOff className="mr-1.5 h-4 w-4" />
+        <span className="hidden sm:inline">End</span>
       </Button>
     </footer>
   );
