@@ -95,6 +95,7 @@ function VideoGrid() {
                 <VideoTrack
                   trackRef={cameraTrack}
                   className="w-full h-full object-cover"
+                  style={isLocal ? { transform: 'scaleX(-1)' } : undefined}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center bg-muted">
@@ -227,33 +228,40 @@ function SessionControls({
         {isCameraEnabled ? <Video className="h-4 w-4 sm:h-5 sm:w-5" /> : <VideoOff className="h-4 w-4 sm:h-5 sm:w-5" />}
       </Button>
 
-      {supportsScreenShare && (
-        <div className="flex items-center gap-2">
-          <Button
-            variant={isScreenSharing ? "destructive" : "default"}
-            size="sm"
-            onClick={handleToggleScreenShare}
-            data-testid="button-screen-share"
-          >
-            {isScreenSharing ? <MonitorOff className="mr-1.5 h-4 w-4" /> : <Monitor className="mr-1.5 h-4 w-4" />}
-            <span className="hidden sm:inline">{isScreenSharing ? "Stop" : "Share"}</span>
-          </Button>
-          
-          <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-md border bg-background">
-            <Label htmlFor="blur-screen" className="text-xs cursor-pointer flex items-center gap-1">
-              {screenBlurred ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-              Blur
-            </Label>
-            <Switch
-              id="blur-screen"
-              checked={screenBlurred}
-              onCheckedChange={onToggleBlur}
-              className="scale-75"
-              data-testid="switch-blur-screen"
-            />
+      <div className="flex items-center gap-2">
+        {supportsScreenShare ? (
+          <>
+            <Button
+              variant={isScreenSharing ? "destructive" : "default"}
+              size="sm"
+              onClick={handleToggleScreenShare}
+              data-testid="button-screen-share"
+            >
+              {isScreenSharing ? <MonitorOff className="mr-1.5 h-4 w-4" /> : <Monitor className="mr-1.5 h-4 w-4" />}
+              <span className="hidden sm:inline">{isScreenSharing ? "Stop" : "Share"}</span>
+            </Button>
+            
+            <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-md border bg-background">
+              <Label htmlFor="blur-screen" className="text-xs cursor-pointer flex items-center gap-1">
+                {screenBlurred ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                Blur
+              </Label>
+              <Switch
+                id="blur-screen"
+                checked={screenBlurred}
+                onCheckedChange={onToggleBlur}
+                className="scale-75"
+                data-testid="switch-blur-screen"
+              />
+            </div>
+          </>
+        ) : (
+          <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-muted text-muted-foreground">
+            <Monitor className="h-4 w-4 opacity-50" />
+            <span className="text-xs">Screen sharing not supported on this device</span>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       <Button
         variant="destructive"
