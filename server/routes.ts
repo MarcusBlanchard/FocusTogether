@@ -64,6 +64,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Session ID is required" });
       }
 
+      // Verify user is a participant of this session
+      const isParticipant = await storage.isSessionParticipant(sessionId, userId);
+      if (!isParticipant) {
+        console.warn(`[LiveKit] Unauthorized access attempt: user ${userId} is not a participant of session ${sessionId}`);
+        return res.status(403).json({ message: "You are not a participant of this session" });
+      }
+
       const apiKey = process.env.LIVEKIT_API_KEY;
       const apiSecret = process.env.LIVEKIT_API_SECRET;
 

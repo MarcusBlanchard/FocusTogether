@@ -58,6 +58,7 @@ export interface IStorage {
   removeParticipant(sessionId: string, userId: string): Promise<void>;
   getSessionParticipants(sessionId: string): Promise<User[]>;
   getParticipantCount(sessionId: string): Promise<number>;
+  isSessionParticipant(sessionId: string, userId: string): Promise<boolean>;
 
   // Notification operations
   createNotification(notification: InsertNotification): Promise<Notification>;
@@ -471,6 +472,21 @@ export class DatabaseStorage implements IStorage {
       );
     
     return Number(result[0]?.count || 0);
+  }
+
+  async isSessionParticipant(sessionId: string, userId: string): Promise<boolean> {
+    const result = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(scheduledSessionParticipants)
+      .where(
+        and(
+          eq(scheduledSessionParticipants.sessionId, sessionId),
+          eq(scheduledSessionParticipants.userId, userId),
+          eq(scheduledSessionParticipants.status, 'joined')
+        )
+      );
+    
+    return Number(result[0]?.count || 0) > 0;
   }
 
   // Notification operations
