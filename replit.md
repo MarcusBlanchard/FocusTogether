@@ -8,7 +8,7 @@ A Focusmate-style focused work session web app with calendar-based booking. User
 - **Backend**: Express.js with TypeScript
 - **Database**: PostgreSQL with Drizzle ORM
 - **Real-time**: Replit River RPC over WebSocket
-- **Video**: WebRTC peer-to-peer mesh networking (with STUN servers)
+- **Video**: LiveKit Cloud (managed WebRTC service)
 - **Auth**: Replit Auth (OpenID Connect)
 
 ## Key Features
@@ -18,7 +18,7 @@ A Focusmate-style focused work session web app with calendar-based booking. User
 4. **Booking Preferences**: Three work styles with smart matching (Desk ↔ Desk/Any, Active ↔ Active/Any, Any ↔ all)
 5. **Session Type Filtering**: Filter scheduled sessions by type (All, Solo, Group)
 6. **URL Pre-selection**: Deep linking to calendar with session type pre-selected (?type=solo or ?type=group)
-7. **Video Calls**: WebRTC-powered video/audio chat with P2P mesh networking (optimized for up to 5 participants)
+7. **Video Calls**: LiveKit-powered video/audio with managed infrastructure (optimized for up to 5 participants)
 8. **Screen Sharing**: Share your screen with session partners
 9. **Friend System**: Add users as friends after sessions
 10. **Session History**: Track past sessions with match history
@@ -75,18 +75,24 @@ A Focusmate-style focused work session web app with calendar-based booking. User
 - `POST /api/scheduled-sessions/:sessionId/leave` - Leave a scheduled session
 - `GET /api/scheduled-sessions/occupancy` - Get occupancy count for time range
 
+## API Endpoints (continued)
+
+### LiveKit Video
+- `POST /api/livekit/token` - Generate room token for video session (requires session membership)
+
 ## WebSocket Events (via River RPC)
 - `matched` - Session partner found
 - `partner-disconnected` - Partner left session
 - `invite-received` - Friend invite received
 - `invite-response` - Friend accepted/declined invite
-- `signal` - WebRTC signaling (offer/answer/ICE)
+- `signal` - WebRTC signaling (legacy, preserved for compatibility)
 
-## WebRTC Configuration
-Uses Google and Cloudflare STUN servers for NAT traversal:
-- stun:stun.l.google.com:19302
-- stun:stun1.l.google.com:19302
-- stun:stun.cloudflare.com:3478
+## Video Infrastructure
+LiveKit Cloud handles all WebRTC complexity:
+- Manages STUN/TURN servers automatically
+- Handles NAT traversal and connectivity
+- Provides reliable video/audio streaming
+- Environment variables: LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL
 
 ## Running the App
 ```bash
@@ -119,3 +125,9 @@ The app runs on port 5000.
 12. **Late joiners/early leavers**: Handled dynamically via WebRTC mesh renegotiation
 13. **Session end**: User clicks "End Session" → shows post-session summary with duration
 14. **Session logging**: Completion logged to server for history tracking
+
+## Recent Changes (December 2024)
+- **Migrated from P2P WebRTC mesh to LiveKit Cloud** for more reliable video connections
+- LiveKit handles STUN/TURN servers, NAT traversal, and reconnection automatically
+- Token endpoint added with session membership verification for security
+- LiveKitSession component replaces custom mesh networking code
