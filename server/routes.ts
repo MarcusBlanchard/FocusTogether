@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { setupRiverServer } from "./river-server";
 import { sessionManager } from "./session-manager";
+import { AccessToken } from "livekit-server-sdk";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
@@ -50,6 +51,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
           { urls: 'stun:stun.cloudflare.com:3478' },
         ]
       });
+    }
+  });
+
+  // LiveKit token endpoint - generates room tokens for video sessions
+  app.post('/api/livekit/token', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { sessionId } = req.body;
+
+      if (!sessionId) {
+        return res.status(400).json({ message: "Session ID is required" });
+      }
+
+      const apiKey = process.env.LIVEKIT_API_KEY;
+      const apiSecret = process.env.LIVEKIT_API_SECRET;
+
+      if (!apiKey || !apiSecret) {
+        console.error('[LiveKit] Missing API credentials');
+        return res.status(500).json({ message: "LiveKit not configured" });
+      }
+
+      // Get user info for participant identity
+      const user = await storage.getUser(userId);
+      const participantName = user?.username || user?.firstName || `User ${userId.slice(0, 6)}`;
+
+      // Create access token with room permissions
+      const at = new AccessToken(apiKey, apiSecret, {
+        identity: userId,
+        name: participantName,
+        ttl: '2h', // Token valid for 2 hours
+      });
+
+      // Grant permissions for this specific room (using sessionId as room name)
+      at.addGrant({
+        room: sessionId,
+        roomJoin: true,
+        canPublish: true,
+        canSubscribe: true,
+        canPublishData: true,
+      });
+
+      const token = await at.toJwt();
+      
+      console.log(`[LiveKit] Generated token for user ${userId} in room ${sessionId}`);
+      
+      res.json({ 
+        token,
+        serverUrl: process.env.LIVEKIT_URL,
+      });
+    } catch (error) {
+      console.error('[LiveKit] Error generating token:', error);
+      res.status(500).json({ message: "Failed to generate LiveKit token" });
     }
   });
 
