@@ -51,7 +51,9 @@ type MatchedUser = {
   profileImageUrl: string | null;
 };
 
-const ALL_HOURS = Array.from({ length: 14 }, (_, i) => i + 8); // 8 AM to 9 PM
+const EARLIEST_HOUR = 6;  // 6 AM
+const LATEST_HOUR = 23;   // 11 PM
+const ALL_HOURS = Array.from({ length: LATEST_HOUR - EARLIEST_HOUR + 1 }, (_, i) => i + EARLIEST_HOUR); // 6 AM to 11 PM
 
 // Calculate the first available hour based on current time
 // If minutes >= 50, show next hour since current hour has no available slots
@@ -63,9 +65,9 @@ const getStartingHour = () => {
   // If past :50, next hour; otherwise current hour
   let startHour = currentMinute >= 50 ? currentHour + 1 : currentHour;
   
-  // Clamp to our calendar range (8 AM - 9 PM)
-  if (startHour < 8) startHour = 8;
-  if (startHour > 21) startHour = 21;
+  // Clamp to our calendar range (6 AM - 11 PM)
+  if (startHour < EARLIEST_HOUR) startHour = EARLIEST_HOUR;
+  if (startHour > LATEST_HOUR) startHour = LATEST_HOUR;
   
   return startHour;
 };
@@ -101,7 +103,7 @@ export default function CalendarPage() {
   useEffect(() => {
     if (calendarScrollRef.current) {
       const startingHour = getStartingHour();
-      const hourIndex = startingHour - 8; // 8 AM is index 0
+      const hourIndex = startingHour - EARLIEST_HOUR; // EARLIEST_HOUR is index 0
       const scrollPosition = hourIndex * TIME_SLOT_HEIGHT;
       calendarScrollRef.current.scrollTop = scrollPosition;
     }
