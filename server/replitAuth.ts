@@ -109,18 +109,6 @@ export async function setupAuth(app: Express) {
     })(req, res, next);
   });
 
-  // Switch account: log out first, then redirect to login
-  app.get("/api/switch-account", (req, res) => {
-    req.logout(() => {
-      // Redirect to Replit's end session, then back to our login
-      client.buildEndSessionUrl(config, {
-        client_id: process.env.REPL_ID!,
-        post_logout_redirect_uri: `${req.protocol}://${req.hostname}/api/login`,
-      }).href;
-      res.redirect(`/api/login`);
-    });
-  });
-
   app.get("/api/callback", (req, res, next) => {
     ensureStrategy(req.hostname);
     passport.authenticate(`replitauth:${req.hostname}`, {

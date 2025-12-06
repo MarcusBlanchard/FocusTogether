@@ -159,12 +159,6 @@ export default function Home() {
                     Sign Out
                   </a>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <a href="/api/switch-account" className="flex items-center" data-testid="menu-item-switch-account">
-                    <User className="mr-2 h-4 w-4" />
-                    Switch Account
-                  </a>
-                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
