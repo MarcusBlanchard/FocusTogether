@@ -56,6 +56,7 @@ export default function Session() {
   const [countdown, setCountdown] = useState(0);
   const [livekitToken, setLivekitToken] = useState<string | null>(null);
   const [livekitUrl, setLivekitUrl] = useState<string | null>(null);
+  const [activeParticipants, setActiveParticipants] = useState(0);
   const sessionStartRef = useRef<Date | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
@@ -371,9 +372,9 @@ export default function Session() {
             <span className="text-xs sm:text-sm">{formatTime(sessionDuration)}</span>
           </Badge>
         </div>
-        <Badge variant="secondary" className="flex items-center gap-1 flex-shrink-0">
+        <Badge variant="secondary" className="flex items-center gap-1 flex-shrink-0" data-testid="badge-participants">
           <Users className="h-3 w-3" />
-          <span className="text-xs sm:text-sm">{sessionData.participantCount}</span>
+          <span className="text-xs sm:text-sm">{activeParticipants}/{sessionData.participantCount}</span>
         </Badge>
       </header>
 
@@ -383,7 +384,9 @@ export default function Session() {
             token={livekitToken}
             serverUrl={livekitUrl}
             sessionId={params.sessionId!}
+            totalParticipants={sessionData.participantCount}
             onLeave={handleLeaveSession}
+            onActiveCountChange={setActiveParticipants}
             localUser={{
               id: user.id,
               username: user.username,
