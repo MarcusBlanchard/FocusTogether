@@ -378,9 +378,19 @@ export function LiveKitSession({
       className="h-full"
     >
       {isConnecting ? (
-        <div className="flex items-center justify-center h-full">
-          <Loader2 className="h-8 w-8 animate-spin" />
-          <span className="ml-2">Connecting to video session...</span>
+        <div className="flex flex-col items-center justify-center h-full gap-4">
+          <div className="flex items-center">
+            <Loader2 className="h-8 w-8 animate-spin" />
+            <span className="ml-2">Connecting to video session...</span>
+          </div>
+          <Button
+            variant="destructive"
+            onClick={onLeave}
+            data-testid="button-cancel-connecting"
+          >
+            <PhoneOff className="mr-2 h-4 w-4" />
+            Cancel
+          </Button>
         </div>
       ) : (
         <RoomContent onLeave={onLeave} />

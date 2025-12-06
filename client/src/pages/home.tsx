@@ -56,9 +56,26 @@ export default function Home() {
     enabled: !!user,
   });
 
+  const isSessionActive = (session: ScheduledSession) => {
+    const now = new Date();
+    const start = new Date(session.startAt);
+    const end = new Date(session.endAt);
+    return now >= start && now <= end;
+  };
+
   const nextThreeDaysSessions = upcomingSessions.filter((session: ScheduledSession) => {
     const sessionStart = new Date(session.startAt);
-    return sessionStart >= today && sessionStart <= threeDaysLater;
+    const sessionEnd = new Date(session.endAt);
+    const now = new Date();
+    // Include if session is active OR starts in the next 3 days
+    return (now <= sessionEnd && sessionStart <= threeDaysLater);
+  }).sort((a, b) => {
+    // Active sessions first, then by start time
+    const aActive = isSessionActive(a);
+    const bActive = isSessionActive(b);
+    if (aActive && !bActive) return -1;
+    if (!aActive && bActive) return 1;
+    return new Date(a.startAt).getTime() - new Date(b.startAt).getTime();
   }).slice(0, 3);
 
   const getPreferenceIcon = (pref: string) => {
@@ -184,37 +201,47 @@ export default function Home() {
               </div>
             </CardHeader>
             <CardContent className="space-y-2">
-              {nextThreeDaysSessions.map((session) => (
-                <div
-                  key={session.id}
-                  className="flex items-center gap-3 p-3 rounded-lg border bg-card hover-elevate cursor-pointer"
-                  onClick={() => setLocation(`/session/${session.id}`)}
-                  data-testid={`session-preview-${session.id}`}
-                >
-                  <div className="flex-shrink-0">
-                    <div className="h-12 w-12 rounded-lg bg-muted flex items-center justify-center">
-                      <Calendar className="h-6 w-6 text-muted-foreground" />
+              {nextThreeDaysSessions.map((session) => {
+                const active = isSessionActive(session);
+                return (
+                  <div
+                    key={session.id}
+                    className={`flex items-center gap-3 p-3 rounded-lg border bg-card hover-elevate cursor-pointer ${active ? 'border-green-500 dark:border-green-600' : ''}`}
+                    onClick={() => setLocation(`/session/${session.id}`)}
+                    data-testid={`session-preview-${session.id}`}
+                  >
+                    <div className="flex-shrink-0">
+                      <div className={`h-12 w-12 rounded-lg flex items-center justify-center ${active ? 'bg-green-500/10' : 'bg-muted'}`}>
+                        <Calendar className={`h-6 w-6 ${active ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'}`} />
+                      </div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">
+                        {session.title || `${session.sessionType === 'solo' ? 'Solo' : 'Group'} Session`}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>{format(new Date(session.startAt), 'MMM d, h:mm a')}</span>
+                        <span>•</span>
+                        <span className="flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          {session.durationMinutes}m
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                      {active && (
+                        <Badge className="bg-green-500 hover:bg-green-600 text-white" data-testid="badge-active">
+                          Active
+                        </Badge>
+                      )}
+                      <Badge variant="outline">
+                        {session.sessionType === 'solo' ? <User className="h-3 w-3 mr-1" /> : <UsersRound className="h-3 w-3 mr-1" />}
+                        {session.sessionType}
+                      </Badge>
                     </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">
-                      {session.title || `${session.sessionType === 'solo' ? 'Solo' : 'Group'} Session`}
-                    </div>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span>{format(new Date(session.startAt), 'MMM d, h:mm a')}</span>
-                      <span>•</span>
-                      <span className="flex items-center gap-1">
-                        <Clock className="h-3 w-3" />
-                        {session.durationMinutes}m
-                      </span>
-                    </div>
-                  </div>
-                  <Badge variant="outline" className="flex-shrink-0">
-                    {session.sessionType === 'solo' ? <User className="h-3 w-3 mr-1" /> : <UsersRound className="h-3 w-3 mr-1" />}
-                    {session.sessionType}
-                  </Badge>
-                </div>
-              ))}
+                );
+              })}
             </CardContent>
           </Card>
         )}
