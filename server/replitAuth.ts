@@ -103,11 +103,22 @@ export async function setupAuth(app: Express) {
 
   app.get("/api/login", (req, res, next) => {
     ensureStrategy(req.hostname);
-    const prompt = req.query.switch === "true" ? "select_account login consent" : "login consent";
     passport.authenticate(`replitauth:${req.hostname}`, {
-      prompt,
+      prompt: "login consent",
       scope: ["openid", "email", "profile", "offline_access"],
     })(req, res, next);
+  });
+
+  // Switch account: log out first, then redirect to login
+  app.get("/api/switch-account", (req, res) => {
+    req.logout(() => {
+      // Redirect to Replit's end session, then back to our login
+      client.buildEndSessionUrl(config, {
+        client_id: process.env.REPL_ID!,
+        post_logout_redirect_uri: `${req.protocol}://${req.hostname}/api/login`,
+      }).href;
+      res.redirect(`/api/login`);
+    });
   });
 
   app.get("/api/callback", (req, res, next) => {

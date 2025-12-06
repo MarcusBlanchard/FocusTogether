@@ -160,7 +160,7 @@ export default function Home() {
                   </a>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <a href="/api/login?switch=true" className="flex items-center" data-testid="menu-item-switch-account">
+                  <a href="/api/switch-account" className="flex items-center" data-testid="menu-item-switch-account">
                     <User className="mr-2 h-4 w-4" />
                     Switch Account
                   </a>
