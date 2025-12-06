@@ -99,15 +99,8 @@ export default function CalendarPage() {
   const [selectedSlot, setSelectedSlot] = useState<{ day: Date; hour: number; minute: number } | null>(null);
   const [matchConfirmation, setMatchConfirmation] = useState<{ session: ScheduledSession; matchedUser: MatchedUser | null } | null>(null);
   
-  // Scroll to the starting hour on mount
-  useEffect(() => {
-    if (calendarScrollRef.current) {
-      const startingHour = getStartingHour();
-      const hourIndex = startingHour - EARLIEST_HOUR; // EARLIEST_HOUR is index 0
-      const scrollPosition = hourIndex * TIME_SLOT_HEIGHT;
-      calendarScrollRef.current.scrollTop = scrollPosition;
-    }
-  }, []);
+  // Track if we've already scrolled to avoid re-scrolling on every load
+  const hasScrolledRef = useRef(false);
 
   // Form state - only title and description are editable
   const [title, setTitle] = useState("");
@@ -143,6 +136,17 @@ export default function CalendarPage() {
       return response.json();
     },
   });
+
+  // Scroll to the starting hour after loading completes
+  useEffect(() => {
+    if (!isLoading && calendarScrollRef.current && !hasScrolledRef.current) {
+      const startingHour = getStartingHour();
+      const hourIndex = startingHour - EARLIEST_HOUR;
+      const scrollPosition = hourIndex * TIME_SLOT_HEIGHT;
+      calendarScrollRef.current.scrollTop = scrollPosition;
+      hasScrolledRef.current = true;
+    }
+  }, [isLoading]);
 
   // Get user's upcoming sessions
   const { data: mySessions } = useQuery<ScheduledSession[]>({
