@@ -8,14 +8,9 @@ export default function Landing() {
       <header className="border-b">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="text-2xl font-semibold">FocusSession</h1>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" asChild data-testid="button-switch-account">
-              <a href="/api/login?switch=true">Switch Account</a>
-            </Button>
-            <Button asChild data-testid="button-login">
-              <a href="/api/login">Sign In</a>
-            </Button>
-          </div>
+          <Button asChild data-testid="button-login">
+            <a href="/api/login">Sign In</a>
+          </Button>
         </div>
       </header>
 
