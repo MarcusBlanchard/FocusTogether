@@ -138,3 +138,5 @@ The app runs on port 5000.
   - Calendar now starts from today (left-most day), no older days visible
   - Unavailable time slots are darker for better visibility
   - Active sessions appear in calendar's upcoming sidebar with green badge
+  - Calendar auto-scrolls to current hour (or next hour if past :50)
+  - Sticky header row - only time slots scroll, day headers stay visible

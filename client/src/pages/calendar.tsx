@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -51,7 +51,24 @@ type MatchedUser = {
   profileImageUrl: string | null;
 };
 
-const HOURS = Array.from({ length: 14 }, (_, i) => i + 8); // 8 AM to 9 PM
+const ALL_HOURS = Array.from({ length: 14 }, (_, i) => i + 8); // 8 AM to 9 PM
+
+// Calculate the first available hour based on current time
+// If minutes >= 50, show next hour since current hour has no available slots
+const getStartingHour = () => {
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  
+  // If past :50, next hour; otherwise current hour
+  let startHour = currentMinute >= 50 ? currentHour + 1 : currentHour;
+  
+  // Clamp to our calendar range (8 AM - 9 PM)
+  if (startHour < 8) startHour = 8;
+  if (startHour > 21) startHour = 21;
+  
+  return startHour;
+};
 const TIME_SLOT_HEIGHT = 200; // pixels per hour - tall enough for profile pictures in 15-min segments
 const SUB_SLOT_HEIGHT = TIME_SLOT_HEIGHT / 4; // 50px per 15-minute segment
 
@@ -70,6 +87,7 @@ export default function CalendarPage() {
   const [location, setLocation] = useLocation();
   const { user } = useAuth();
   const { toast } = useToast();
+  const calendarScrollRef = useRef<HTMLDivElement>(null);
   
   // Start from today (not beginning of week) - no older days visible
   const [currentWeekStart, setCurrentWeekStart] = useState<Date>(
@@ -78,6 +96,16 @@ export default function CalendarPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<{ day: Date; hour: number; minute: number } | null>(null);
   const [matchConfirmation, setMatchConfirmation] = useState<{ session: ScheduledSession; matchedUser: MatchedUser | null } | null>(null);
+  
+  // Scroll to the starting hour on mount
+  useEffect(() => {
+    if (calendarScrollRef.current) {
+      const startingHour = getStartingHour();
+      const hourIndex = startingHour - 8; // 8 AM is index 0
+      const scrollPosition = hourIndex * TIME_SLOT_HEIGHT;
+      calendarScrollRef.current.scrollTop = scrollPosition;
+    }
+  }, []);
 
   // Form state - only title and description are editable
   const [title, setTitle] = useState("");
@@ -567,33 +595,32 @@ export default function CalendarPage() {
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
               </div>
             ) : (
-              <div className="border rounded-lg overflow-hidden bg-card">
-                <div className="overflow-x-auto">
-                  {/* Day headers */}
-                  <div className="grid grid-cols-8 border-b bg-muted/50 sticky top-0 z-20">
-                    <div className="p-2 text-xs text-muted-foreground font-medium">Time</div>
-                    {weekDays.map((day) => (
-                      <div
-                        key={day.toISOString()}
-                        className={`p-2 text-center border-l ${
-                          isSameDay(day, new Date()) ? "bg-primary/10" : ""
-                        }`}
-                      >
-                        <div className="text-xs text-muted-foreground font-medium">
-                          {format(day, "EEE")}
-                        </div>
-                        <div className={`text-lg font-semibold ${
-                          isSameDay(day, new Date()) ? "text-primary" : ""
-                        }`}>
-                          {format(day, "d")}
-                        </div>
+              <div className="border rounded-lg overflow-hidden bg-card flex flex-col" style={{ height: 'calc(100vh - 200px)' }}>
+                {/* Sticky Day headers */}
+                <div className="grid grid-cols-8 border-b bg-muted/50 flex-shrink-0 z-20">
+                  <div className="p-2 text-xs text-muted-foreground font-medium">Time</div>
+                  {weekDays.map((day) => (
+                    <div
+                      key={day.toISOString()}
+                      className={`p-2 text-center border-l ${
+                        isSameDay(day, new Date()) ? "bg-primary/10" : ""
+                      }`}
+                    >
+                      <div className="text-xs text-muted-foreground font-medium">
+                        {format(day, "EEE")}
                       </div>
-                    ))}
-                  </div>
+                      <div className={`text-lg font-semibold ${
+                        isSameDay(day, new Date()) ? "text-primary" : ""
+                      }`}>
+                        {format(day, "d")}
+                      </div>
+                    </div>
+                  ))}
+                </div>
 
-                  {/* Time slots */}
-                  <div>
-                    {HOURS.map((hour) => (
+                {/* Scrollable Time slots */}
+                <div ref={calendarScrollRef} className="overflow-y-auto flex-1">
+                  {ALL_HOURS.map((hour) => (
                       <div key={hour} className="grid grid-cols-8 border-b">
                         {/* Time label */}
                         <div className="p-2 text-xs text-muted-foreground">
@@ -709,7 +736,6 @@ export default function CalendarPage() {
                         })}
                       </div>
                     ))}
-                  </div>
                 </div>
               </div>
             )}
