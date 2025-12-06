@@ -71,8 +71,9 @@ export default function CalendarPage() {
   const { user } = useAuth();
   const { toast } = useToast();
   
+  // Start from today (not beginning of week) - no older days visible
   const [currentWeekStart, setCurrentWeekStart] = useState<Date>(
-    startOfWeek(new Date(), { weekStartsOn: 1 }) // Monday
+    new Date()
   );
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<{ day: Date; hour: number; minute: number } | null>(null);
@@ -118,8 +119,16 @@ export default function CalendarPage() {
     queryKey: ['/api/scheduled-sessions/my-sessions'],
   });
 
+  // Include both upcoming sessions AND active sessions (currently in progress)
+  const now = new Date();
   const upcomingSessions = mySessions
-    ?.filter(s => s.status !== 'cancelled' && new Date(s.startAt) > new Date())
+    ?.filter(s => {
+      if (s.status === 'cancelled') return false;
+      const startAt = new Date(s.startAt);
+      const endAt = new Date(s.endAt);
+      // Include if: starts in future OR currently active (now is between start and end)
+      return startAt > now || (startAt <= now && endAt > now);
+    })
     .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()) || [];
 
   const createSessionMutation = useMutation({
@@ -355,14 +364,24 @@ export default function CalendarPage() {
                       {upcomingSessions.map((session) => {
                         const canJoin = canJoinSession(session);
                         const startTime = new Date(session.startAt);
+                        const endTime = new Date(session.endAt);
+                        const currentTime = new Date();
+                        const isActive = startTime <= currentTime && endTime > currentTime;
                         
                         return (
-                          <Card key={session.id} className="p-3">
+                          <Card key={session.id} className={`p-3 ${isActive ? 'border-green-500 border-2' : ''}`}>
                             <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <Badge variant="outline" className="text-xs">
-                                  {session.sessionType === 'solo' ? 'Solo' : 'Group'}
-                                </Badge>
+                              <div className="flex items-center justify-between gap-1">
+                                <div className="flex items-center gap-1">
+                                  <Badge variant="outline" className="text-xs">
+                                    {session.sessionType === 'solo' ? 'Solo' : 'Group'}
+                                  </Badge>
+                                  {isActive && (
+                                    <Badge className="text-xs bg-green-500 text-white">
+                                      Active
+                                    </Badge>
+                                  )}
+                                </div>
                                 <Badge variant="secondary" className="text-xs">
                                   {session.durationMinutes}m
                                 </Badge>
@@ -604,7 +623,7 @@ export default function CalendarPage() {
                                     key={minute}
                                     className={`absolute w-full cursor-pointer transition-colors hover:bg-primary/10 ${
                                       minuteIndex > 0 ? "border-t border-border/30" : ""
-                                    } ${isPast ? "bg-muted/30 hover:bg-muted/40" : ""} ${userHasOverlapping ? "pointer-events-none bg-muted/20" : ""}`}
+                                    } ${isPast ? "bg-muted/70 hover:bg-muted/80 cursor-not-allowed" : ""} ${userHasOverlapping ? "pointer-events-none bg-muted/60" : ""}`}
                                     style={{ 
                                       top: `${minuteIndex * SUB_SLOT_HEIGHT}px`, 
                                       height: `${SUB_SLOT_HEIGHT}px`,

@@ -131,3 +131,10 @@ The app runs on port 5000.
 - LiveKit handles STUN/TURN servers, NAT traversal, and reconnection automatically
 - Token endpoint added with session membership verification for security
 - LiveKitSession component replaces custom mesh networking code
+- **Active session indicators**: Green "Active" badge on home page and calendar sidebar for in-progress sessions
+- **Participant count display**: Shows "X/Y participants" (connected/total) in session header with real-time updates
+- **Click-to-focus video**: Tap any video to maximize it, other participants become thumbnails
+- **Calendar improvements**: 
+  - Calendar now starts from today (left-most day), no older days visible
+  - Unavailable time slots are darker for better visibility
+  - Active sessions appear in calendar's upcoming sidebar with green badge
