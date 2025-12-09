@@ -237,10 +237,12 @@ export default function CalendarPage() {
     mutationFn: async (sessionId: string) => {
       return apiRequest("DELETE", `/api/scheduled-sessions/${sessionId}`);
     },
-    onSuccess: () => {
-      // Invalidate both the calendar sessions and user's sessions to update UI immediately
-      queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
+    onSuccess: async () => {
+      // Invalidate and await refetch to ensure UI updates immediately
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] }),
+        queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] }),
+      ]);
       toast({
         title: "Session cancelled",
         description: "Your booking has been cancelled.",
