@@ -604,8 +604,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (session.hostId === userId) {
         const participantCount = await storage.getParticipantCount(sessionId);
         if (participantCount === 1) {
-          // Only host, cancel the session
+          // Only host, cancel the session and remove participant record
           await storage.updateSessionStatus(sessionId, 'cancelled');
+          await storage.removeParticipant(sessionId, userId);
         } else {
           // Other participants exist, just leave
           await storage.removeParticipant(sessionId, userId);

@@ -356,7 +356,12 @@ export class DatabaseStorage implements IStorage {
       return await db
         .select()
         .from(scheduledSessions)
-        .where(eq(scheduledSessions.hostId, userId))
+        .where(
+          and(
+            eq(scheduledSessions.hostId, userId),
+            ne(scheduledSessions.status, 'cancelled')
+          )
+        )
         .orderBy(desc(scheduledSessions.startAt));
     }
     
@@ -369,9 +374,12 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(scheduledSessions)
       .where(
-        or(
-          eq(scheduledSessions.hostId, userId),
-          sessionIdConditions!
+        and(
+          or(
+            eq(scheduledSessions.hostId, userId),
+            sessionIdConditions!
+          ),
+          ne(scheduledSessions.status, 'cancelled')
         )
       )
       .orderBy(desc(scheduledSessions.startAt));
