@@ -545,6 +545,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return true;
       });
 
+      // Prevent caching to ensure fresh data across devices
+      res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.json(filteredSessions);
     } catch (error) {
       console.error("Error fetching scheduled sessions:", error);
@@ -567,6 +569,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
       );
 
+      // Prevent caching to ensure fresh data across devices
+      res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.json(enrichedSessions);
     } catch (error) {
       console.error("Error fetching user scheduled sessions:", error);

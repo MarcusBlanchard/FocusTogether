@@ -52,12 +52,24 @@ function updateUserSession(
 }
 
 async function upsertUser(claims: any) {
+  // OIDC standard uses "picture", Replit may use "profile_image_url" - try both
+  const profileImageUrl = claims["profile_image_url"] || claims["picture"] || null;
+  
+  console.log("[Auth] Upserting user with claims:", {
+    sub: claims["sub"],
+    email: claims["email"],
+    firstName: claims["first_name"],
+    lastName: claims["last_name"],
+    profileImageUrl,
+    allClaimKeys: Object.keys(claims),
+  });
+  
   await storage.upsertUser({
     id: claims["sub"],
     email: claims["email"],
     firstName: claims["first_name"],
     lastName: claims["last_name"],
-    profileImageUrl: claims["profile_image_url"],
+    profileImageUrl,
   });
 }
 
