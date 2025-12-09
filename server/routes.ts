@@ -723,29 +723,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      // Check if user is a participant
+      // Check if user is a participant OR the host (host can always cancel their session)
       const participants = await storage.getSessionParticipants(sessionId);
-      if (!participants.some(p => p.id === userId)) {
+      const isParticipant = participants.some(p => p.id === userId);
+      const isHost = session.hostId === userId;
+      
+      if (!isParticipant && !isHost) {
         return res.status(403).json({ message: "You are not a participant of this session" });
       }
 
       // Get IDs of remaining participants (everyone except the cancelling user)
+      // Note: participants only includes those with status='joined'
       const remainingParticipantIds = participants
         .filter(p => p.id !== userId)
         .map(p => p.id);
 
-      // If user is the host and only participant, cancel the session
-      if (session.hostId === userId) {
-        const participantCount = await storage.getParticipantCount(sessionId);
-        if (participantCount === 1) {
-          // Only host, cancel the session and remove participant record
+      // Get count of joined participants (not including those who left)
+      const participantCount = await storage.getParticipantCount(sessionId);
+
+      if (isHost) {
+        // Host is cancelling
+        if (!isParticipant) {
+          // Host has already left but wants to cancel the entire session
+          // This happens when host left but session still exists with other participants
+          if (remainingParticipantIds.length > 0) {
+            // Notify remaining participants that session is cancelled
+            await sessionManager.notifyPartnerCancelled(sessionId, cancellingUser, remainingParticipantIds);
+          }
+          // Cancel the entire session
+          await storage.updateSessionStatus(sessionId, 'cancelled');
+        } else if (participantCount <= 1) {
+          // Host is the only participant, cancel the session
           await storage.updateSessionStatus(sessionId, 'cancelled');
           await storage.removeParticipant(sessionId, userId);
         } else {
-          // Other participants exist - notify them BEFORE removing
+          // Host is leaving but other participants exist
           await sessionManager.notifyPartnerCancelled(sessionId, cancellingUser, remainingParticipantIds);
-          
-          // Remove the cancelling user
           await storage.removeParticipant(sessionId, userId);
           
           // Update status back to scheduled if it was matched
@@ -757,10 +770,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await tryRematchSession(session, sessionId, cancellingUser, storage);
         }
       } else {
-        // Non-host participant - notify others BEFORE removing
+        // Non-host participant is cancelling
         await sessionManager.notifyPartnerCancelled(sessionId, cancellingUser, remainingParticipantIds);
-        
-        // Remove the cancelling user
         await storage.removeParticipant(sessionId, userId);
         
         // Update status back to scheduled if it was matched
