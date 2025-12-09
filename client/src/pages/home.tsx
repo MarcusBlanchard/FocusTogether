@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery } from "@tanstack/react-query";
@@ -15,6 +16,8 @@ import {
 import { Users, History, Search, LogOut, Settings, Loader2, Calendar, User, UsersRound, Briefcase, Activity, Sparkles, Clock } from "lucide-react";
 import { format, addDays, startOfDay, endOfDay } from "date-fns";
 import { NotificationBell } from "@/components/notification-bell";
+import { useSessionClient } from "@/contexts/session-client-context";
+import { queryClient } from "@/lib/queryClient";
 
 interface UserProfile {
   id: string;
@@ -35,11 +38,24 @@ interface ScheduledSession {
   sessionType: string;
   bookingPreference: string;
   durationMinutes: number;
+  status: string;
 }
 
 export default function Home() {
   const { user, isLoading: authLoading } = useAuth();
   const [, setLocation] = useLocation();
+  const { onEvent } = useSessionClient();
+
+  // Listen for session expiration events to update the UI immediately
+  useEffect(() => {
+    const unsubscribe = onEvent((event) => {
+      if (event.type === 'session-expired') {
+        console.log('[Home] Session expired, refreshing session list');
+        queryClient.invalidateQueries({ queryKey: ["/api", "scheduled-sessions", "my-sessions"] });
+      }
+    });
+    return unsubscribe;
+  }, [onEvent]);
 
   // Fetch user profile to get preference
   const { data: profile } = useQuery<UserProfile>({
@@ -64,6 +80,8 @@ export default function Home() {
   };
 
   const nextThreeDaysSessions = upcomingSessions.filter((session: ScheduledSession) => {
+    // Exclude cancelled and expired sessions
+    if (session.status === 'cancelled' || session.status === 'expired') return false;
     const sessionStart = new Date(session.startAt);
     const sessionEnd = new Date(session.endAt);
     const now = new Date();

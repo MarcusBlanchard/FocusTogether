@@ -16,6 +16,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Calendar as CalendarIcon
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { useSessionClient } from "@/contexts/session-client-context";
 import { format, startOfWeek, addDays, addWeeks, isSameDay, parseISO, differenceInMinutes } from "date-fns";
 
 type BookingPreference = 'desk' | 'active' | 'any';
@@ -89,6 +90,7 @@ export default function CalendarPage() {
   const [location, setLocation] = useLocation();
   const { user } = useAuth();
   const { toast } = useToast();
+  const { onEvent } = useSessionClient();
   const calendarScrollRef = useRef<HTMLDivElement>(null);
   
   // Start from today (not beginning of week) - no older days visible
@@ -145,6 +147,18 @@ export default function CalendarPage() {
     }
   }, [location]);
 
+  // Listen for session expiration events to update the UI immediately
+  useEffect(() => {
+    const unsubscribe = onEvent((event) => {
+      if (event.type === 'session-expired') {
+        console.log('[Calendar] Session expired, refreshing session list');
+        queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
+      }
+    });
+    return unsubscribe;
+  }, [onEvent]);
+
   // Get sessions for the current week
   const weekEnd = addDays(currentWeekStart, 7);
 
@@ -181,7 +195,7 @@ export default function CalendarPage() {
   const now = new Date();
   const upcomingSessions = mySessions
     ?.filter(s => {
-      if (s.status === 'cancelled') return false;
+      if (s.status === 'cancelled' || s.status === 'expired') return false;
       const startAt = new Date(s.startAt);
       const endAt = new Date(s.endAt);
       // Include if: starts in future OR currently active (now is between start and end)
