@@ -13,6 +13,7 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Calendar as CalendarIcon, Clock, Users, Monitor, Activity, Shuffle, X } from "lucide-react";
+import { NotificationBell } from "@/components/notification-bell";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -148,13 +149,21 @@ export default function CalendarPage() {
     }
   }, [location]);
 
-  // Listen for session expiration events to update the UI immediately
+  // Listen for session-related events to update the UI immediately
   useEffect(() => {
     const unsubscribe = onEvent((event) => {
-      if (event.type === 'session-expired') {
-        console.log('[Calendar] Session expired, refreshing session list');
+      const eventType = event.type;
+      if (
+        eventType === 'session-expired' ||
+        eventType === 'session-updated' ||
+        eventType === 'partner-cancelled' ||
+        eventType === 'auto-rematched' ||
+        eventType === 'match-found'
+      ) {
+        console.log(`[Calendar] ${eventType} event received, refreshing session list`);
         queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
         queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
       }
     });
     return unsubscribe;
@@ -414,6 +423,7 @@ export default function CalendarPage() {
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <h1 className="text-2xl font-semibold flex-1">Calendar & Schedule</h1>
+          <NotificationBell />
           <Button
             variant="ghost"
             size="icon"

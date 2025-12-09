@@ -5,16 +5,19 @@ import { setupAuth, isAuthenticated } from "./replitAuth";
 import { setupRiverServer } from "./river-server";
 import { sessionManager } from "./session-manager";
 import { AccessToken } from "livekit-server-sdk";
-import type { ScheduledSession } from "@shared/schema";
+import type { ScheduledSession, User } from "@shared/schema";
 
 // Helper function to try re-matching remaining participants with others in the pool
 async function tryRematchSession(
   session: ScheduledSession, 
   sessionId: string, 
-  cancellingUserId: string, 
+  cancellingUser: User, 
   storage: IStorage
-): Promise<void> {
+): Promise<{ rematched: boolean; newSessionId?: string }> {
   try {
+    // Get remaining participants BEFORE moving them
+    const remainingParticipants = await storage.getSessionParticipants(sessionId);
+    
     // Find another compatible session to match with
     const matchingSession = await storage.findMatchingBooking(
       new Date(session.startAt),
@@ -25,8 +28,16 @@ async function tryRematchSession(
     );
 
     if (matchingSession && matchingSession.id !== sessionId) {
-      // Get remaining participants from current session
-      const remainingParticipants = await storage.getSessionParticipants(sessionId);
+      // Get the host of the new session (for notification)
+      const newMatchHost = await storage.getUser(matchingSession.hostId);
+      
+      // Get existing participants in the target session BEFORE adding anyone
+      // These are the users who should receive match-found notifications
+      const originalTargetParticipants = await storage.getSessionParticipants(matchingSession.id);
+      const originalTargetParticipantIds = originalTargetParticipants.map(p => p.id);
+      
+      // Track which participants were successfully moved
+      const movedParticipants: typeof remainingParticipants = [];
       
       // Move all remaining participants to the matched session
       for (const participant of remainingParticipants) {
@@ -44,6 +55,35 @@ async function tryRematchSession(
         
         // Remove from current session
         await storage.removeParticipant(sessionId, participant.id);
+        
+        movedParticipants.push(participant);
+        
+        // Notify participant they've been auto-rematched
+        if (newMatchHost) {
+          await sessionManager.notifyAutoRematched(
+            participant.id,
+            sessionId,
+            matchingSession.id,
+            cancellingUser,
+            newMatchHost
+          );
+        }
+      }
+      
+      // Notify ONLY the original participants in the matched session about new joiners
+      // (not any of the moved participants - filter out ALL moved users from the target list)
+      const movedParticipantIds = movedParticipants.map(p => p.id);
+      const notifyTargets = originalTargetParticipantIds.filter(id => !movedParticipantIds.includes(id));
+      
+      for (const movedParticipant of movedParticipants) {
+        const joiningUser = await storage.getUser(movedParticipant.id);
+        if (joiningUser && notifyTargets.length > 0) {
+          await sessionManager.notifyMatchFound(
+            matchingSession.id,
+            joiningUser,
+            notifyTargets
+          );
+        }
       }
       
       // Update matched session status if now full
@@ -59,10 +99,14 @@ async function tryRematchSession(
       }
       
       console.log(`[Rematch] Moved participants from session ${sessionId} to ${matchingSession.id}`);
+      return { rematched: true, newSessionId: matchingSession.id };
     }
+    
+    return { rematched: false };
   } catch (error) {
     console.error('[Rematch] Error during re-matching:', error);
     // Don't throw - re-matching failure shouldn't break the cancel operation
+    return { rematched: false };
   }
 }
 
@@ -462,6 +506,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
 
       if (matchedSession) {
+        // Get existing participants BEFORE adding new user (for notification)
+        const existingParticipants = await storage.getSessionParticipants(matchedSession.id);
+        const existingParticipantIds = existingParticipants.map(p => p.id);
+        
         // Auto-match: add this user to the matched session
         await storage.addParticipant({
           sessionId: matchedSession.id,
@@ -478,6 +526,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Cancel the newly created session since user joined existing one
         await storage.updateSessionStatus(session.id, 'cancelled');
+
+        // Get the joining user's info for notification
+        const joiningUser = await storage.getUser(userId);
+        
+        // Notify existing participants about the new match
+        if (joiningUser) {
+          await sessionManager.notifyMatchFound(matchedSession.id, joiningUser, existingParticipantIds);
+        }
 
         // Get the matched user's info (the host of the matched session)
         const matchedUser = await storage.getUser(matchedSession.hostId);
@@ -661,11 +717,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Session not found" });
       }
 
+      // Get the cancelling user's info for notifications
+      const cancellingUser = await storage.getUser(userId);
+      if (!cancellingUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
       // Check if user is a participant
       const participants = await storage.getSessionParticipants(sessionId);
       if (!participants.some(p => p.id === userId)) {
         return res.status(403).json({ message: "You are not a participant of this session" });
       }
+
+      // Get IDs of remaining participants (everyone except the cancelling user)
+      const remainingParticipantIds = participants
+        .filter(p => p.id !== userId)
+        .map(p => p.id);
 
       // If user is the host and only participant, cancel the session
       if (session.hostId === userId) {
@@ -675,26 +742,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await storage.updateSessionStatus(sessionId, 'cancelled');
           await storage.removeParticipant(sessionId, userId);
         } else {
-          // Other participants exist, just leave
+          // Other participants exist - notify them BEFORE removing
+          await sessionManager.notifyPartnerCancelled(sessionId, cancellingUser, remainingParticipantIds);
+          
+          // Remove the cancelling user
           await storage.removeParticipant(sessionId, userId);
+          
           // Update status back to scheduled if it was matched
           if (session.status === 'matched') {
             await storage.updateSessionStatus(sessionId, 'scheduled');
           }
           
           // Try to re-match remaining participants with others in the pool
-          await tryRematchSession(session, sessionId, userId, storage);
+          await tryRematchSession(session, sessionId, cancellingUser, storage);
         }
       } else {
-        // Non-host participant, just leave
+        // Non-host participant - notify others BEFORE removing
+        await sessionManager.notifyPartnerCancelled(sessionId, cancellingUser, remainingParticipantIds);
+        
+        // Remove the cancelling user
         await storage.removeParticipant(sessionId, userId);
+        
         // Update status back to scheduled if it was matched
         if (session.status === 'matched') {
           await storage.updateSessionStatus(sessionId, 'scheduled');
         }
         
         // Try to re-match remaining participants with others in the pool
-        await tryRematchSession(session, sessionId, userId, storage);
+        await tryRematchSession(session, sessionId, cancellingUser, storage);
       }
 
       res.json({ success: true, message: "Session cancelled successfully" });

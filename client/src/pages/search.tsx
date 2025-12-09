@@ -10,6 +10,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, Search as SearchIcon, UserPlus, Check, Loader2 } from "lucide-react";
+import { NotificationBell } from "@/components/notification-bell";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import type { User } from "@shared/schema";
@@ -111,6 +112,7 @@ export default function SearchPage() {
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <h1 className="text-2xl font-semibold flex-1">Find Users</h1>
+          <NotificationBell />
           <Button
             variant="ghost"
             size="icon"

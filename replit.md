@@ -87,6 +87,10 @@ A Focusmate-style focused work session web app with calendar-based booking. User
 - `invite-received` - Friend invite received
 - `invite-response` - Friend accepted/declined invite
 - `signal` - WebRTC signaling (legacy, preserved for compatibility)
+- `session-updated` - Session status changed (triggers UI refresh)
+- `partner-cancelled` - A partner cancelled their booking (includes cancelledBy info)
+- `auto-rematched` - User was automatically moved to a new session after partner cancelled (includes original partner and new match info)
+- `match-found` - Someone new matched with your session (triggers notification badge update)
 
 ## Video Infrastructure
 LiveKit Cloud handles all WebRTC complexity:

@@ -15,7 +15,7 @@ export interface ParticipantInfo {
 }
 
 export interface SessionEvent {
-  type: 'matched' | 'partner-disconnected' | 'invite-received' | 'invite-response' | 'signal' | 'participant-joined' | 'participant-left' | 'room-joined' | 'room-ended' | 'session-expired';
+  type: 'matched' | 'partner-disconnected' | 'invite-received' | 'invite-response' | 'signal' | 'participant-joined' | 'participant-left' | 'room-joined' | 'room-ended' | 'session-expired' | 'session-updated' | 'partner-cancelled' | 'auto-rematched' | 'match-found';
   sessionId?: string;
   partner?: PartnerInfo;
   inviter?: PartnerInfo;
@@ -32,6 +32,22 @@ export interface SessionEvent {
   roomId?: string;
   roomName?: string;
   reason?: 'no-participants';
+  // New notification event fields
+  status?: string;
+  cancelledBy?: {
+    id: string;
+    username: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+  };
+  originalSessionId?: string;
+  newSessionId?: string;
+  newMatch?: {
+    id: string;
+    username: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+  };
 }
 
 type EventCallback = (event: SessionEvent) => void;

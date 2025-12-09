@@ -295,6 +295,52 @@ export const SignalReceivedEvent = Type.Object({
   signal: SignalPayload,
 });
 
+// Session update events for real-time notifications
+export const SessionUpdatedEvent = Type.Object({
+  type: Type.Literal('session-updated'),
+  sessionId: Type.String(),
+  status: Type.Optional(Type.String()),
+});
+
+export const PartnerCancelledEvent = Type.Object({
+  type: Type.Literal('partner-cancelled'),
+  sessionId: Type.String(),
+  cancelledBy: Type.Object({
+    id: Type.String(),
+    username: Type.Union([Type.String(), Type.Null()]),
+    firstName: Type.Union([Type.String(), Type.Null()]),
+    lastName: Type.Union([Type.String(), Type.Null()]),
+  }),
+});
+
+export const AutoRematchedEvent = Type.Object({
+  type: Type.Literal('auto-rematched'),
+  originalSessionId: Type.String(),
+  newSessionId: Type.String(),
+  cancelledBy: Type.Object({
+    id: Type.String(),
+    username: Type.Union([Type.String(), Type.Null()]),
+  }),
+  newMatch: Type.Object({
+    id: Type.String(),
+    username: Type.Union([Type.String(), Type.Null()]),
+    firstName: Type.Union([Type.String(), Type.Null()]),
+    lastName: Type.Union([Type.String(), Type.Null()]),
+  }),
+});
+
+export const MatchFoundEvent = Type.Object({
+  type: Type.Literal('match-found'),
+  sessionId: Type.String(),
+  partner: Type.Object({
+    id: Type.String(),
+    username: Type.Union([Type.String(), Type.Null()]),
+    firstName: Type.Union([Type.String(), Type.Null()]),
+    lastName: Type.Union([Type.String(), Type.Null()]),
+    profileImageUrl: Type.Union([Type.String(), Type.Null()]),
+  }),
+});
+
 export const SessionEvent = Type.Union([
   MatchedEvent,
   PartnerDisconnectedEvent,
@@ -306,4 +352,8 @@ export const SessionEvent = Type.Union([
   InviteReceivedEvent,
   InviteResponseEvent,
   SignalReceivedEvent,
+  SessionUpdatedEvent,
+  PartnerCancelledEvent,
+  AutoRematchedEvent,
+  MatchFoundEvent,
 ]);

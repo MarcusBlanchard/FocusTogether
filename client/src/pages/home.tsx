@@ -46,12 +46,20 @@ export default function Home() {
   const [, setLocation] = useLocation();
   const { onEvent } = useSessionClient();
 
-  // Listen for session expiration events to update the UI immediately
+  // Listen for session-related events to update the UI immediately
   useEffect(() => {
     const unsubscribe = onEvent((event) => {
-      if (event.type === 'session-expired') {
-        console.log('[Home] Session expired, refreshing session list');
-        queryClient.invalidateQueries({ queryKey: ["/api", "scheduled-sessions", "my-sessions"] });
+      const eventType = event.type;
+      if (
+        eventType === 'session-expired' ||
+        eventType === 'session-updated' ||
+        eventType === 'partner-cancelled' ||
+        eventType === 'auto-rematched' ||
+        eventType === 'match-found'
+      ) {
+        console.log(`[Home] ${eventType} event received, refreshing session list`);
+        queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
+        queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
       }
     });
     return unsubscribe;
@@ -68,7 +76,7 @@ export default function Home() {
   const threeDaysLater = addDays(today, 3);
   
   const { data: upcomingSessions = [] } = useQuery<ScheduledSession[]>({
-    queryKey: ["/api", "scheduled-sessions", "my-sessions"],
+    queryKey: ['/api/scheduled-sessions/my-sessions'],
     enabled: !!user,
   });
 

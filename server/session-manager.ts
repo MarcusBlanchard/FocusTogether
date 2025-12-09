@@ -994,6 +994,150 @@ class SessionManager {
     }
   }
 
+  // Notify participants of session updates (for real-time UI refresh)
+  async notifySessionUpdate(sessionId: string, excludeUserId?: string) {
+    try {
+      const participants = await storage.getSessionParticipants(sessionId);
+      const session = await storage.getScheduledSession(sessionId);
+      
+      for (const participant of participants) {
+        if (excludeUserId && participant.id === excludeUserId) continue;
+        
+        this.emit(participant.id, {
+          type: 'session-updated',
+          sessionId,
+          status: session?.status,
+        });
+      }
+    } catch (error) {
+      console.error('[SessionManager] Error notifying session update:', error);
+    }
+  }
+
+  // Notify participants when someone cancels their booking
+  async notifyPartnerCancelled(sessionId: string, cancelledByUser: User, remainingUserIds: string[]) {
+    try {
+      const cancelledName = cancelledByUser.firstName && cancelledByUser.lastName 
+        ? `${cancelledByUser.firstName} ${cancelledByUser.lastName}`
+        : cancelledByUser.username || 'Your partner';
+
+      for (const userId of remainingUserIds) {
+        // Send real-time WebSocket event
+        this.emit(userId, {
+          type: 'partner-cancelled',
+          sessionId,
+          cancelledBy: {
+            id: cancelledByUser.id,
+            username: cancelledByUser.username,
+            firstName: cancelledByUser.firstName,
+            lastName: cancelledByUser.lastName,
+          },
+        });
+
+        // Create persistent notification
+        await storage.createNotification({
+          userId,
+          type: 'partner_canceled',
+          title: 'Partner Cancelled',
+          message: `${cancelledName} cancelled their booking for your session`,
+          read: 0,
+          relatedUserId: cancelledByUser.id,
+          sessionId,
+        });
+      }
+    } catch (error) {
+      console.error('[SessionManager] Error notifying partner cancelled:', error);
+    }
+  }
+
+  // Notify user when they've been auto-rematched after original partner cancelled
+  async notifyAutoRematched(
+    userId: string, 
+    originalSessionId: string,
+    newSessionId: string, 
+    cancelledByUser: User,
+    newMatchUser: User
+  ) {
+    try {
+      const cancelledName = cancelledByUser.firstName && cancelledByUser.lastName 
+        ? `${cancelledByUser.firstName} ${cancelledByUser.lastName}`
+        : cancelledByUser.username || 'Your partner';
+      
+      const newMatchName = newMatchUser.firstName && newMatchUser.lastName 
+        ? `${newMatchUser.firstName} ${newMatchUser.lastName}`
+        : newMatchUser.username || 'someone new';
+
+      // Send real-time WebSocket event
+      this.emit(userId, {
+        type: 'auto-rematched',
+        originalSessionId,
+        newSessionId,
+        cancelledBy: {
+          id: cancelledByUser.id,
+          username: cancelledByUser.username,
+        },
+        newMatch: {
+          id: newMatchUser.id,
+          username: newMatchUser.username,
+          firstName: newMatchUser.firstName,
+          lastName: newMatchUser.lastName,
+        },
+      });
+
+      // Create persistent notification
+      await storage.createNotification({
+        userId,
+        type: 'auto_rematched',
+        title: 'Auto-Rematched',
+        message: `${cancelledName} cancelled, so we automatically matched you with ${newMatchName}`,
+        read: 0,
+        relatedUserId: newMatchUser.id,
+        sessionId: newSessionId,
+      });
+    } catch (error) {
+      console.error('[SessionManager] Error notifying auto-rematch:', error);
+    }
+  }
+
+  // Notify when someone joins a session (match found)
+  async notifyMatchFound(sessionId: string, joiningUser: User, existingParticipantIds: string[]) {
+    try {
+      const joiningName = joiningUser.firstName && joiningUser.lastName 
+        ? `${joiningUser.firstName} ${joiningUser.lastName}`
+        : joiningUser.username || 'Someone';
+
+      for (const userId of existingParticipantIds) {
+        if (userId === joiningUser.id) continue;
+
+        // Send real-time WebSocket event
+        this.emit(userId, {
+          type: 'match-found',
+          sessionId,
+          partner: {
+            id: joiningUser.id,
+            username: joiningUser.username,
+            firstName: joiningUser.firstName,
+            lastName: joiningUser.lastName,
+            profileImageUrl: joiningUser.profileImageUrl,
+          },
+        });
+
+        // Create persistent notification
+        await storage.createNotification({
+          userId,
+          type: 'match_found',
+          title: 'Match Found!',
+          message: `${joiningName} matched with your session`,
+          read: 0,
+          relatedUserId: joiningUser.id,
+          sessionId,
+        });
+      }
+    } catch (error) {
+      console.error('[SessionManager] Error notifying match found:', error);
+    }
+  }
+
   // Destroy the manager (for cleanup)
   destroy() {
     if (this.cleanupInterval) {
