@@ -66,6 +66,9 @@ export interface IStorage {
   getUnreadCount(userId: string): Promise<number>;
   markAsRead(notificationId: string): Promise<void>;
   markAllAsRead(userId: string): Promise<void>;
+
+  // Session watchdog operations
+  getExpirableSessions(gracePeriodMinutes: number): Promise<ScheduledSession[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -337,7 +340,8 @@ export class DatabaseStorage implements IStorage {
         and(
           gte(scheduledSessions.startAt, startDate),
           lte(scheduledSessions.startAt, endDate),
-          ne(scheduledSessions.status, 'cancelled')
+          ne(scheduledSessions.status, 'cancelled'),
+          ne(scheduledSessions.status, 'expired')
         )
       )
       .orderBy(scheduledSessions.startAt);
@@ -364,7 +368,8 @@ export class DatabaseStorage implements IStorage {
         .where(
           and(
             eq(scheduledSessions.hostId, userId),
-            ne(scheduledSessions.status, 'cancelled')
+            ne(scheduledSessions.status, 'cancelled'),
+            ne(scheduledSessions.status, 'expired')
           )
         )
         .orderBy(desc(scheduledSessions.startAt));
@@ -384,7 +389,8 @@ export class DatabaseStorage implements IStorage {
             eq(scheduledSessions.hostId, userId),
             sessionIdConditions!
           ),
-          ne(scheduledSessions.status, 'cancelled')
+          ne(scheduledSessions.status, 'cancelled'),
+          ne(scheduledSessions.status, 'expired')
         )
       )
       .orderBy(desc(scheduledSessions.startAt));
@@ -581,6 +587,37 @@ export class DatabaseStorage implements IStorage {
       );
 
     return overlappingSessions.length > 0;
+  }
+
+  async getExpirableSessions(gracePeriodMinutes: number = 5): Promise<ScheduledSession[]> {
+    const now = new Date();
+    const graceThreshold = new Date(now.getTime() - gracePeriodMinutes * 60 * 1000);
+
+    // Find sessions that:
+    // 1. Started more than gracePeriodMinutes ago (startAt < graceThreshold)
+    // 2. Haven't ended yet (endAt > now)
+    // 3. Are still in 'scheduled' status (waiting for others to join)
+    const expirableSessions = await db
+      .select()
+      .from(scheduledSessions)
+      .where(
+        and(
+          lte(scheduledSessions.startAt, graceThreshold),
+          gte(scheduledSessions.endAt, now),
+          eq(scheduledSessions.status, 'scheduled')
+        )
+      );
+
+    // For each session, check if it has only 1 participant (the host waiting alone)
+    const result: ScheduledSession[] = [];
+    for (const session of expirableSessions) {
+      const participantCount = await this.getParticipantCount(session.id);
+      if (participantCount <= 1) {
+        result.push(session);
+      }
+    }
+
+    return result;
   }
 }
 

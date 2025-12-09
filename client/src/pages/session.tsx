@@ -17,8 +17,9 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { LiveKitSession } from "@/components/LiveKitSession";
 import { format, formatDistanceToNow, isPast, isBefore } from "date-fns";
+import { useSessionClient } from "@/contexts/session-client-context";
 
-type SessionStatus = 'pre-session' | 'active' | 'ended' | 'post-session';
+type SessionStatus = 'pre-session' | 'active' | 'ended' | 'post-session' | 'expired';
 
 interface ScheduledSessionData {
   id: string;
@@ -50,6 +51,7 @@ export default function Session() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { onEvent } = useSessionClient();
 
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('pre-session');
   const [sessionDuration, setSessionDuration] = useState(0);
@@ -59,6 +61,22 @@ export default function Session() {
   const [activeParticipants, setActiveParticipants] = useState(0);
   const sessionStartRef = useRef<Date | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  // Listen for session-expired events from the server
+  useEffect(() => {
+    const unsubscribe = onEvent((event) => {
+      if (event.type === 'session-expired' && event.sessionId === params.sessionId) {
+        console.log('[Session] Session expired - no one joined');
+        setSessionStatus('expired');
+        toast({
+          title: "Session Expired",
+          description: "No one joined within 5 minutes. Try booking another time!",
+          variant: "destructive",
+        });
+      }
+    });
+    return unsubscribe;
+  }, [onEvent, params.sessionId, toast]);
 
   // Fetch scheduled session details
   const { data: sessionData, isLoading: sessionLoading } = useQuery<ScheduledSessionData>({
@@ -288,6 +306,33 @@ export default function Session() {
             <Button onClick={() => setLocation('/home')} data-testid="button-go-home">
               Go to Home
             </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Session expired - no one joined
+  if (sessionStatus === 'expired') {
+    return (
+      <div className="flex items-center justify-center min-h-screen p-4" data-testid="session-expired">
+        <Card className="max-w-md w-full">
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl">Session Expired</CardTitle>
+            <CardDescription>No one joined within 5 minutes of the start time.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-center text-muted-foreground">
+              Don't worry! You can book another session and try again.
+            </p>
+            <div className="flex justify-center gap-2">
+              <Button onClick={() => setLocation('/home')} variant="outline" data-testid="button-go-home">
+                Go to Home
+              </Button>
+              <Button onClick={() => setLocation('/calendar')} data-testid="button-book-another">
+                Book Another Session
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>

@@ -51,11 +51,15 @@ class SessionManager {
   private eventCallback: EventCallback | null = null;
 
   private readonly HEARTBEAT_TIMEOUT = 30000; // 30 seconds
+  private readonly SESSION_GRACE_PERIOD = 5; // 5 minutes grace period for late joiners
   private cleanupInterval: NodeJS.Timeout | null = null;
+  private sessionWatchdogInterval: NodeJS.Timeout | null = null;
 
   constructor() {
     // Start cleanup interval
     this.cleanupInterval = setInterval(() => this.cleanupStaleConnections(), 10000);
+    // Start session watchdog to expire lonely sessions (every 30 seconds)
+    this.sessionWatchdogInterval = setInterval(() => this.expireLonelySessions(), 30000);
   }
 
   setEventCallback(callback: EventCallback) {
@@ -929,10 +933,74 @@ class SessionManager {
     }
   }
 
+  // Expire sessions where no one joined within grace period
+  private async expireLonelySessions() {
+    try {
+      const expirableSessions = await storage.getExpirableSessions(this.SESSION_GRACE_PERIOD);
+      
+      for (const session of expirableSessions) {
+        console.log(`[SessionManager] Expiring lonely session ${session.id} - no one joined within ${this.SESSION_GRACE_PERIOD} minutes`);
+        
+        // Update session status to 'expired' in database
+        await storage.updateScheduledSessionStatus(session.id, 'expired');
+        
+        // Get participants to notify (should be just the host)
+        const participants = await storage.getSessionParticipants(session.id);
+        
+        // Collect unique user IDs to notify - include host explicitly
+        const userIdsToNotify = new Set<string>();
+        userIdsToNotify.add(session.hostId); // Always notify the host
+        for (const participant of participants) {
+          userIdsToNotify.add(participant.id);
+        }
+        
+        // Create notification for each user
+        const userIdsArray = Array.from(userIdsToNotify);
+        for (const userId of userIdsArray) {
+          // Emit real-time event if user is connected
+          this.emit(userId, {
+            type: 'session-expired',
+            sessionId: session.id,
+            reason: 'no-participants',
+          });
+          
+          // Create persistent notification
+          await storage.createNotification({
+            userId,
+            type: 'session_expired',
+            title: 'Session Expired',
+            message: 'No one joined your session within 5 minutes. Try booking another time!',
+            read: 0,
+            sessionId: session.id,
+          });
+        }
+        
+        // Clean up room from memory if exists
+        const room = this.roomSessions.get(session.id);
+        if (room) {
+          for (const participantId of room.participantIds) {
+            const userSession = this.userSessions.get(participantId);
+            if (userSession) {
+              userSession.state = 'idle';
+              userSession.sessionId = undefined;
+              userSession.sessionType = undefined;
+            }
+          }
+          this.roomSessions.delete(session.id);
+        }
+      }
+    } catch (error) {
+      console.error('[SessionManager] Error expiring lonely sessions:', error);
+    }
+  }
+
   // Destroy the manager (for cleanup)
   destroy() {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
+    }
+    if (this.sessionWatchdogInterval) {
+      clearInterval(this.sessionWatchdogInterval);
     }
   }
 }

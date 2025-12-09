@@ -83,6 +83,7 @@ A Focusmate-style focused work session web app with calendar-based booking. User
 ## WebSocket Events (via River RPC)
 - `matched` - Session partner found
 - `partner-disconnected` - Partner left session
+- `session-expired` - Session expired (no one joined within 5 minutes of start)
 - `invite-received` - Friend invite received
 - `invite-response` - Friend accepted/declined invite
 - `signal` - WebRTC signaling (legacy, preserved for compatibility)
@@ -140,3 +141,9 @@ The app runs on port 5000.
   - Active sessions appear in calendar's upcoming sidebar with green badge
   - Calendar auto-scrolls to current hour (or next hour if past :50)
   - Sticky header row - only time slots scroll, day headers stay visible
+- **Session auto-expire feature**:
+  - If no one joins a session within 5 minutes of the start time, it automatically expires
+  - Session status is updated to 'expired' in the database
+  - Host receives real-time WebSocket notification and persistent notification
+  - Session page shows friendly "Session Expired" screen with option to book another
+  - Expired sessions are excluded from calendar and upcoming sessions list

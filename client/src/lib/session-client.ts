@@ -15,7 +15,7 @@ export interface ParticipantInfo {
 }
 
 export interface SessionEvent {
-  type: 'matched' | 'partner-disconnected' | 'invite-received' | 'invite-response' | 'signal' | 'participant-joined' | 'participant-left' | 'room-joined' | 'room-ended';
+  type: 'matched' | 'partner-disconnected' | 'invite-received' | 'invite-response' | 'signal' | 'participant-joined' | 'participant-left' | 'room-joined' | 'room-ended' | 'session-expired';
   sessionId?: string;
   partner?: PartnerInfo;
   inviter?: PartnerInfo;
@@ -31,6 +31,7 @@ export interface SessionEvent {
   participants?: ParticipantInfo[];
   roomId?: string;
   roomName?: string;
+  reason?: 'no-participants';
 }
 
 type EventCallback = (event: SessionEvent) => void;
