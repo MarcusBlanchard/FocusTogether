@@ -107,11 +107,35 @@ export default function CalendarPage() {
   const [description, setDescription] = useState("");
   
   // Filter state - these determine the booking parameters (non-editable in dialog)
-  const [filterSessionType, setFilterSessionType] = useState<'solo' | 'group'>('solo');
-  const [filterPreference, setFilterPreference] = useState<BookingPreference>('desk');
-  const [filterDuration, setFilterDuration] = useState<SessionDuration>(60);
+  // Initialize from localStorage if available
+  const [filterSessionType, setFilterSessionType] = useState<'solo' | 'group'>(() => {
+    const saved = localStorage.getItem('calendar-filter-sessionType');
+    return (saved === 'solo' || saved === 'group') ? saved : 'solo';
+  });
+  const [filterPreference, setFilterPreference] = useState<BookingPreference>(() => {
+    const saved = localStorage.getItem('calendar-filter-preference');
+    return (saved === 'desk' || saved === 'active' || saved === 'any') ? saved : 'desk';
+  });
+  const [filterDuration, setFilterDuration] = useState<SessionDuration>(() => {
+    const saved = localStorage.getItem('calendar-filter-duration');
+    const parsed = saved ? parseInt(saved, 10) : 60;
+    return (parsed === 20 || parsed === 40 || parsed === 60 || parsed === 120) ? parsed : 60;
+  });
 
-  // Update filter defaults when URL changes
+  // Save filters to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('calendar-filter-sessionType', filterSessionType);
+  }, [filterSessionType]);
+  
+  useEffect(() => {
+    localStorage.setItem('calendar-filter-preference', filterPreference);
+  }, [filterPreference]);
+  
+  useEffect(() => {
+    localStorage.setItem('calendar-filter-duration', filterDuration.toString());
+  }, [filterDuration]);
+
+  // Update filter defaults when URL changes (URL takes priority over localStorage)
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
     const urlSessionType = searchParams.get('type') as 'solo' | 'group' | null;
