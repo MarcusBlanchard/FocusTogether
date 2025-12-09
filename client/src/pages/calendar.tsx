@@ -275,11 +275,12 @@ export default function CalendarPage() {
     const startAt = new Date(selectedSlot.day);
     startAt.setHours(selectedSlot.hour, selectedSlot.minute, 0, 0);
 
-    // Validate booking is in the future
-    if (startAt <= new Date()) {
+    // Validate booking is within grace period (allow up to 5 min after start)
+    const gracePeriodMs = 5 * 60 * 1000; // 5 minutes
+    if (startAt.getTime() + gracePeriodMs < Date.now()) {
       toast({
         title: "Error",
-        description: "Cannot schedule sessions in the past",
+        description: "Cannot schedule sessions more than 5 minutes in the past",
         variant: "destructive",
       });
       return;

@@ -350,8 +350,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (isNaN(start.getTime())) {
         return res.status(400).json({ message: "Invalid date format" });
       }
-      if (start < new Date()) {
-        return res.status(400).json({ message: "Cannot schedule sessions in the past" });
+      // Allow booking up to 5 minutes after start time (grace period for late joiners)
+      const gracePeriodMs = 5 * 60 * 1000; // 5 minutes
+      if (start.getTime() + gracePeriodMs < Date.now()) {
+        return res.status(400).json({ message: "Cannot schedule sessions more than 5 minutes in the past" });
       }
 
       // Calculate end time based on duration
