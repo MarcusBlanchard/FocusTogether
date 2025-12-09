@@ -59,7 +59,8 @@ export default function Home() {
       ) {
         console.log(`[Home] ${eventType} event received, refreshing session list`);
         queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
-        queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
+        queryClient.invalidateQueries({ queryKey: ['/api', 'notifications'] });
+        queryClient.invalidateQueries({ queryKey: ['/api', 'notifications', 'unread-count'] });
       }
     });
     return unsubscribe;

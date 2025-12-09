@@ -163,7 +163,8 @@ export default function CalendarPage() {
         console.log(`[Calendar] ${eventType} event received, refreshing session list`);
         queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions'] });
         queryClient.invalidateQueries({ queryKey: ['/api/scheduled-sessions/my-sessions'] });
-        queryClient.invalidateQueries({ queryKey: ['/api/notifications'] });
+        queryClient.invalidateQueries({ queryKey: ['/api', 'notifications'] });
+        queryClient.invalidateQueries({ queryKey: ['/api', 'notifications', 'unread-count'] });
       }
     });
     return unsubscribe;
