@@ -395,6 +395,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         start,
         durationMinutes,
         bookingPreference,
+        sessionType,
         userId
       );
 

@@ -50,7 +50,7 @@ export interface IStorage {
   getUpcomingSessions(startDate: Date, endDate: Date): Promise<ScheduledSession[]>;
   getUserScheduledSessions(userId: string): Promise<ScheduledSession[]>;
   getOccupancyCount(startAt: Date, endAt: Date): Promise<number>;
-  findMatchingBooking(startAt: Date, durationMinutes: number, bookingPreference: string, excludeUserId: string): Promise<ScheduledSession | undefined>;
+  findMatchingBooking(startAt: Date, durationMinutes: number, bookingPreference: string, sessionType: string, excludeUserId: string): Promise<ScheduledSession | undefined>;
   checkUserOverlap(userId: string, startAt: Date, endAt: Date): Promise<boolean>;
 
   // Scheduled session participant operations
@@ -290,46 +290,46 @@ export class DatabaseStorage implements IStorage {
     startAt: Date,
     durationMinutes: number,
     bookingPreference: string,
+    sessionType: string,
     excludeUserId: string
   ): Promise<ScheduledSession | undefined> {
-    // Calculate end time
-    const endAt = new Date(startAt.getTime() + durationMinutes * 60000);
-
     // Build preference matching condition - STRICT matching only
     // Desk only matches Desk, Active only matches Active, Any only matches Any
     // No cross-matching, no fallback
     const preferenceCondition = eq(scheduledSessions.bookingPreference, bookingPreference);
 
-    // Find sessions with matching:
+    // Find ALL sessions with matching criteria (oldest first for fairness):
     // - Same start time
     // - Same duration
+    // - Same session type (solo/group)
     // - Compatible preference
-    // - Not cancelled
-    // - Not full (has space)
+    // - Not cancelled or expired
     // - Not created by this user
-    const [matchingSession] = await db
+    const matchingSessions = await db
       .select()
       .from(scheduledSessions)
       .where(
         and(
           eq(scheduledSessions.startAt, startAt),
           eq(scheduledSessions.durationMinutes, durationMinutes),
+          eq(scheduledSessions.sessionType, sessionType),
           preferenceCondition!,
           ne(scheduledSessions.status, 'cancelled'),
+          ne(scheduledSessions.status, 'expired'),
           ne(scheduledSessions.hostId, excludeUserId)
         )
       )
-      .limit(1);
+      .orderBy(scheduledSessions.createdAt); // Oldest first
 
-    if (!matchingSession) return undefined;
-
-    // Check if session has space
-    const participantCount = await this.getParticipantCount(matchingSession.id);
-    if (participantCount >= matchingSession.capacity) {
-      return undefined;
+    // Check each session for available space
+    for (const session of matchingSessions) {
+      const participantCount = await this.getParticipantCount(session.id);
+      if (participantCount < session.capacity) {
+        return session; // Found a session with space!
+      }
     }
 
-    return matchingSession;
+    return undefined; // No sessions with available space
   }
 
   async getUpcomingSessions(startDate: Date, endDate: Date): Promise<ScheduledSession[]> {
