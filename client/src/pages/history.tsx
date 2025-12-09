@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, UserPlus, Clock, Calendar, Check, Loader2 } from "lucide-react";
+import { ArrowLeft, UserPlus, Clock, Calendar, Check, Loader2, User } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { format, formatDistanceToNow } from "date-fns";
@@ -107,7 +107,23 @@ export default function History() {
           <Button variant="ghost" size="icon" onClick={() => setLocation("/")} data-testid="button-back">
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <h1 className="text-2xl font-semibold">Session History</h1>
+          <h1 className="text-2xl font-semibold flex-1">Session History</h1>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setLocation("/profile")}
+            className="rounded-full"
+            data-testid="button-profile"
+          >
+            <Avatar className="h-9 w-9">
+              <AvatarImage src={user?.profileImageUrl || undefined} />
+              <AvatarFallback>
+                {user?.firstName && user?.lastName
+                  ? `${user.firstName[0]}${user.lastName[0]}`
+                  : user?.username?.[0]?.toUpperCase() || "?"}
+              </AvatarFallback>
+            </Avatar>
+          </Button>
         </div>
       </header>
 

@@ -6,6 +6,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -158,6 +159,22 @@ export default function FreeRooms() {
           </div>
           
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setLocation("/profile")}
+              className="rounded-full"
+              data-testid="button-profile"
+            >
+              <Avatar className="h-9 w-9">
+                <AvatarImage src={user?.profileImageUrl || undefined} />
+                <AvatarFallback>
+                  {user?.firstName && user?.lastName
+                    ? `${user.firstName[0]}${user.lastName[0]}`
+                    : user?.username?.[0]?.toUpperCase() || "?"}
+                </AvatarFallback>
+              </Avatar>
+            </Button>
             <Button
               variant="ghost"
               size="icon"

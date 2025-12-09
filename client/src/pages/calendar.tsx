@@ -371,7 +371,23 @@ export default function CalendarPage() {
           >
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <h1 className="text-2xl font-semibold">Calendar & Schedule</h1>
+          <h1 className="text-2xl font-semibold flex-1">Calendar & Schedule</h1>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setLocation("/profile")}
+            className="rounded-full"
+            data-testid="button-profile"
+          >
+            <Avatar className="h-9 w-9">
+              <AvatarImage src={user?.profileImageUrl || undefined} />
+              <AvatarFallback>
+                {user?.firstName && user?.lastName
+                  ? `${user.firstName[0]}${user.lastName[0]}`
+                  : user?.username?.[0]?.toUpperCase() || "?"}
+              </AvatarFallback>
+            </Avatar>
+          </Button>
         </div>
       </header>
 
