@@ -344,11 +344,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUserScheduledSessions(userId: string): Promise<ScheduledSession[]> {
-    // Get sessions where user is either host or participant
+    // Get sessions where user is an ACTIVE participant (status = 'joined')
     const participations = await db
       .select()
       .from(scheduledSessionParticipants)
-      .where(eq(scheduledSessionParticipants.userId, userId));
+      .where(
+        and(
+          eq(scheduledSessionParticipants.userId, userId),
+          eq(scheduledSessionParticipants.status, 'joined')
+        )
+      );
     
     const sessionIds = participations.map(p => p.sessionId);
     
