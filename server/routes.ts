@@ -1,10 +1,70 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
+import { storage, type IStorage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { setupRiverServer } from "./river-server";
 import { sessionManager } from "./session-manager";
 import { AccessToken } from "livekit-server-sdk";
+import type { ScheduledSession } from "@shared/schema";
+
+// Helper function to try re-matching remaining participants with others in the pool
+async function tryRematchSession(
+  session: ScheduledSession, 
+  sessionId: string, 
+  cancellingUserId: string, 
+  storage: IStorage
+): Promise<void> {
+  try {
+    // Find another compatible session to match with
+    const matchingSession = await storage.findMatchingBooking(
+      new Date(session.startAt),
+      session.durationMinutes,
+      session.bookingPreference,
+      session.sessionType,
+      session.hostId // Exclude the current session's host
+    );
+
+    if (matchingSession && matchingSession.id !== sessionId) {
+      // Get remaining participants from current session
+      const remainingParticipants = await storage.getSessionParticipants(sessionId);
+      
+      // Move all remaining participants to the matched session
+      for (const participant of remainingParticipants) {
+        // Check if there's still space in the matched session
+        const matchedCount = await storage.getParticipantCount(matchingSession.id);
+        if (matchedCount >= matchingSession.capacity) break;
+        
+        // Add participant to matched session
+        await storage.addParticipant({
+          sessionId: matchingSession.id,
+          userId: participant.id,
+          role: 'participant',
+          status: 'joined',
+        });
+        
+        // Remove from current session
+        await storage.removeParticipant(sessionId, participant.id);
+      }
+      
+      // Update matched session status if now full
+      const newCount = await storage.getParticipantCount(matchingSession.id);
+      if (newCount >= 2) {
+        await storage.updateSessionStatus(matchingSession.id, 'matched');
+      }
+      
+      // Cancel the now-empty original session
+      const remainingCount = await storage.getParticipantCount(sessionId);
+      if (remainingCount === 0) {
+        await storage.updateSessionStatus(sessionId, 'cancelled');
+      }
+      
+      console.log(`[Rematch] Moved participants from session ${sessionId} to ${matchingSession.id}`);
+    }
+  } catch (error) {
+    console.error('[Rematch] Error during re-matching:', error);
+    // Don't throw - re-matching failure shouldn't break the cancel operation
+  }
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
@@ -617,6 +677,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (session.status === 'matched') {
             await storage.updateSessionStatus(sessionId, 'scheduled');
           }
+          
+          // Try to re-match remaining participants with others in the pool
+          await tryRematchSession(session, sessionId, userId, storage);
         }
       } else {
         // Non-host participant, just leave
@@ -625,6 +688,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (session.status === 'matched') {
           await storage.updateSessionStatus(sessionId, 'scheduled');
         }
+        
+        // Try to re-match remaining participants with others in the pool
+        await tryRematchSession(session, sessionId, userId, storage);
       }
 
       res.json({ success: true, message: "Session cancelled successfully" });
