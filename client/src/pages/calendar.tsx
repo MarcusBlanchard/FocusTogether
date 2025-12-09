@@ -17,7 +17,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useSessionClient } from "@/contexts/session-client-context";
-import { format, startOfWeek, addDays, addWeeks, isSameDay, parseISO, differenceInMinutes } from "date-fns";
+import { format, startOfWeek, addDays, addWeeks, isSameDay, parseISO, differenceInMinutes, startOfDay } from "date-fns";
 
 type BookingPreference = 'desk' | 'active' | 'any';
 type SessionDuration = 20 | 40 | 60 | 120;
@@ -94,8 +94,9 @@ export default function CalendarPage() {
   const calendarScrollRef = useRef<HTMLDivElement>(null);
   
   // Start from today (not beginning of week) - no older days visible
+  // Use startOfDay to ensure we fetch all sessions for today, including ones that already started
   const [currentWeekStart, setCurrentWeekStart] = useState<Date>(
-    new Date()
+    startOfDay(new Date())
   );
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<{ day: Date; hour: number; minute: number } | null>(null);
