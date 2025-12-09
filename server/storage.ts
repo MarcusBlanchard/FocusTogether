@@ -576,6 +576,7 @@ export class DatabaseStorage implements IStorage {
         and(
           or(...userSessionIds.map(s => eq(scheduledSessions.id, s.sessionId))),
           ne(scheduledSessions.status, 'cancelled'), // Exclude cancelled sessions
+          ne(scheduledSessions.status, 'expired'),   // Exclude expired sessions (no-shows)
           or(
             // Session starts before requested end and ends after requested start (overlap)
             and(
