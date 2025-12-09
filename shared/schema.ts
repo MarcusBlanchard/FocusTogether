@@ -69,7 +69,7 @@ export const scheduledSessions = pgTable("scheduled_sessions", {
   capacity: integer("capacity").notNull().default(2), // 2 for solo, up to 5 for group
   startAt: timestamp("start_at").notNull(),
   endAt: timestamp("end_at").notNull(),
-  status: varchar("status").notNull().default('scheduled'), // 'scheduled', 'active', 'completed', 'cancelled'
+  status: varchar("status").notNull().default('scheduled'), // 'scheduled', 'matched', 'active', 'completed', 'cancelled', 'expired'
   focusSessionId: uuid("focus_session_id").references(() => focusSessions.id), // links to completed session
   createdAt: timestamp("created_at").defaultNow(),
 });

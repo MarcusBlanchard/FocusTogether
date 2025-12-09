@@ -272,6 +272,12 @@ export const RoomEndedEvent = Type.Object({
   sessionId: Type.String(),
 });
 
+export const SessionExpiredEvent = Type.Object({
+  type: Type.Literal('session-expired'),
+  sessionId: Type.String(),
+  reason: Type.Literal('no-participants'),
+});
+
 export const InviteReceivedEvent = Type.Object({
   type: Type.Literal('invite-received'),
   inviter: UserInfo,
@@ -296,6 +302,7 @@ export const SessionEvent = Type.Union([
   ParticipantLeftEvent,
   RoomJoinedEvent,
   RoomEndedEvent,
+  SessionExpiredEvent,
   InviteReceivedEvent,
   InviteResponseEvent,
   SignalReceivedEvent,
