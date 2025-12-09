@@ -688,7 +688,11 @@ export default function CalendarPage() {
                             >
                               {/* 15-minute sub-slots */}
                               {[0, 15, 30, 45].map((minute, minuteIndex) => {
-                                const isPast = new Date(day).setHours(hour, minute, 0, 0) < new Date().getTime();
+                                // Allow 5-minute grace period for late bookings
+                                const slotTime = new Date(day);
+                                slotTime.setHours(hour, minute, 0, 0);
+                                const gracePeriodMs = 5 * 60 * 1000; // 5 minutes
+                                const isPast = slotTime.getTime() + gracePeriodMs < Date.now();
                                 
                                 // Check if the CURRENT USER has ANY session that overlaps with this 15-min slot
                                 // Uses unfiltered mySessions to prevent double-booking regardless of current filter view
