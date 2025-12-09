@@ -436,6 +436,38 @@ export class DatabaseStorage implements IStorage {
 
   // Scheduled session participant operations
   async addParticipant(participantData: InsertScheduledSessionParticipant): Promise<ScheduledSessionParticipant> {
+    // Check if participant record already exists (might be status='left' from a previous cancel)
+    const existing = await db
+      .select()
+      .from(scheduledSessionParticipants)
+      .where(
+        and(
+          eq(scheduledSessionParticipants.sessionId, participantData.sessionId),
+          eq(scheduledSessionParticipants.userId, participantData.userId)
+        )
+      );
+
+    if (existing.length > 0) {
+      // Update existing record to re-join
+      const [participant] = await db
+        .update(scheduledSessionParticipants)
+        .set({ 
+          status: participantData.status || 'joined', 
+          role: participantData.role,
+          leftAt: null,
+          joinedAt: new Date()
+        })
+        .where(
+          and(
+            eq(scheduledSessionParticipants.sessionId, participantData.sessionId),
+            eq(scheduledSessionParticipants.userId, participantData.userId)
+          )
+        )
+        .returning();
+      return participant;
+    }
+
+    // Insert new record
     const [participant] = await db
       .insert(scheduledSessionParticipants)
       .values(participantData)
