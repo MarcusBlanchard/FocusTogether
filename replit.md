@@ -151,3 +151,12 @@ The app runs on port 5000.
   - Host receives real-time WebSocket notification and persistent notification
   - Session page shows friendly "Session Expired" screen with option to book another
   - Expired sessions are excluded from calendar and upcoming sessions list
+- **Stacked profile pictures for Group Mode**:
+  - StackedAvatars component displays overlapping profile pictures (33% overlap)
+  - Home page upcoming sessions show stacked avatars for group sessions
+  - Calendar sidebar shows stacked avatars for group sessions
+  - Match confirmation popup shows all participants for group sessions
+- **Session complete and rebooking fix**:
+  - When user clicks "End Session", participant status is updated to 'left' in database
+  - Session reverts to 'scheduled' status when under capacity, allowing rematching
+  - Users can now leave and rebook to rejoin existing waiting sessions

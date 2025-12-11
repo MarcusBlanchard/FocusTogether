@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Calendar as CalendarIcon, Clock, Users, Monitor, Activity, Shuffle, X } from "lucide-react";
 import { NotificationBell } from "@/components/notification-bell";
+import { StackedAvatars } from "@/components/stacked-avatars";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -496,18 +497,13 @@ export default function CalendarPage() {
                                 {format(startTime, "h:mm a")}
                               </div>
                               {session.participants && session.participants.length > 1 && (
-                                <div className="flex items-center gap-1 mt-1">
+                                <div className="flex items-center gap-2 mt-1">
                                   <span className="text-xs text-muted-foreground">With:</span>
-                                  <div className="flex -space-x-2">
-                                    {session.participants.filter(p => p.id !== user?.id).slice(0, 3).map((p) => (
-                                      <Avatar key={p.id} className="h-6 w-6 border-2 border-background">
-                                        <AvatarImage src={p.profileImageUrl || undefined} />
-                                        <AvatarFallback className="text-[10px]">
-                                          {p.firstName?.[0]}{p.lastName?.[0]}
-                                        </AvatarFallback>
-                                      </Avatar>
-                                    ))}
-                                  </div>
+                                  <StackedAvatars 
+                                    participants={session.participants}
+                                    size="sm"
+                                    excludeUserId={user?.id}
+                                  />
                                 </div>
                               )}
                               <div className="flex gap-2 mt-2">
@@ -908,7 +904,24 @@ export default function CalendarPage() {
               <AlertDialogTitle className="text-center">You've been matched!</AlertDialogTitle>
               <AlertDialogDescription className="text-center">
                 <div className="py-6 flex flex-col items-center gap-4">
-                  {matchConfirmation?.matchedUser && (
+                  {matchConfirmation?.session?.sessionType === 'group' && matchConfirmation?.session?.participants && matchConfirmation.session.participants.length > 0 ? (
+                    <>
+                      <div className="flex justify-center">
+                        <StackedAvatars 
+                          participants={matchConfirmation.session.participants}
+                          size="lg"
+                          excludeUserId={user?.id}
+                        />
+                      </div>
+                      <div className="text-lg font-semibold text-foreground">
+                        {matchConfirmation.session.participants.filter(p => p.id !== user?.id).length} group member{matchConfirmation.session.participants.filter(p => p.id !== user?.id).length !== 1 ? 's' : ''}
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        Your group session at{" "}
+                        {format(parseISO(matchConfirmation.session.startAt), "h:mm a 'on' EEE, MMM d")}
+                      </div>
+                    </>
+                  ) : matchConfirmation?.matchedUser && (
                     <>
                       <Avatar className="h-20 w-20 border-4 border-primary">
                         <AvatarImage src={matchConfirmation.matchedUser.profileImageUrl || undefined} />

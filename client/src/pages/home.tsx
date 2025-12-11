@@ -18,6 +18,15 @@ import { format, addDays, startOfDay, endOfDay } from "date-fns";
 import { NotificationBell } from "@/components/notification-bell";
 import { useSessionClient } from "@/contexts/session-client-context";
 import { queryClient } from "@/lib/queryClient";
+import { StackedAvatars } from "@/components/stacked-avatars";
+
+interface Participant {
+  id: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  profileImageUrl?: string | null;
+  username?: string | null;
+}
 
 interface UserProfile {
   id: string;
@@ -39,6 +48,7 @@ interface ScheduledSession {
   bookingPreference: string;
   durationMinutes: number;
   status: string;
+  participants?: Participant[];
 }
 
 export default function Home() {
@@ -255,16 +265,25 @@ export default function Home() {
                         </span>
                       </div>
                     </div>
-                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                      {active && (
-                        <Badge className="bg-green-500 hover:bg-green-600 text-white" data-testid="badge-active">
-                          Active
-                        </Badge>
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      {session.sessionType === 'group' && session.participants && session.participants.length > 0 && (
+                        <StackedAvatars 
+                          participants={session.participants} 
+                          size="sm" 
+                          excludeUserId={user?.id}
+                        />
                       )}
-                      <Badge variant="outline">
-                        {session.sessionType === 'solo' ? <User className="h-3 w-3 mr-1" /> : <UsersRound className="h-3 w-3 mr-1" />}
-                        {session.sessionType}
-                      </Badge>
+                      <div className="flex flex-col items-end gap-1">
+                        {active && (
+                          <Badge className="bg-green-500 hover:bg-green-600 text-white" data-testid="badge-active">
+                            Active
+                          </Badge>
+                        )}
+                        <Badge variant="outline">
+                          {session.sessionType === 'solo' ? <User className="h-3 w-3 mr-1" /> : <UsersRound className="h-3 w-3 mr-1" />}
+                          {session.sessionType}
+                        </Badge>
+                      </div>
                     </div>
                   </div>
                 );
