@@ -349,6 +349,7 @@ export class DatabaseStorage implements IStorage {
 
   async getUserScheduledSessions(userId: string): Promise<ScheduledSession[]> {
     // Get sessions where user is an ACTIVE participant (status = 'joined')
+    // This is the ONLY criteria - being the host doesn't matter if you've left
     const participations = await db
       .select()
       .from(scheduledSessionParticipants)
@@ -361,18 +362,9 @@ export class DatabaseStorage implements IStorage {
     
     const sessionIds = participations.map(p => p.sessionId);
     
+    // If user has no active participations, return empty list
     if (sessionIds.length === 0) {
-      return await db
-        .select()
-        .from(scheduledSessions)
-        .where(
-          and(
-            eq(scheduledSessions.hostId, userId),
-            ne(scheduledSessions.status, 'cancelled'),
-            ne(scheduledSessions.status, 'expired')
-          )
-        )
-        .orderBy(desc(scheduledSessions.startAt));
+      return [];
     }
     
     // Build OR condition properly - handle single ID case
@@ -385,10 +377,7 @@ export class DatabaseStorage implements IStorage {
       .from(scheduledSessions)
       .where(
         and(
-          or(
-            eq(scheduledSessions.hostId, userId),
-            sessionIdConditions!
-          ),
+          sessionIdConditions!,
           ne(scheduledSessions.status, 'cancelled'),
           ne(scheduledSessions.status, 'expired')
         )
