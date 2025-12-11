@@ -825,6 +825,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await sessionManager.leaveRoom(userId, sessionId);
       console.log(`[Session Complete] User ${userId} removed from room ${sessionId}`);
       
+      // Update participant status in database to 'left' so they can rebook
+      await storage.removeParticipant(sessionId, userId);
+      console.log(`[Session Complete] User ${userId} marked as left in database`);
+      
+      // Check if session should revert to 'scheduled' status
+      const session = await storage.getScheduledSession(sessionId);
+      if (session && session.status === 'matched') {
+        const remainingCount = await storage.getParticipantCount(sessionId);
+        if (remainingCount < session.capacity) {
+          await storage.updateSessionStatus(sessionId, 'scheduled');
+          console.log(`[Session Complete] Session ${sessionId} reverted to scheduled (${remainingCount} participants remaining)`);
+        }
+      }
+      
       res.json({ success: true });
     } catch (error) {
       console.error("Error logging session completion:", error);
