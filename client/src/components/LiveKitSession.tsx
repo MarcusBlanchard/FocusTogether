@@ -545,6 +545,9 @@ export function LiveKitSession({
       connect={true}
       video={true}
       audio={true}
+      options={{
+        adaptiveStream: false,
+      }}
       onConnected={handleConnected}
       onError={handleError}
       data-lk-theme="default"
