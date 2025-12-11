@@ -779,7 +779,7 @@ export default function CalendarPage() {
                                     }}
                                     data-testid={`session-${session.id}`}
                                   >
-                                    {/* Profile picture centered at top of session */}
+                                    {/* Profile pictures centered at top of session */}
                                     <div
                                       className="absolute pointer-events-none"
                                       style={{ 
@@ -789,19 +789,40 @@ export default function CalendarPage() {
                                         zIndex: 10 
                                       }}
                                     >
-                                      <TooltipProvider>
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            <Avatar className="h-10 w-10 border-2 border-background shadow-sm">
-                                              <AvatarImage src={host?.profileImageUrl || undefined} />
-                                              <AvatarFallback className="text-sm font-medium">{initials}</AvatarFallback>
-                                            </Avatar>
-                                          </TooltipTrigger>
-                                          <TooltipContent side="top">
-                                            <p className="text-xs">{displayName}</p>
-                                          </TooltipContent>
-                                        </Tooltip>
-                                      </TooltipProvider>
+                                      {session.sessionType === 'group' && session.participants && session.participants.length > 1 ? (
+                                        <TooltipProvider>
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <div>
+                                                <StackedAvatars 
+                                                  participants={session.participants}
+                                                  size="md"
+                                                  maxDisplay={4}
+                                                />
+                                              </div>
+                                            </TooltipTrigger>
+                                            <TooltipContent side="top">
+                                              <p className="text-xs">
+                                                {session.participants.length} participants
+                                              </p>
+                                            </TooltipContent>
+                                          </Tooltip>
+                                        </TooltipProvider>
+                                      ) : (
+                                        <TooltipProvider>
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <Avatar className="h-10 w-10 border-2 border-background shadow-sm">
+                                                <AvatarImage src={host?.profileImageUrl || undefined} />
+                                                <AvatarFallback className="text-sm font-medium">{initials}</AvatarFallback>
+                                              </Avatar>
+                                            </TooltipTrigger>
+                                            <TooltipContent side="top">
+                                              <p className="text-xs">{displayName}</p>
+                                            </TooltipContent>
+                                          </Tooltip>
+                                        </TooltipProvider>
+                                      )}
                                     </div>
                                   </div>
                                 );
