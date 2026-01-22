@@ -846,6 +846,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Distraction alert endpoint
+  app.post('/api/sessions/distraction-alert', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { sessionId, type, idleSeconds, apps } = req.body;
+
+      if (!sessionId || !type) {
+        return res.status(400).json({ message: "Missing required fields: sessionId, type" });
+      }
+
+      // Verify user is a participant in this session
+      const participants = await storage.getSessionParticipants(sessionId);
+      const isParticipant = participants.some(p => p.id === userId);
+      
+      if (!isParticipant) {
+        return res.status(403).json({ message: "You are not a participant in this session" });
+      }
+
+      // Notify other participants
+      await sessionManager.notifyDistractionAlert(
+        sessionId,
+        userId,
+        type,
+        { idleSeconds, apps }
+      );
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error sending distraction alert:", error);
+      res.status(500).json({ message: "Failed to send distraction alert" });
+    }
+  });
+
   // Notification endpoints
   app.get('/api/notifications', isAuthenticated, async (req: any, res) => {
     try {

@@ -1138,6 +1138,76 @@ class SessionManager {
     }
   }
 
+  // Notify session partners about a distraction alert
+  async notifyDistractionAlert(
+    sessionId: string,
+    alertingUserId: string,
+    alertType: 'idle' | 'distracting_apps',
+    alertData: { idleSeconds?: number; apps?: string[] }
+  ) {
+    try {
+      // Get all participants in the session
+      const participants = await storage.getSessionParticipants(sessionId);
+      const alertingUser = await storage.getUser(alertingUserId);
+
+      if (!alertingUser) {
+        console.error('[SessionManager] Alerting user not found:', alertingUserId);
+        return;
+      }
+
+      const alertingName = alertingUser.firstName && alertingUser.lastName
+        ? `${alertingUser.firstName} ${alertingUser.lastName}`
+        : alertingUser.username || 'Your partner';
+
+      let title = '';
+      let message = '';
+
+      if (alertType === 'idle' && alertData.idleSeconds) {
+        const minutes = Math.floor(alertData.idleSeconds / 60);
+        title = 'Partner Inactive';
+        message = `${alertingName} has been inactive for ${minutes} minute${minutes !== 1 ? 's' : ''}`;
+      } else if (alertType === 'distracting_apps' && alertData.apps) {
+        const appList = alertData.apps.slice(0, 3).join(', ');
+        const moreApps = alertData.apps.length > 3 ? ` and ${alertData.apps.length - 3} more` : '';
+        title = 'Partner Distracted';
+        message = `${alertingName} has distracting apps open: ${appList}${moreApps}`;
+      }
+
+      // Notify all other participants
+      for (const participant of participants) {
+        if (participant.id === alertingUserId) continue;
+
+        // Send real-time WebSocket event
+        this.emit(participant.id, {
+          type: 'distraction-alert',
+          sessionId,
+          alertingUser: {
+            id: alertingUser.id,
+            username: alertingUser.username,
+            firstName: alertingUser.firstName,
+            lastName: alertingUser.lastName,
+            profileImageUrl: alertingUser.profileImageUrl,
+          },
+          alertType,
+          alertData,
+        });
+
+        // Create persistent notification
+        await storage.createNotification({
+          userId: participant.id,
+          type: 'distraction_alert',
+          title,
+          message,
+          read: 0,
+          relatedUserId: alertingUserId,
+          sessionId,
+        });
+      }
+    } catch (error) {
+      console.error('[SessionManager] Error notifying distraction alert:', error);
+    }
+  }
+
   // Destroy the manager (for cleanup)
   destroy() {
     if (this.cleanupInterval) {

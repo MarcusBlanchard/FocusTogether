@@ -32,9 +32,25 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    host: "0.0.0.0",
+    port: 5173,
+    strictPort: true,
     fs: {
       strict: true,
       deny: ["**/.*"],
+    },
+    // Proxy API requests to backend during local development
+    proxy: {
+      '/api': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/river': {
+        target: 'ws://localhost:5001',
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
 });

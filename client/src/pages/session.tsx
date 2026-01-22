@@ -18,6 +18,8 @@ import { useToast } from "@/hooks/use-toast";
 import { LiveKitSession } from "@/components/LiveKitSession";
 import { format, formatDistanceToNow, isPast, isBefore } from "date-fns";
 import { useSessionClient } from "@/contexts/session-client-context";
+import { useDistractionAlerts } from "@/hooks/useDistractionAlerts";
+import { useIdleWarning } from "@/hooks/useIdleWarning";
 
 type SessionStatus = 'pre-session' | 'active' | 'ended' | 'post-session' | 'expired';
 
@@ -61,6 +63,17 @@ export default function Session() {
   const [activeParticipants, setActiveParticipants] = useState(0);
   const sessionStartRef = useRef<Date | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  // Productivity monitoring - only active during active sessions
+  const isMonitoringActive = sessionStatus === 'active';
+  useDistractionAlerts({
+    enabled: isMonitoringActive,
+    sessionId: params.sessionId || null,
+    userId: user?.id || null,
+  });
+
+  // Local inactivity warning - only active during active sessions
+  useIdleWarning(isMonitoringActive);
 
   // Listen for session-expired events from the server
   useEffect(() => {

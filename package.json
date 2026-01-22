@@ -1,14 +1,19 @@
 {
-  "name": "rest-express",
+  "name": "focustogether",
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index-dev.ts",
+    "dev:vite": "vite --host 0.0.0.0",
+    "dev:vite:wait": "node -e \"const http = require('http'); const check = () => { const req = http.get('http://localhost:5173', (r) => { if (r.statusCode === 200) process.exit(0); else setTimeout(check, 500); }); req.on('error', () => setTimeout(check, 500)); }; setTimeout(check, 1000);\"",
     "build": "vite build && esbuild server/index-prod.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/index.js",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -46,6 +51,7 @@
     "@replit/river": "^0.212.0",
     "@sinclair/typebox": "^0.34.41",
     "@tanstack/react-query": "^5.60.5",
+    "@tauri-apps/api": "^1.5.3",
     "@types/bcrypt": "^6.0.0",
     "@types/memoizee": "^0.4.12",
     "bcrypt": "^6.0.0",
@@ -54,6 +60,7 @@
     "cmdk": "^1.1.1",
     "connect-pg-simple": "^10.0.0",
     "date-fns": "^3.6.0",
+    "dotenv": "^17.2.3",
     "drizzle-orm": "^0.39.1",
     "drizzle-zod": "^0.7.0",
     "embla-carousel-react": "^8.6.0",
@@ -92,6 +99,7 @@
     "@replit/vite-plugin-runtime-error-modal": "^0.0.3",
     "@tailwindcss/typography": "^0.5.15",
     "@tailwindcss/vite": "^4.1.3",
+    "@tauri-apps/cli": "^1.5.9",
     "@types/connect-pg-simple": "^7.0.3",
     "@types/express": "4.17.21",
     "@types/express-session": "^1.18.0",
