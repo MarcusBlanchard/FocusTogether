@@ -1,4 +1,4 @@
-# FocusSession - Video Co-Working App
+# FocusTogether - Video Co-Working App
 
 ## Overview
 A Focusmate-style focused work session web app with calendar-based booking. Users schedule Solo (1-on-1) or Group (2-5 people) sessions in advance, then join video/screen-sharing work sessions with accountability partners.

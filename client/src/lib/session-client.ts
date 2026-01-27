@@ -15,7 +15,7 @@ export interface ParticipantInfo {
 }
 
 export interface SessionEvent {
-  type: 'matched' | 'partner-disconnected' | 'invite-received' | 'invite-response' | 'signal' | 'participant-joined' | 'participant-left' | 'room-joined' | 'room-ended' | 'session-expired' | 'session-updated' | 'partner-cancelled' | 'auto-rematched' | 'match-found';
+  type: 'matched' | 'partner-disconnected' | 'invite-received' | 'invite-response' | 'signal' | 'participant-joined' | 'participant-left' | 'room-joined' | 'room-ended' | 'session-expired' | 'session-updated' | 'partner-cancelled' | 'auto-rematched' | 'match-found' | 'distraction-alert';
   sessionId?: string;
   partner?: PartnerInfo;
   inviter?: PartnerInfo;
@@ -47,6 +47,19 @@ export interface SessionEvent {
     username: string | null;
     firstName?: string | null;
     lastName?: string | null;
+  };
+  // Distraction alert fields
+  alertingUser?: {
+    id: string;
+    username: string | null;
+    firstName?: string | null;
+    lastName?: string | null;
+    profileImageUrl?: string | null;
+  };
+  alertType?: 'idle' | 'distracting_apps';
+  alertData?: {
+    idleSeconds?: number;
+    apps?: string[];
   };
 }
 

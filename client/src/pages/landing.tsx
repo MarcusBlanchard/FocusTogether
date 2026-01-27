@@ -1,16 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Video, Calendar, Clock, Shield } from "lucide-react";
-import { useMemo } from "react";
 
 export default function Landing() {
-  // Detect Tauri environment via URL param (devPath includes ?tauri=1)
-  const loginUrl = useMemo(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const isTauri = urlParams.get("tauri") === "1" || "__TAURI__" in window;
-    console.log("[Landing] Tauri detected:", isTauri, "URL:", window.location.href);
-    return isTauri ? "/api/login?user=2" : "/api/login";
-  }, []);
+  const loginUrl = "/api/login";
 
   return (
     <div className="min-h-screen bg-background">
@@ -18,7 +11,7 @@ export default function Landing() {
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="text-2xl font-semibold">FocusTogether</h1>
           <Button asChild data-testid="button-login">
-            <a href={loginUrl}>Sign In</a>
+            <a href="/api/login">Sign In</a>
           </Button>
         </div>
       </header>
@@ -32,7 +25,7 @@ export default function Landing() {
             Schedule a focused work session and get automatically matched with a partner who booked the same time and preferences.
           </p>
           <Button size="lg" className="px-12 py-6 text-lg rounded-full" asChild data-testid="button-get-started">
-            <a href={loginUrl}>Book a Session</a>
+            <a href="/api/login">Book a Session</a>
           </Button>
         </div>
 

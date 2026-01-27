@@ -1,11 +1,15 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
+import type { Server } from "http";
 import { storage, type IStorage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { setupRiverServer } from "./river-server";
 import { sessionManager } from "./session-manager";
 import { AccessToken } from "livekit-server-sdk";
 import type { ScheduledSession, User } from "@shared/schema";
+import { validateUsername, validateDisplayName } from "./profanity-filter";
+import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
+import { sql } from "drizzle-orm";
+import { db } from "./db";
 
 // Helper function to try re-matching remaining participants with others in the pool
 async function tryRematchSession(
@@ -110,8 +114,25 @@ async function tryRematchSession(
   }
 }
 
-export async function registerRoutes(app: Express): Promise<Server> {
-  // Auth middleware
+export async function registerRoutes(app: Express, server: Server): Promise<void> {
+  // In-memory store: userId -> sessionId (or null)
+  // Tracks which users are currently in active focus sessions
+  const activeSessions = new Map<string, string | null>();
+  
+  // In-memory store: userId -> array of pending alerts
+  // Alerts are queued when a participant goes idle/distracted and cleared after retrieval
+  const pendingAlerts = new Map<string, Array<{
+    type: string;
+    alertingUserId: string;
+    alertingUsername?: string;
+    alertingFirstName?: string;
+    status: string;
+    sessionId: string;
+    timestamp: string;
+  }>>();
+
+  // Auth middleware (includes OIDC discovery - can be slow)
+  // Note: Health check is registered in app.ts BEFORE listen() for fast deployment
   await setupAuth(app);
 
   // TURN credentials endpoint - fetches fresh credentials from Metered.ca
@@ -235,17 +256,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       const { username } = req.body;
 
-      if (!username || typeof username !== 'string' || username.length < 3) {
-        return res.status(400).json({ message: "Username must be at least 3 characters" });
+      // Validate username (length, format, and profanity check)
+      const validation = validateUsername(username);
+      if (!validation.valid) {
+        return res.status(400).json({ message: validation.message });
       }
 
       // Check if username is taken
-      const existing = await storage.getUserByUsername(username);
+      const existing = await storage.getUserByUsername(username.trim());
       if (existing && existing.id !== userId) {
         return res.status(400).json({ message: "Username already taken" });
       }
 
-      const user = await storage.updateUsername(userId, username);
+      const user = await storage.updateUsername(userId, username.trim());
       res.json(user);
     } catch (error) {
       console.error("Error updating username:", error);
@@ -273,6 +296,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching user profile:", error);
       res.status(500).json({ message: "Failed to fetch user profile" });
+    }
+  });
+
+  // Update display name
+  app.patch('/api/user/display-name', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { firstName, lastName } = req.body;
+
+      // Validate first name
+      if (!firstName || typeof firstName !== 'string' || firstName.trim().length < 1) {
+        return res.status(400).json({ message: "First name is required" });
+      }
+      if (firstName.trim().length > 50) {
+        return res.status(400).json({ message: "First name must be 50 characters or less" });
+      }
+      const firstNameValidation = validateDisplayName(firstName);
+      if (!firstNameValidation.valid) {
+        return res.status(400).json({ message: firstNameValidation.message });
+      }
+
+      // Validate last name
+      if (!lastName || typeof lastName !== 'string' || lastName.trim().length < 1) {
+        return res.status(400).json({ message: "Last name is required" });
+      }
+      if (lastName.trim().length > 50) {
+        return res.status(400).json({ message: "Last name must be 50 characters or less" });
+      }
+      const lastNameValidation = validateDisplayName(lastName);
+      if (!lastNameValidation.valid) {
+        return res.status(400).json({ message: lastNameValidation.message });
+      }
+
+      const user = await storage.updateDisplayName(userId, firstName.trim(), lastName.trim());
+      res.json(user);
+    } catch (error) {
+      console.error("Error updating display name:", error);
+      res.status(500).json({ message: "Failed to update display name" });
     }
   });
 
@@ -316,23 +377,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/sessions/history', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const sessions = await storage.getUserSessions(userId);
+      const sessionHistory = await storage.getUserSessionHistory(userId);
 
-      // Enrich with partner info
+      // Enrich with friend status for each participant
       const enrichedSessions = await Promise.all(
-        sessions.map(async (session) => {
-          const partnerId = session.user1Id === userId ? session.user2Id : session.user1Id;
-          const partner = await storage.getUser(partnerId);
-          const isFriend = await storage.areFriends(userId, partnerId);
+        sessionHistory.map(async ({ session, participants }) => {
+          // Get friend status and pending request status for each participant (excluding self)
+          const enrichedParticipants = await Promise.all(
+            participants
+              .filter(p => p.id !== userId)
+              .map(async (participant) => {
+                const isFriend = await storage.areFriends(userId, participant.id);
+                const hasPendingRequest = !isFriend && await storage.hasPendingFriendRequest(userId, participant.id);
+          return {
+                  id: participant.id,
+                  username: participant.username,
+                  firstName: participant.firstName,
+                  lastName: participant.lastName,
+                  profileImageUrl: participant.profileImageUrl,
+            isFriend,
+                  hasPendingRequest,
+                };
+              })
+          );
+          
+          // Calculate duration in seconds from startAt and endAt (with fallback to durationMinutes)
+          const startTime = new Date(session.startAt).getTime();
+          const endTime = session.endAt ? new Date(session.endAt).getTime() : startTime;
+          const durationSeconds = endTime > startTime 
+            ? Math.floor((endTime - startTime) / 1000)
+            : session.durationMinutes * 60;
           
           return {
-            ...session,
-            partner: partner ? {
-              id: partner.id,
-              username: partner.username,
-              profileImageUrl: partner.profileImageUrl,
-            } : null,
-            isFriend,
+            id: session.id,
+            title: session.title || 'Focus Session',
+            sessionType: session.sessionType,
+            durationMinutes: session.durationMinutes,
+            durationSeconds,
+            startAt: session.startAt,
+            endAt: session.endAt,
+            status: session.status,
+            participants: enrichedParticipants,
           };
         })
       );
@@ -387,6 +472,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { friendId } = req.params;
 
       await storage.removeFriend(userId, friendId);
+      
+      // Notify the removed friend in real-time
+      await sessionManager.notifyFriendRemoved(friendId, userId);
+      
       res.json({ success: true });
     } catch (error) {
       console.error("Error removing friend:", error);
@@ -408,6 +497,287 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Friend Request Routes
+
+  // Send a friend request
+  app.post('/api/friend-requests', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { receiverId } = req.body;
+
+      if (!receiverId) {
+        return res.status(400).json({ message: "Receiver ID is required" });
+      }
+
+      if (receiverId === userId) {
+        return res.status(400).json({ message: "Cannot send friend request to yourself" });
+      }
+
+      // Check if already friends
+      const alreadyFriends = await storage.areFriends(userId, receiverId);
+      if (alreadyFriends) {
+        return res.status(400).json({ message: "Already friends with this user" });
+      }
+
+      // Check if request already exists (in either direction)
+      const existingRequest = await storage.getFriendRequest(userId, receiverId);
+      if (existingRequest) {
+        return res.status(400).json({ message: "Friend request already sent" });
+      }
+
+      const reverseRequest = await storage.getFriendRequest(receiverId, userId);
+      if (reverseRequest && reverseRequest.status === 'pending') {
+        return res.status(400).json({ message: "This user has already sent you a friend request" });
+      }
+
+      const request = await storage.sendFriendRequest(userId, receiverId);
+      
+      // Notify the receiver in real-time
+      const sender = await storage.getUser(userId);
+      if (sender) {
+        await sessionManager.notifyFriendRequestReceived(receiverId, request, sender);
+        
+        // Create a persistent notification for the receiver
+        const senderName = sender.firstName && sender.lastName 
+          ? `${sender.firstName} ${sender.lastName}` 
+          : sender.username || 'Someone';
+        await storage.createNotification({
+          userId: receiverId,
+          type: 'friend_request',
+          title: 'New Friend Request',
+          message: `${senderName} sent you a friend request`,
+          relatedUserId: userId,
+        });
+      }
+      
+      res.json(request);
+    } catch (error) {
+      console.error("Error sending friend request:", error);
+      res.status(500).json({ message: "Failed to send friend request" });
+    }
+  });
+
+  // Get pending friend requests (received)
+  app.get('/api/friend-requests/pending', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const requests = await storage.getPendingRequests(userId);
+      res.json(requests);
+    } catch (error) {
+      console.error("Error fetching pending requests:", error);
+      res.status(500).json({ message: "Failed to fetch pending requests" });
+    }
+  });
+
+  // Get sent friend requests
+  app.get('/api/friend-requests/sent', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const requests = await storage.getSentRequests(userId);
+      res.json(requests);
+    } catch (error) {
+      console.error("Error fetching sent requests:", error);
+      res.status(500).json({ message: "Failed to fetch sent requests" });
+    }
+  });
+
+  // Accept a friend request
+  app.post('/api/friend-requests/:requestId/accept', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { requestId } = req.params;
+
+      // Get the request before accepting to know who the sender is
+      const request = await storage.getFriendRequestById(requestId);
+      if (!request) {
+        return res.status(404).json({ message: "Friend request not found" });
+      }
+
+      // Verify current user is the receiver of this request
+      if (request.receiverId !== userId) {
+        return res.status(403).json({ message: "Not authorized to accept this request" });
+      }
+
+      // Verify request is still pending
+      if (request.status !== 'pending') {
+        return res.status(400).json({ message: "Friend request is no longer pending" });
+      }
+
+      await storage.acceptFriendRequest(requestId, userId);
+      
+      // Notify the sender that their request was accepted
+      const acceptor = await storage.getUser(userId);
+      if (acceptor) {
+        await sessionManager.notifyFriendRequestAccepted(request.senderId, requestId, acceptor);
+      }
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error accepting friend request:", error);
+      res.status(500).json({ message: "Failed to accept friend request" });
+    }
+  });
+
+  // Reject a friend request
+  app.post('/api/friend-requests/:requestId/reject', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { requestId } = req.params;
+
+      // Get the request before rejecting to know who the sender is
+      const request = await storage.getFriendRequestById(requestId);
+      if (!request) {
+        return res.status(404).json({ message: "Friend request not found" });
+      }
+
+      // Verify current user is the receiver of this request
+      if (request.receiverId !== userId) {
+        return res.status(403).json({ message: "Not authorized to reject this request" });
+      }
+
+      // Verify request is still pending
+      if (request.status !== 'pending') {
+        return res.status(400).json({ message: "Friend request is no longer pending" });
+      }
+
+      await storage.rejectFriendRequest(requestId, userId);
+      
+      // Notify the sender that their request was rejected
+      await sessionManager.notifyFriendRequestRejected(request.senderId, requestId, userId);
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error rejecting friend request:", error);
+      res.status(500).json({ message: "Failed to reject friend request" });
+    }
+  });
+
+  // Cancel a sent friend request
+  app.delete('/api/friend-requests/:requestId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { requestId } = req.params;
+
+      // Get the request before cancelling to know who the receiver is
+      const request = await storage.getFriendRequestById(requestId);
+      if (!request) {
+        return res.status(404).json({ message: "Friend request not found" });
+      }
+
+      // Verify current user is the sender of this request
+      if (request.senderId !== userId) {
+        return res.status(403).json({ message: "Not authorized to cancel this request" });
+      }
+
+      await storage.cancelFriendRequest(requestId, userId);
+      
+      // Notify the receiver that the request was cancelled
+      await sessionManager.notifyFriendRequestCancelled(request.receiverId, requestId, userId);
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error cancelling friend request:", error);
+      res.status(500).json({ message: "Failed to cancel friend request" });
+    }
+  });
+
+  // Message Routes
+
+  // Send a message
+  app.post('/api/messages', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { receiverId, content } = req.body;
+
+      if (!receiverId || !content) {
+        return res.status(400).json({ message: "Receiver ID and content are required" });
+      }
+
+      // Check if users are friends
+      const areFriends = await storage.areFriends(userId, receiverId);
+      if (!areFriends) {
+        return res.status(403).json({ message: "You can only message friends" });
+      }
+
+      const message = await storage.sendMessage(userId, receiverId, content);
+      
+      // Send real-time notification to the receiver
+      const sender = await storage.getUser(userId);
+      if (sender) {
+        sessionManager.notifyMessageReceived(receiverId, {
+          senderId: userId,
+          senderUsername: sender.username || null,
+          senderFirstName: sender.firstName || null,
+          senderLastName: sender.lastName || null,
+        });
+      }
+      
+      res.json(message);
+    } catch (error) {
+      console.error("Error sending message:", error);
+      res.status(500).json({ message: "Failed to send message" });
+    }
+  });
+
+  // Check if user has unread messages (must be before :partnerId route)
+  app.get('/api/messages/has-unread', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const hasUnread = await storage.hasUnreadMessages(userId);
+      res.json({ hasUnread });
+    } catch (error) {
+      console.error("Error checking unread messages:", error);
+      res.status(500).json({ message: "Failed to check unread messages" });
+    }
+  });
+
+  // Get list of conversations
+  app.get('/api/conversations', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const conversations = await storage.getConversationsList(userId);
+      res.json(conversations);
+    } catch (error) {
+      console.error("Error fetching conversations:", error);
+      res.status(500).json({ message: "Failed to fetch conversations" });
+    }
+  });
+
+  // Get conversation with a specific user (must be after static routes like has-unread)
+  app.get('/api/messages/:partnerId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { partnerId } = req.params;
+      const limit = parseInt(req.query.limit as string) || 50;
+      const before = req.query.before ? new Date(req.query.before as string) : undefined;
+
+      // Check if users are friends
+      const areFriends = await storage.areFriends(userId, partnerId);
+      if (!areFriends) {
+        return res.status(403).json({ message: "You can only view conversations with friends" });
+      }
+
+      const messages = await storage.getConversation(userId, partnerId, limit, before);
+      res.json(messages);
+    } catch (error) {
+      console.error("Error fetching conversation:", error);
+      res.status(500).json({ message: "Failed to fetch conversation" });
+    }
+  });
+
+  // Mark conversation as read
+  app.post('/api/messages/:partnerId/mark-read', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { partnerId } = req.params;
+      await storage.markConversationAsRead(userId, partnerId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking conversation as read:", error);
+      res.status(500).json({ message: "Failed to mark conversation as read" });
+    }
+  });
+
   // Invite a friend to a session
   app.post('/api/sessions/invite', isAuthenticated, async (req: any, res) => {
     try {
@@ -426,6 +796,216 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Custom Rooms Routes
+
+  // Create a custom room and send invites
+  app.post('/api/custom-rooms', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { startAt, endAt, durationMinutes, invitedFriendIds = [] } = req.body;
+
+      // Check subscription/free tier status (paywall)
+      const subscriptionStatus = await storage.getUserSubscriptionStatus(userId);
+      if (!subscriptionStatus.hasActiveSubscription && !subscriptionStatus.canUseFreeTier) {
+        return res.status(403).json({ 
+          message: "You've used your 2 free sessions. Please upgrade to continue booking sessions.",
+          code: "SUBSCRIPTION_REQUIRED",
+          completedSessionCount: subscriptionStatus.completedSessionCount
+        });
+      }
+
+      // Validate duration
+      if (![20, 40, 60, 120].includes(durationMinutes)) {
+        return res.status(400).json({ message: "Invalid duration. Must be 20, 40, 60, or 120 minutes" });
+      }
+
+      // Validate time
+      const start = new Date(startAt);
+      const end = new Date(endAt);
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return res.status(400).json({ message: "Invalid date format" });
+      }
+      
+      // Allow booking up to 5 minutes after start time (grace period)
+      const gracePeriodMs = 5 * 60 * 1000;
+      if (start.getTime() + gracePeriodMs < Date.now()) {
+        return res.status(400).json({ message: "Cannot schedule sessions more than 5 minutes in the past" });
+      }
+
+      // Validate invited friends (max 4, since room is max 5 including host)
+      if (invitedFriendIds.length > 4) {
+        return res.status(400).json({ message: "Cannot invite more than 4 friends (max 5 participants)" });
+      }
+
+      // Check for overlapping bookings
+      const hasOverlap = await storage.checkUserOverlap(userId, start, end);
+      if (hasOverlap) {
+        return res.status(400).json({ 
+          message: "You already have a session scheduled during this time." 
+        });
+      }
+
+      // Get user for display name
+      const user = await storage.getUser(userId);
+
+      // Create the custom room session
+      const session = await storage.createScheduledSession({
+        hostId: userId,
+        sessionType: 'custom',
+        bookingPreference: 'any',
+        durationMinutes,
+        title: `${user?.firstName || user?.username || 'User'}'s Room`,
+        description: null,
+        capacity: 5,
+        startAt: start,
+        endAt: end,
+        status: 'scheduled',
+      });
+
+      // Add host as participant
+      await storage.addParticipant({
+        sessionId: session.id,
+        userId,
+        role: 'host',
+        status: 'joined',
+      });
+
+      // Send invites to selected friends
+      for (const friendId of invitedFriendIds) {
+        // Verify they are actually friends
+        const areFriends = await storage.areFriends(userId, friendId);
+        if (!areFriends) continue;
+
+        // Create session invite
+        await storage.createSessionInvite({
+          sessionId: session.id,
+          senderId: userId,
+          receiverId: friendId,
+          status: 'pending',
+        });
+
+        // Create notification for the friend
+        await storage.createNotification({
+          userId: friendId,
+          type: 'session_invite',
+          title: 'Room Invitation',
+          message: `${user?.firstName || user?.username || 'Someone'} invited you to join their focus session`,
+          relatedUserId: userId,
+          sessionId: session.id,
+          read: 0,
+        });
+
+        // Send real-time notification via WebSocket
+        sessionManager.sendToUser(friendId, {
+          type: 'session-invite',
+          sessionId: session.id,
+          invitedBy: {
+            id: userId,
+            username: user?.username,
+            firstName: user?.firstName,
+            lastName: user?.lastName,
+            profileImageUrl: user?.profileImageUrl,
+          },
+          startAt: start.toISOString(),
+          durationMinutes,
+        });
+      }
+
+      res.json({ 
+        sessionId: session.id,
+        invitesSent: invitedFriendIds.length,
+      });
+    } catch (error) {
+      console.error("Error creating custom room:", error);
+      res.status(500).json({ message: "Failed to create custom room" });
+    }
+  });
+
+  // Get pending invites for current user
+  app.get('/api/session-invites/pending', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const invites = await storage.getPendingSessionInvites(userId);
+      res.json(invites);
+    } catch (error) {
+      console.error("Error fetching pending invites:", error);
+      res.status(500).json({ message: "Failed to fetch invites" });
+    }
+  });
+
+  // Get invites for a specific session (to filter already-invited friends)
+  app.get('/api/session-invites/session/:sessionId', isAuthenticated, async (req: any, res) => {
+    try {
+      const { sessionId } = req.params;
+      const invites = await storage.getSessionInvitesBySessionId(sessionId);
+      res.json(invites);
+    } catch (error) {
+      console.error("Error fetching session invites:", error);
+      res.status(500).json({ message: "Failed to fetch session invites" });
+    }
+  });
+
+  // Get invites for a specific conversation (between current user and partner)
+  app.get('/api/session-invites/conversation/:partnerId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { partnerId } = req.params;
+      
+      const invites = await storage.getConversationInvites(userId, partnerId);
+      res.json(invites);
+    } catch (error) {
+      console.error("Error fetching conversation invites:", error);
+      res.status(500).json({ message: "Failed to fetch invites" });
+    }
+  });
+
+  // Accept or decline a session invite
+  app.post('/api/session-invites/:inviteId/respond', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { inviteId } = req.params;
+      const { response } = req.body; // 'accepted' or 'declined'
+
+      if (!['accepted', 'declined'].includes(response)) {
+        return res.status(400).json({ message: "Invalid response. Must be 'accepted' or 'declined'" });
+      }
+
+      const invite = await storage.getSessionInvite(inviteId);
+      if (!invite) {
+        return res.status(404).json({ message: "Invite not found" });
+      }
+      if (invite.receiverId !== userId) {
+        return res.status(403).json({ message: "Not authorized" });
+      }
+      if (invite.status !== 'pending') {
+        return res.status(400).json({ message: "Invite already responded to" });
+      }
+
+      await storage.updateSessionInviteStatus(inviteId, response);
+
+      if (response === 'accepted') {
+        // Add user to session
+        const session = await storage.getScheduledSession(invite.sessionId);
+        if (session && session.status !== 'cancelled' && session.status !== 'expired') {
+          const participantCount = await storage.getParticipantCount(session.id);
+          if (participantCount < session.capacity) {
+            await storage.addParticipant({
+              sessionId: session.id,
+              userId,
+              role: 'participant',
+              status: 'joined',
+            });
+          }
+        }
+      }
+
+      res.json({ success: true, status: response });
+    } catch (error) {
+      console.error("Error responding to invite:", error);
+      res.status(500).json({ message: "Failed to respond to invite" });
+    }
+  });
+
   // Scheduled Sessions Routes
 
   // Create a scheduled session
@@ -433,6 +1013,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user.claims.sub;
       const { sessionType, bookingPreference, durationMinutes, title, description, startAt } = req.body;
+
+      // Check subscription/free tier status (paywall)
+      const subscriptionStatus = await storage.getUserSubscriptionStatus(userId);
+      if (!subscriptionStatus.hasActiveSubscription && !subscriptionStatus.canUseFreeTier) {
+        return res.status(403).json({ 
+          message: "You've used your 2 free sessions. Please upgrade to continue booking sessions.",
+          code: "SUBSCRIPTION_REQUIRED",
+          completedSessionCount: subscriptionStatus.completedSessionCount
+        });
+      }
 
       // Validate session type
       if (!['solo', 'group'].includes(sessionType)) {
@@ -671,6 +1261,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Already joined this session" });
       }
 
+      // Check subscription/free tier status (paywall) - skip for session host
+      if (session.hostId !== userId) {
+        const subscriptionStatus = await storage.getUserSubscriptionStatus(userId);
+        if (!subscriptionStatus.hasActiveSubscription && !subscriptionStatus.canUseFreeTier) {
+          return res.status(403).json({ 
+            message: "You've used your 2 free sessions. Please upgrade to continue joining sessions.",
+            code: "SUBSCRIPTION_REQUIRED",
+            completedSessionCount: subscriptionStatus.completedSessionCount
+          });
+        }
+      }
+
       // Check capacity
       const participantCount = await storage.getParticipantCount(sessionId);
       if (participantCount >= session.capacity) {
@@ -821,6 +1423,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(`[Session Complete] User ${userId} completed session ${sessionId} (${duration}s)`);
       
+      // Increment the user's completed session count for billing purposes
+      await storage.incrementCompletedSessionCount(userId);
+      console.log(`[Session Complete] Incremented completed session count for user ${userId}`);
+      
       // Remove user from the room so other participants see them leave
       await sessionManager.leaveRoom(userId, sessionId);
       console.log(`[Session Complete] User ${userId} removed from room ${sessionId}`);
@@ -843,39 +1449,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error logging session completion:", error);
       res.status(500).json({ message: "Failed to log session completion" });
-    }
-  });
-
-  // Distraction alert endpoint
-  app.post('/api/sessions/distraction-alert', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user.claims.sub;
-      const { sessionId, type, idleSeconds, apps } = req.body;
-
-      if (!sessionId || !type) {
-        return res.status(400).json({ message: "Missing required fields: sessionId, type" });
-      }
-
-      // Verify user is a participant in this session
-      const participants = await storage.getSessionParticipants(sessionId);
-      const isParticipant = participants.some(p => p.id === userId);
-      
-      if (!isParticipant) {
-        return res.status(403).json({ message: "You are not a participant in this session" });
-      }
-
-      // Notify other participants
-      await sessionManager.notifyDistractionAlert(
-        sessionId,
-        userId,
-        type,
-        { idleSeconds, apps }
-      );
-
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error sending distraction alert:", error);
-      res.status(500).json({ message: "Failed to send distraction alert" });
     }
   });
 
@@ -926,10 +1499,313 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  const httpServer = createServer(app);
+  // ========== BILLING/SUBSCRIPTION ROUTES ==========
+  
+  // Get Stripe publishable key for frontend
+  app.get('/api/stripe/config', async (_req, res) => {
+    try {
+      const publishableKey = await getStripePublishableKey();
+      res.json({ publishableKey });
+    } catch (error: any) {
+      console.error("Error getting Stripe config:", error);
+      res.status(500).json({ message: "Stripe not configured" });
+    }
+  });
 
-  // Setup River RPC server
-  setupRiverServer(httpServer);
+  // Get user's subscription status
+  app.get('/api/subscription/status', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const status = await storage.getUserSubscriptionStatus(userId);
+      res.json(status);
+    } catch (error) {
+      console.error("Error fetching subscription status:", error);
+      res.status(500).json({ message: "Failed to fetch subscription status" });
+    }
+  });
 
-  return httpServer;
+  // Get available pricing plans
+  app.get('/api/subscription/plans', async (_req, res) => {
+    try {
+      const result = await db.execute(
+        sql`SELECT 
+          p.id as product_id,
+          p.name as product_name,
+          p.description as product_description,
+          pr.id as price_id,
+          pr.unit_amount,
+          pr.currency,
+          pr.recurring
+        FROM stripe.products p
+        JOIN stripe.prices pr ON pr.product = p.id
+        WHERE p.active = true AND pr.active = true
+        ORDER BY pr.unit_amount ASC`
+      );
+      res.json({ plans: result.rows });
+    } catch (error) {
+      console.error("Error fetching plans:", error);
+      res.status(500).json({ message: "Failed to fetch plans" });
+    }
+  });
+
+  // Create Stripe checkout session
+  app.post('/api/subscription/checkout', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { priceId } = req.body;
+
+      if (!priceId) {
+        return res.status(400).json({ message: "Price ID is required" });
+      }
+
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const stripe = await getUncachableStripeClient();
+
+      // Create or get customer
+      let customerId = user.stripeCustomerId;
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: user.email || undefined,
+          metadata: { userId },
+        });
+        await storage.updateUserStripeInfo(userId, customer.id);
+        customerId = customer.id;
+      }
+
+      // Get base URL for redirects
+      const baseUrl = `https://${process.env.REPLIT_DOMAINS?.split(',')[0]}`;
+
+      // Create checkout session
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        payment_method_types: ['card'],
+        line_items: [{ price: priceId, quantity: 1 }],
+        mode: 'subscription',
+        success_url: `${baseUrl}/subscription/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${baseUrl}/pricing`,
+        metadata: { userId },
+      });
+
+      res.json({ url: session.url });
+    } catch (error: any) {
+      console.error("Error creating checkout session:", error);
+      res.status(500).json({ message: error.message || "Failed to create checkout session" });
+    }
+  });
+
+  // Create Stripe billing portal session (for managing subscription)
+  app.post('/api/subscription/portal', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+
+      if (!user || !user.stripeCustomerId) {
+        return res.status(400).json({ message: "No billing account found" });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const baseUrl = `https://${process.env.REPLIT_DOMAINS?.split(',')[0]}`;
+
+      const session = await stripe.billingPortal.sessions.create({
+        customer: user.stripeCustomerId,
+        return_url: `${baseUrl}/`,
+      });
+
+      res.json({ url: session.url });
+    } catch (error: any) {
+      console.error("Error creating portal session:", error);
+      res.status(500).json({ message: error.message || "Failed to create portal session" });
+    }
+  });
+
+  // Handle successful checkout (verify and update user)
+  app.post('/api/subscription/verify', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { sessionId } = req.body;
+
+      if (!sessionId) {
+        return res.status(400).json({ message: "Session ID is required" });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+      if (session.payment_status !== 'paid') {
+        return res.status(400).json({ message: "Payment not completed" });
+      }
+
+      // Update user with subscription info
+      const subscriptionId = session.subscription as string;
+      if (subscriptionId) {
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        await storage.updateUserStripeInfo(
+          userId,
+          session.customer as string,
+          subscriptionId,
+          subscription.status
+        );
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error verifying subscription:", error);
+      res.status(500).json({ message: error.message || "Failed to verify subscription" });
+    }
+  });
+
+  // =====================================
+  // ACTIVITY TRACKING (Desktop App)
+  // =====================================
+
+  // GET /api/activity/session - Desktop app polls this to check for active session
+  app.get('/api/activity/session', async (req: any, res) => {
+    try {
+      const userId = req.query.userId;
+      
+      // #region agent log
+      const fs = require('fs');
+      const logPath = '/Users/mariablanchard/Downloads/FocusTogether/.cursor/debug.log';
+      fs.appendFileSync(logPath, JSON.stringify({location:'routes.ts:1654',message:'GET /api/activity/session received',data:{requestedUserId:userId, activeSessionsSize:activeSessions.size, allUserIds:Array.from(activeSessions.keys()), allSessions:Object.fromEntries(activeSessions)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})+'\n');
+      // #endregion
+      
+      if (!userId) {
+        return res.status(400).json({ message: "userId required" });
+      }
+      
+      const sessionId = activeSessions.get(userId) || null;
+      
+      // Get and clear pending alerts for this user
+      const alerts = pendingAlerts.get(userId) || [];
+      pendingAlerts.delete(userId); // Clear after retrieval
+      
+      // #region agent log
+      fs.appendFileSync(logPath, JSON.stringify({location:'routes.ts:1662',message:'GET /api/activity/session response',data:{requestedUserId:userId, returnedSessionId:sessionId, foundInMap:activeSessions.has(userId), alertsCount:alerts.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})+'\n');
+      // #endregion
+      
+      res.json({ 
+        sessionId,
+        pendingAlerts: alerts.length > 0 ? alerts : undefined,
+        active: sessionId !== null,
+      });
+    } catch (error) {
+      console.error("Error fetching active session:", error);
+      res.status(500).json({ message: "Failed to fetch active session" });
+    }
+  });
+
+  // POST /api/activity/session - Web app calls this when joining/leaving sessions
+  app.post('/api/activity/session', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { sessionId, status } = req.body;
+      
+      // #region agent log
+      const fs = require('fs');
+      const logPath = '/Users/mariablanchard/Downloads/FocusTogether/.cursor/debug.log';
+      fs.appendFileSync(logPath, JSON.stringify({location:'routes.ts:1671',message:'POST /api/activity/session received',data:{userId, sessionId, status, activeSessionsSize:activeSessions.size, allUserIds:Array.from(activeSessions.keys())},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})+'\n');
+      // #endregion
+      
+      if (status === 'joined') {
+        activeSessions.set(userId, sessionId);
+        // #region agent log
+        fs.appendFileSync(logPath, JSON.stringify({location:'routes.ts:1677',message:'Session stored in activeSessions',data:{userId, sessionId, activeSessionsSize:activeSessions.size, storedValue:activeSessions.get(userId)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})+'\n');
+        // #endregion
+        console.log(`[Activity] User ${userId} joined session ${sessionId}`);
+      } else if (status === 'left') {
+        activeSessions.set(userId, null);
+        console.log(`[Activity] User ${userId} left session`);
+      } else {
+        return res.status(400).json({ message: "Invalid status. Must be 'joined' or 'left'" });
+      }
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error updating session status:", error);
+      res.status(500).json({ message: "Failed to update session status" });
+    }
+  });
+
+  // Activity update endpoint (from Tauri desktop app)
+  // No auth required - Tauri app runs in background and sends activity updates
+  app.post('/api/activity/update', async (req: any, res) => {
+    try {
+      const { userId, sessionId, status, timestamp } = req.body;
+
+      // Validate required fields (idleSeconds removed per Replit backend format)
+      if (!userId || !sessionId || !status) {
+        return res.status(400).json({ message: "Missing required fields: userId, sessionId, status" });
+      }
+
+      // Validate status values (accept "idle" or "distracted" per desktop app)
+      if (!['idle', 'distracted', 'active'].includes(status)) {
+        return res.status(400).json({ message: "Invalid status. Must be 'idle', 'distracted', or 'active'" });
+      }
+
+      console.log(`[Activity Update] User ${userId} in session ${sessionId}: ${status}`);
+
+      // Only queue alerts for "idle" or "distracted" status (not "active")
+      if (status === 'idle' || status === 'distracted') {
+        // Get all participants in this session from database
+        let sessionParticipants: string[] = [];
+        try {
+          const participants = await storage.getSessionParticipants(sessionId);
+          sessionParticipants = participants
+            .map(p => p.userId || p.id)
+            .filter(id => id !== userId); // Exclude the alerting user
+          console.log(`[Activity Update] Found ${sessionParticipants.length} other participants in session ${sessionId}`);
+        } catch (error) {
+          console.error(`[Activity Update] Error getting session participants:`, error);
+          // Fallback: use activeSessions map
+          for (const [uid, sid] of activeSessions.entries()) {
+            if (sid === sessionId && uid !== userId) {
+              sessionParticipants.push(uid);
+            }
+          }
+        }
+
+        // Get user info for the alerting user
+        let alertingUsername: string | undefined;
+        let alertingFirstName: string | undefined;
+        try {
+          const alertingUser = await storage.getUser(userId);
+          if (alertingUser) {
+            alertingUsername = alertingUser.username || undefined;
+            alertingFirstName = alertingUser.firstName || undefined;
+          }
+        } catch (error) {
+          console.warn(`[Activity Update] Could not fetch user info for ${userId}:`, error);
+        }
+
+        // Queue alert for all other participants
+        for (const participantId of sessionParticipants) {
+          if (!pendingAlerts.has(participantId)) {
+            pendingAlerts.set(participantId, []);
+          }
+          pendingAlerts.get(participantId)!.push({
+            type: 'participant-activity',
+            alertingUserId: userId,
+            alertingUsername,
+            alertingFirstName,
+            status,
+            sessionId,
+            timestamp: timestamp || new Date().toISOString(),
+          });
+          console.log(`[Activity Update] Queued alert for participant ${participantId} about user ${userId} being ${status}`);
+        }
+      }
+
+      res.json({ success: true, message: "Activity update received" });
+    } catch (error) {
+      console.error("Error processing activity update:", error);
+      res.status(500).json({ message: "Failed to process activity update" });
+    }
+  });
+
+  // Setup River RPC server with the passed-in server
+  setupRiverServer(server);
 }

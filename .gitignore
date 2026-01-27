@@ -1,6 +1,42 @@
-node_modules
-dist
-.DS_Store
-server/public
-vite.config.ts.*
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build outputs
+dist/
+build/
 *.tar.gz
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.production
+
+# IDE and OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# Replit specific
+.replit.local
+.cursor/
+
+# Temporary files
+*.tmp
+vite.config.ts.*
+focustogether@*
+vite

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index-dev.ts",
     "dev:vite": "vite --host 0.0.0.0",
+    "dev:vite:check": "node -e \"const http = require('http'); const check = () => { const req = http.get('http://localhost:5173', (r) => { if (r.statusCode === 200) { console.log('Vite already running on port 5173'); process.exit(0); } else setTimeout(check, 500); }); req.on('error', () => { console.log('Vite not running, starting...'); process.exit(1); }); }; check();\"",
     "dev:vite:wait": "node -e \"const http = require('http'); const check = () => { const req = http.get('http://localhost:5173', (r) => { if (r.statusCode === 200) process.exit(0); else setTimeout(check, 500); }); req.on('error', () => setTimeout(check, 500)); }; setTimeout(check, 1000);\"",
     "build": "vite build && esbuild server/index-prod.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/index.js",
     "start": "NODE_ENV=production node dist/index.js",
@@ -13,6 +14,7 @@
     "db:push": "drizzle-kit push",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
+    "tauri:dev:no-vite": "./scripts/tauri-dev-no-vite.sh",
     "tauri:build": "tauri build"
   },
   "dependencies": {

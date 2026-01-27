@@ -1208,6 +1208,48 @@ class SessionManager {
     }
   }
 
+  // Notify a user that they were removed as a friend
+  async notifyFriendRemoved(removedUserId: string, removedByUserId: string) {
+    try {
+      const removedByUser = await storage.getUser(removedByUserId);
+      
+      if (!removedByUser) {
+        console.error('[SessionManager] User who removed friend not found:', removedByUserId);
+        return;
+      }
+
+      const removedByName = removedByUser.firstName && removedByUser.lastName
+        ? `${removedByUser.firstName} ${removedByUser.lastName}`
+        : removedByUser.username || 'Someone';
+
+      // Send real-time WebSocket event
+      this.emit(removedUserId, {
+        type: 'friend-removed',
+        removedBy: {
+          id: removedByUser.id,
+          username: removedByUser.username,
+          firstName: removedByUser.firstName,
+          lastName: removedByUser.lastName,
+          profileImageUrl: removedByUser.profileImageUrl,
+        },
+      });
+
+      // Create persistent notification
+      await storage.createNotification({
+        userId: removedUserId,
+        type: 'friend_removed',
+        title: 'Friend Removed',
+        message: `${removedByName} removed you as a friend`,
+        read: 0,
+        relatedUserId: removedByUserId,
+      });
+
+      console.log(`[SessionManager] Notified ${removedUserId} that ${removedByUserId} removed them as a friend`);
+    } catch (error) {
+      console.error('[SessionManager] Error notifying friend removal:', error);
+    }
+  }
+
   // Destroy the manager (for cleanup)
   destroy() {
     if (this.cleanupInterval) {

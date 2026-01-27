@@ -18,6 +18,7 @@ import { format, addDays, startOfDay, endOfDay } from "date-fns";
 import { NotificationBell } from "@/components/notification-bell";
 import { useSessionClient } from "@/contexts/session-client-context";
 import { queryClient } from "@/lib/queryClient";
+import { notifySessionJoined } from "@/lib/activity-session";
 import { StackedAvatars } from "@/components/stacked-avatars";
 
 interface Participant {
@@ -160,7 +161,7 @@ export default function Home() {
     <div className="min-h-screen bg-background">
       <header className="border-b">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-semibold">FocusSession</h1>
+          <h1 className="text-2xl font-semibold">FocusTogether</h1>
           
           <div className="flex items-center gap-3">
             {profile?.preference && (
@@ -244,7 +245,13 @@ export default function Home() {
                   <div
                     key={session.id}
                     className={`flex items-center gap-3 p-3 rounded-lg border bg-card hover-elevate cursor-pointer ${active ? 'border-green-500 dark:border-green-600' : ''}`}
-                    onClick={() => setLocation(`/session/${session.id}`)}
+                    onClick={() => {
+                      // #region agent log
+                      fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'home.tsx:247',message:'About to call notifySessionJoined from home page',data:{sessionId:session.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+                      // #endregion
+                      notifySessionJoined(session.id);
+                      setLocation(`/session/${session.id}`);
+                    }}
                     data-testid={`session-preview-${session.id}`}
                   >
                     <div className="flex-shrink-0">

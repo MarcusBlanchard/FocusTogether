@@ -8,6 +8,7 @@ import { type SessionEvent } from "@/lib/session-client";
 import { useSessionClient } from "@/contexts/session-client-context";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { notifySessionJoined } from "@/lib/activity-session";
 
 type WaitingStatus = 'connecting' | 'searching' | 'found' | 'connecting-call';
 type SessionType = "solo" | "group";
@@ -52,6 +53,9 @@ export default function Waiting() {
       
       // Solo matching (1-on-1)
       if (event.type === 'matched' && event.sessionId && event.partner) {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'waiting.tsx:54',message:'Matched event received',data:{sessionId:event.sessionId,eventType:event.type},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         setStatus('found');
         // Map id to userId for consistency
         const partnerId = event.partner.userId || event.partner.id || 'unknown';
@@ -66,6 +70,11 @@ export default function Waiting() {
         setTimeout(() => {
           setStatus('connecting-call');
           setTimeout(() => {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'waiting.tsx:71',message:'About to call notifySessionJoined in setTimeout',data:{sessionId:event.sessionId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+            // #endregion
+            // Notify backend that user joined session
+            notifySessionJoined(event.sessionId);
             setLocation(`/session/${event.sessionId}`);
           }, 1000);
         }, 1500);
@@ -82,6 +91,8 @@ export default function Waiting() {
         setTimeout(() => {
           setStatus('connecting-call');
           setTimeout(() => {
+            // Notify backend that user joined session
+            notifySessionJoined(event.sessionId);
             setLocation(`/session/${event.sessionId}`);
           }, 1000);
         }, 1500);
@@ -181,7 +192,7 @@ export default function Waiting() {
     <div className="min-h-screen bg-background">
       <header className="border-b">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">FocusSession</h1>
+          <h1 className="text-2xl font-semibold">FocusTogether</h1>
           <div className="flex items-center gap-4">
             {getStatusBadge()}
           </div>

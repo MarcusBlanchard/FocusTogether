@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FocusTogether Warning</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      color: #92400e;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+      padding: 12px;
+    }
+    .notification {
+      background: white;
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+      width: 100%;
+      max-width: 380px;
+      text-align: center;
+      border: 2px solid #fbbf24;
+    }
+    .icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+    h2 {
+      font-size: 16px;
+      margin-bottom: 8px;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+    p {
+      font-size: 12px;
+      line-height: 1.4;
+      color: #78350f;
+    }
+  </style>
+</head>
+<body>
+  <div class="notification">
+    <div class="icon">⚠️</div>
+    <h2 id="title">FocusTogether Warning</h2>
+    <p id="body">You're about to be marked as distracted. Move your mouse or type.</p>
+  </div>
+  <script>
+    // Prevent runtime error overlay from showing errors in this window
+    window.addEventListener('error', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      console.warn('[Notification] Error caught and suppressed:', e.error);
+      return false;
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      console.warn('[Notification] Unhandled rejection caught and suppressed:', e.reason);
+      return false;
+    });
+    
+    // Wait for Tauri API to be ready
+    (async () => {
+      try {
+        if (window.__TAURI__ && window.__TAURI__.event) {
+      const { listen } = window.__TAURI__.event;
+      
+          // Set up event listener immediately
+          try {
+            await listen('notification-message', (event) => {
+              try {
+                const { title, body } = event.payload || {};
+                const titleEl = document.getElementById('title');
+                const bodyEl = document.getElementById('body');
+                
+                if (titleEl && title) {
+                  titleEl.textContent = title;
+                }
+                if (bodyEl && body) {
+                  bodyEl.textContent = body;
+                }
+              } catch (error) {
+                console.error('[Notification] Error updating content:', error);
+              }
+            });
+            console.log('[Notification] Event listener ready');
+          } catch (listenError) {
+            console.warn('[Notification] Could not set up listener:', listenError);
+          }
+        } else {
+          console.warn('[Notification] Tauri API not available');
+        }
+      } catch (error) {
+        console.error('[Notification] Error in setup:', error);
+        // Show default message if Tauri fails
+        const titleEl = document.getElementById('title');
+        const bodyEl = document.getElementById('body');
+        if (titleEl) titleEl.textContent = 'FocusTogether Warning';
+        if (bodyEl) bodyEl.textContent = "You're about to be marked as distracted. Move your mouse or type.";
+      }
+      
+      // Notification will only close when user becomes active (handled by main app)
+    })().catch(() => {
+      // Catch any unhandled promise rejections silently
+    });
+  </script>
+</body>
+</html>

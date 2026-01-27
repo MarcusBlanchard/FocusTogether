@@ -53,8 +53,8 @@ async function setupDevAuth(app: Express) {
   
   console.log("[Auth] ⚠️  DEVELOPMENT AUTH BYPASS ENABLED - DO NOT USE IN PRODUCTION");
   console.log("[Auth] Available dev users:");
-  console.log("[Auth]   /api/login        → Alice (default, for browser)");
-  console.log("[Auth]   /api/login?user=2 → Bob (for Tauri app)");
+  console.log("[Auth]   /api/login        → Alice (default user)");
+  console.log("[Auth]   /api/login?user=2 → Bob (second user, for multi-user testing)");
   
   // Upsert all dev users to database on startup
   for (const user of DEV_USERS) {
@@ -62,7 +62,7 @@ async function setupDevAuth(app: Express) {
   }
   
   // Intercept /api/login in development - auto-login and redirect
-  // Use ?user=2 to login as second user (for Tauri testing)
+  // Use ?user=2 to login as second user (for multi-user browser testing)
   app.get("/api/login", (req, res) => {
     console.log("[Auth] Login request - query params:", req.query, "user param:", req.query.user);
     const userIndex = req.query.user === "2" ? 1 : 0;

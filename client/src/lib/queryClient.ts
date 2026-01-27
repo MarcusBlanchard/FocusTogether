@@ -39,16 +39,16 @@ export const getQueryFn: <T>(options: {
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
     try {
-      const res = await fetch(`${config.apiBaseUrl}${queryKey.join("/")}`, {
-        credentials: "include",
-      });
+    const res = await fetch(`${config.apiBaseUrl}${queryKey.join("/")}`, {
+      credentials: "include",
+    });
 
-      if (unauthorizedBehavior === "returnNull" && res.status === 401) {
-        return null;
-      }
+    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
+      return null;
+    }
 
-      await throwIfResNotOk(res);
-      return await res.json();
+    await throwIfResNotOk(res);
+    return await res.json();
     } catch (error) {
       // Handle network errors gracefully (e.g., backend unavailable)
       // Re-throw to let React Query handle it

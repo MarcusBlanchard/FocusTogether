@@ -1,4 +1,4 @@
-import { type Server } from "node:http";
+import { type Server, createServer } from "node:http";
 
 import express, {
   type Express,
@@ -94,7 +94,11 @@ app.use((req, res, next) => {
 export default async function runApp(
   setup: (app: Express, server: Server) => Promise<void>,
 ) {
-  const server = await registerRoutes(app);
+  // Create HTTP server first so it can be passed to registerRoutes
+  const server = createServer(app);
+  
+  // Register routes with the server (needed for WebSocket setup)
+  await registerRoutes(app, server);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

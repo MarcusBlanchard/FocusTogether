@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2, Plus, Users, ArrowLeft, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { notifySessionJoined } from "@/lib/activity-session";
 
 interface FreeRoom {
   sessionId: string;
@@ -43,9 +44,15 @@ export default function FreeRooms() {
 
   const createRoomMutation = useMutation({
     mutationFn: async (title: string) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'free-rooms.tsx:46',message:'createRoomMutation.mutationFn called',data:{title},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       return apiRequest("POST", "/api/free-rooms", { title });
     },
     onSuccess: (data: any) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'free-rooms.tsx:49',message:'createRoomMutation.onSuccess called',data:{hasSessionId:!!(data?.sessionId || data?.data?.sessionId),sessionId:data?.sessionId || data?.data?.sessionId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       console.log('[FreeRooms] Create room response:', data);
       queryClient.invalidateQueries({ queryKey: ['/api/free-rooms'] });
       setCreateDialogOpen(false);
@@ -71,11 +78,19 @@ export default function FreeRooms() {
       });
       
       setTimeout(() => {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'free-rooms.tsx:74',message:'About to call notifySessionJoined in createRoom',data:{sessionId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         console.log('[FreeRooms] Navigating to session:', sessionId);
+        // Notify backend that user joined session
+        notifySessionJoined(sessionId);
         setLocation(`/session/${sessionId}`);
       }, 500);
     },
-    onError: () => {
+    onError: (error: any) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'free-rooms.tsx:84',message:'createRoomMutation.onError called',data:{error:error?.message || String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       toast({
         variant: "destructive",
         title: "Error",
@@ -86,9 +101,15 @@ export default function FreeRooms() {
 
   const joinRoomMutation = useMutation({
     mutationFn: async (sessionId: string) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'free-rooms.tsx:93',message:'joinRoomMutation.mutationFn called',data:{sessionId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       return apiRequest("POST", `/api/free-rooms/${sessionId}/join`, {});
     },
     onSuccess: (data: any, sessionId: string) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'free-rooms.tsx:97',message:'joinRoomMutation.onSuccess called',data:{sessionId,success:data?.success},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       if (data.success) {
         toast({
           title: "Joining Room",
@@ -96,6 +117,11 @@ export default function FreeRooms() {
         });
         
         setTimeout(() => {
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'free-rooms.tsx:98',message:'About to call notifySessionJoined in joinRoom',data:{sessionId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+          // #endregion
+          // Notify backend that user joined session
+          notifySessionJoined(sessionId);
           setLocation(`/session/${sessionId}`);
         }, 500);
       } else {
@@ -106,7 +132,10 @@ export default function FreeRooms() {
         });
       }
     },
-    onError: () => {
+    onError: (error: any) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'free-rooms.tsx:120',message:'joinRoomMutation.onError called',data:{error:error?.message || String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       toast({
         variant: "destructive",
         title: "Error",
@@ -116,6 +145,9 @@ export default function FreeRooms() {
   });
 
   const handleCreateRoom = () => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'free-rooms.tsx:129',message:'handleCreateRoom called',data:{roomTitle},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     if (!roomTitle.trim()) {
       toast({
         variant: "destructive",

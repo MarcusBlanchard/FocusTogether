@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { notifySessionJoined } from "@/lib/activity-session";
 import { ArrowLeft, ChevronLeft, ChevronRight, Loader2, Calendar as CalendarIcon, Clock, Users, Monitor, Activity, Shuffle, X } from "lucide-react";
 import { NotificationBell } from "@/components/notification-bell";
 import { StackedAvatars } from "@/components/stacked-avatars";
@@ -521,7 +522,13 @@ export default function CalendarPage() {
                                   size="sm"
                                   className="flex-1"
                                   disabled={!canJoin}
-                                  onClick={() => setLocation(`/session/${session.id}`)}
+                                  onClick={() => {
+                                    // #region agent log
+                                    fetch('http://127.0.0.1:7242/ingest/0d09f34b-23d1-43a5-b99f-c422e61992fc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'calendar.tsx:524',message:'About to call notifySessionJoined from calendar',data:{sessionId:session.id},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+                                    // #endregion
+                                    notifySessionJoined(session.id);
+                                    setLocation(`/session/${session.id}`);
+                                  }}
                                   data-testid={`button-join-${session.id}`}
                                 >
                                   {canJoin ? "Join" : "Not yet"}
@@ -967,6 +974,7 @@ export default function CalendarPage() {
               <AlertDialogAction
                 onClick={() => {
                   if (matchConfirmation?.session) {
+                    notifySessionJoined(matchConfirmation.session.id);
                     setLocation(`/session/${matchConfirmation.session.id}`);
                   }
                   setMatchConfirmation(null);
