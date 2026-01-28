@@ -1,0 +1,31 @@
+#!/bin/bash
+# Script to help compare routes.ts between Cursor and Replit
+# Usage: ./scripts/compare-routes.sh
+
+echo "=== Routes.ts Comparison Helper ==="
+echo ""
+echo "This script helps identify differences between Cursor and Replit versions."
+echo ""
+echo "STEP 1: Get line count from both versions"
+echo "  Cursor (local):"
+wc -l server/routes.ts
+echo ""
+echo "  Replit: Check in Replit Shell with: wc -l server/routes.ts"
+echo ""
+echo "STEP 2: Key sections to check:"
+echo ""
+echo "  - GET /api/activity/session (should return pendingAlerts)"
+echo "  - POST /api/activity/update (should queue alerts)"
+echo "  - pendingAlerts Map declaration"
+echo ""
+echo "STEP 3: Manual merge process:"
+echo "  1. Copy Replit's routes.ts to a backup: routes.ts.replit-backup"
+echo "  2. Copy Cursor's routes.ts to Replit"
+echo "  3. Compare and add back any missing endpoints from Replit"
+echo "  4. Test on Replit"
+echo ""
+echo "STEP 4: Or use Git merge:"
+echo "  1. On Replit: git pull origin main"
+echo "  2. Resolve any conflicts"
+echo "  3. Test"
+echo ""
