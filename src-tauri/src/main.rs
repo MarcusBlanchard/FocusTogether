@@ -105,6 +105,82 @@ fn dismiss_notification(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn show_participant_alert(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    println!("[Tauri] Attempting to show participant alert window: {} - {}", title, body);
+    
+    let window_label = "participant-alert";
+    
+    // Check if alert window already exists, close it first
+    if let Some(existing) = app.get_window(window_label) {
+        let _ = existing.close();
+    }
+    
+    // Create a small floating notification window in top-right corner
+    // In dev mode, use Vite dev server; in production, use app protocol
+    #[cfg(debug_assertions)]
+    let url = tauri::WindowUrl::External("http://127.0.0.1:5173/participant-alert.html".parse().unwrap());
+    #[cfg(not(debug_assertions))]
+    let url = tauri::WindowUrl::App("participant-alert.html".into());
+    
+    let window = tauri::WindowBuilder::new(
+        &app,
+        window_label,
+        url
+    )
+    .title(&title)
+    .inner_size(320.0, 120.0)
+    .resizable(false)
+    .decorations(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(false) // Start hidden
+    .focused(false) // Don't focus when shown
+    .build()
+    .map_err(|e| format!("Failed to create alert window: {}", e))?;
+    
+    // Show the window first (must be visible before accessing monitor)
+    window.show().map_err(|e| format!("Failed to show window: {}", e))?;
+    
+    // Small delay to ensure window is fully initialized before positioning
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    
+    // Position in top-right corner (after window is shown)
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let screen_size = monitor.size();
+        if let Ok(window_size) = window.outer_size() {
+            let x = (screen_size.width as i32 - window_size.width as i32) - 20; // 20px from right edge
+            let y = 20; // 20px from top
+            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+    }
+    
+    // Small delay to ensure window JavaScript is ready, then send message
+    let app_handle = app.clone();
+    let title_clone = title.clone();
+    let body_clone = body.clone();
+    let window_label_clone = window_label.to_string();
+    tauri::async_runtime::spawn(async move {
+        // Wait a bit for the window's JavaScript to initialize
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        if let Some(w) = app_handle.get_window(&window_label_clone) {
+            let _ = w.emit("notification-message", serde_json::json!({
+                "title": title_clone,
+                "body": body_clone
+            }));
+        }
+    });
+    
+    // Also try sending immediately (in case window is already ready)
+    let _ = window.emit("notification-message", serde_json::json!({
+        "title": title.clone(),
+        "body": body.clone()
+    }));
+    
+    println!("[Tauri] Participant alert window created and shown (top-right, auto-closes in 5s)");
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ActivityUpdate {
     #[serde(rename = "userId")]
@@ -273,7 +349,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
                     
                     // Fallback: Use custom notification window (works in dev mode)
                     println!("[Tauri] Using custom notification window as fallback");
-                    if let Err(e) = show_notification(
+                    if let Err(e) = show_participant_alert(
                         app.clone(),
                         "FocusTogether Alert".to_string(),
                         message.clone(),
@@ -372,7 +448,7 @@ async fn send_activity_update(
 fn main() {
     println!("[Tauri] Starting FocusTogether Enforcer...");
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, dismiss_notification, send_activity_update, get_active_session])
+        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, dismiss_notification, send_activity_update, get_active_session])
         .setup(|app| {
             println!("[Tauri] Setup callback called");
             
