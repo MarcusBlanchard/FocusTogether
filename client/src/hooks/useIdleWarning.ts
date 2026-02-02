@@ -131,10 +131,30 @@ export function useIdleMonitoring() {
   // Track current active sessionId (null means no active session)
   const sessionIdRef = useRef<string | null>(null);
   
-  // TODO: Later integrate with useAuth() to get user.id instead of hardcoding
-  // For now, allow override via VITE_USER_ID env var for testing multiple users
-  // Example: VITE_USER_ID=44923348 npm run tauri:dev (for User 2)
-  const MOCK_USER_ID = import.meta.env.VITE_USER_ID || "50145776";
+  // For multi-user testing: manually edit .user-config.json to change userId
+  // User 1: {"userId": "50145776"}
+  // User 2: {"userId": "44923348"}
+  const [MOCK_USER_ID, setMockUserId] = useState("50145776");
+  
+  // Load userId from config file on mount (for Tauri multi-instance testing)
+  useEffect(() => {
+    const loadUserId = async () => {
+      try {
+        const response = await fetch('/.user-config.json');
+        if (response.ok) {
+          const config = await response.json();
+          if (config.userId) {
+            setMockUserId(config.userId);
+            console.log('[IdleMonitor] Loaded userId from config:', config.userId);
+          }
+        }
+      } catch (error) {
+        // Config file doesn't exist or can't be read, use default
+        console.log('[IdleMonitor] Using default userId: 50145776');
+      }
+    };
+    loadUserId();
+  }, []);
 
   const checkTauriAvailable = useCallback(() => {
     try {
