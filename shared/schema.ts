@@ -88,6 +88,28 @@ export const scheduledSessionParticipants = pgTable("scheduled_session_participa
   unique().on(table.sessionId, table.userId),
 ]);
 
+// App categories - AI-categorized apps (cached)
+export const appCategories = pgTable("app_categories", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  appName: varchar("app_name").notNull().unique(), // lowercase app name
+  category: varchar("category").notNull(), // 'distracting', 'productive', 'neutral'
+  confidence: varchar("confidence"), // 'high', 'medium', 'low' - AI confidence level
+  source: varchar("source").notNull().default('ai'), // 'ai', 'manual', 'default'
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// User app rules - user-specific overrides for app categories
+export const userAppRules = pgTable("user_app_rules", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  appName: varchar("app_name").notNull(), // lowercase app name
+  rule: varchar("rule").notNull(), // 'allowed' (never distracting) or 'blocked' (always distracting)
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  unique().on(table.userId, table.appName),
+]);
+
 // Notifications table - stores user notifications
 export const notifications = pgTable("notifications", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -182,6 +204,13 @@ export const notificationsRelations = relations(notifications, ({ one }) => ({
   }),
 }));
 
+export const userAppRulesRelations = relations(userAppRules, ({ one }) => ({
+  user: one(users, {
+    fields: [userAppRules.userId],
+    references: [users.id],
+  }),
+}));
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -233,3 +262,9 @@ export type InsertScheduledSessionParticipant = z.infer<typeof insertScheduledSe
 
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+
+export type AppCategory = typeof appCategories.$inferSelect;
+export type InsertAppCategory = typeof appCategories.$inferInsert;
+
+export type UserAppRule = typeof userAppRules.$inferSelect;
+export type InsertUserAppRule = typeof userAppRules.$inferInsert;

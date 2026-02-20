@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FocusTogether - Distraction Warning</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(145deg, #fed7aa 0%, #fb923c 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      padding: 0;
+      margin: 0;
+      -webkit-user-select: none;
+      user-select: none;
+      transition: background 0.4s ease;
+    }
+    
+    body.distracted {
+      background: linear-gradient(145deg, #fecaca 0%, #f87171 100%);
+    }
+    
+    .card {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 20px;
+      padding: 24px 28px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+      width: 90%;
+      max-width: 340px;
+      text-align: center;
+      animation: slideUp 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px) scale(0.96);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    
+    .icon-wrapper {
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+      background: linear-gradient(145deg, #ffedd5, #fdba74);
+      box-shadow: 0 4px 12px rgba(249, 115, 22, 0.3);
+      transition: all 0.4s ease;
+    }
+    
+    body.distracted .icon-wrapper {
+      background: linear-gradient(145deg, #fee2e2, #fecaca);
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+    }
+    
+    .icon-wrapper svg {
+      width: 28px;
+      height: 28px;
+      stroke: #c2410c;
+      transition: stroke 0.4s ease;
+    }
+    
+    body.distracted .icon-wrapper svg {
+      stroke: #dc2626;
+    }
+    
+    .title {
+      font-size: 17px;
+      font-weight: 700;
+      color: #1f2937;
+      margin-bottom: 8px;
+      letter-spacing: -0.3px;
+    }
+    
+    .message {
+      font-size: 14px;
+      color: #6b7280;
+      line-height: 1.5;
+      font-weight: 450;
+    }
+    
+    .countdown {
+      margin-top: 16px;
+      font-size: 32px;
+      font-weight: 700;
+      color: #ea580c;
+      transition: color 0.4s ease;
+    }
+    
+    body.distracted .countdown {
+      color: #dc2626;
+    }
+    
+    .hint {
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: rgba(249, 115, 22, 0.15);
+      border-radius: 10px;
+      font-size: 12px;
+      color: #9a3412;
+      font-weight: 500;
+      transition: all 0.4s ease;
+    }
+    
+    body.distracted .hint {
+      background: rgba(239, 68, 68, 0.12);
+      color: #991b1b;
+    }
+    
+    .settings-hint {
+      margin-top: 10px;
+      font-size: 11px;
+      color: #9ca3af;
+      font-weight: 400;
+    }
+    
+    body.distracted .settings-hint {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon-wrapper">
+      <svg id="icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+        <!-- Eye with slash icon -->
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+      </svg>
+    </div>
+    <div class="title" id="title">Distracting App Detected</div>
+    <div class="message" id="body">Switch back to productive work to stay focused</div>
+    <div class="countdown" id="countdown">10</div>
+    <div class="hint" id="hint">Close distracting app to dismiss</div>
+    <div class="settings-hint">You can change what apps are distracting on your profile page.</div>
+  </div>
+  
+  <script>
+    window.addEventListener('error', (e) => { e.preventDefault(); return false; });
+    window.addEventListener('unhandledrejection', (e) => { e.preventDefault(); return false; });
+    
+    let countdownValue = 10;
+    let countdownInterval = null;
+    
+    function startCountdown() {
+      if (countdownInterval) return;
+      
+      countdownInterval = setInterval(() => {
+        countdownValue--;
+        const countdownEl = document.getElementById('countdown');
+        if (countdownEl) {
+          countdownEl.textContent = countdownValue;
+        }
+        
+        if (countdownValue <= 0) {
+          clearInterval(countdownInterval);
+          countdownInterval = null;
+        }
+      }, 1000);
+    }
+    
+    (async () => {
+      try {
+        if (window.__TAURI__ && window.__TAURI__.event) {
+          const { listen } = window.__TAURI__.event;
+          
+          await listen('distraction-warning-message', (event) => {
+            try {
+              const { title, body, countdown, isDistracted } = event.payload || {};
+              const titleEl = document.getElementById('title');
+              const bodyEl = document.getElementById('body');
+              const countdownEl = document.getElementById('countdown');
+              const hintEl = document.getElementById('hint');
+              const iconEl = document.getElementById('icon');
+              
+              if (titleEl && title) titleEl.textContent = title;
+              if (bodyEl && body) bodyEl.textContent = body;
+              if (countdownEl && countdown !== undefined) {
+                countdownValue = countdown;
+                countdownEl.textContent = countdown;
+              }
+              
+              if (isDistracted) {
+                document.body.classList.add('distracted');
+                if (hintEl) hintEl.textContent = 'Session participants notified';
+                if (countdownEl) countdownEl.style.display = 'none';
+                if (iconEl) {
+                  iconEl.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />';
+                }
+              } else {
+                startCountdown();
+              }
+            } catch (error) {
+              console.error('[DistractionWarning] Error:', error);
+            }
+          });
+        }
+        
+        // Start countdown immediately
+        startCountdown();
+      } catch (error) {
+        console.error('[DistractionWarning] Setup error:', error);
+      }
+    })().catch(() => {});
+  </script>
+</body>
+</html>

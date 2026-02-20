@@ -30,6 +30,15 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: path.resolve(import.meta.dirname, "client/index.html"),
+        notification: path.resolve(import.meta.dirname, "client/notification.html"),
+        "participant-alert": path.resolve(import.meta.dirname, "client/participant-alert.html"),
+        "startup-notification": path.resolve(import.meta.dirname, "client/startup-notification.html"),
+        "distraction-warning": path.resolve(import.meta.dirname, "client/distraction-warning.html"),
+      },
+    },
   },
   server: {
     host: "0.0.0.0",

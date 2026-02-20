@@ -115,22 +115,6 @@ async function tryRematchSession(
 }
 
 export async function registerRoutes(app: Express, server: Server): Promise<void> {
-  // In-memory store: userId -> sessionId (or null)
-  // Tracks which users are currently in active focus sessions
-  const activeSessions = new Map<string, string | null>();
-  
-  // In-memory store: userId -> array of pending alerts
-  // Alerts are queued when a participant goes idle/distracted and cleared after retrieval
-  const pendingAlerts = new Map<string, Array<{
-    type: string;
-    alertingUserId: string;
-    alertingUsername?: string;
-    alertingFirstName?: string;
-    status: string;
-    sessionId: string;
-    timestamp: string;
-  }>>();
-
   // Auth middleware (includes OIDC discovery - can be slow)
   // Note: Health check is registered in app.ts BEFORE listen() for fast deployment
   await setupAuth(app);
@@ -370,6 +354,29 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
     } catch (error) {
       console.error("Error searching users:", error);
       res.status(500).json({ message: "Failed to search users" });
+    }
+  });
+
+  // Lookup user by exact username (public endpoint for browser extension)
+  app.get('/api/users/lookup', async (req, res) => {
+    try {
+      const username = req.query.username as string;
+
+      if (!username || username.length < 1) {
+        return res.status(400).json({ message: "Username required" });
+      }
+
+      const user = await storage.getUserByUsername(username);
+      
+      if (user) {
+        // Only return minimal info needed for extension to connect
+        res.json({ id: user.id, username: user.username });
+      } else {
+        res.status(404).json({ message: "User not found" });
+      }
+    } catch (error) {
+      console.error("Error looking up user:", error);
+      res.status(500).json({ message: "Failed to lookup user" });
     }
   });
 
@@ -1662,37 +1669,39 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
   // ACTIVITY TRACKING (Desktop App)
   // =====================================
 
-  // GET /api/activity/session - Desktop app polls this to check for active session
-  app.get('/api/activity/session', async (req: any, res) => {
+  // GET /api/activity/session - Polled by desktop app to check if user is in active session
+  // No auth for MVP (will secure later)
+  app.get('/api/activity/session', async (req, res) => {
     try {
-      const userId = req.query.userId;
-      
-      // #region agent log
-      const fs = require('fs');
-      const logPath = '/Users/mariablanchard/Downloads/FocusTogether/.cursor/debug.log';
-      fs.appendFileSync(logPath, JSON.stringify({location:'routes.ts:1654',message:'GET /api/activity/session received',data:{requestedUserId:userId, activeSessionsSize:activeSessions.size, allUserIds:Array.from(activeSessions.keys()), allSessions:Object.fromEntries(activeSessions)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})+'\n');
-      // #endregion
-      
+      const userId = req.query.userId as string;
+
       if (!userId) {
         return res.status(400).json({ message: "userId required" });
       }
+
+      const activeSession = sessionManager.getUserActiveSession(userId);
+      const alerts = sessionManager.getPendingAlerts(userId);
       
-      const sessionId = activeSessions.get(userId) || null;
-      
-      // Get and clear pending alerts for this user
-      const alerts = pendingAlerts.get(userId) || [];
-      pendingAlerts.delete(userId); // Clear after retrieval
-      
-      // #region agent log
-      fs.appendFileSync(logPath, JSON.stringify({location:'routes.ts:1662',message:'GET /api/activity/session response',data:{requestedUserId:userId, returnedSessionId:sessionId, foundInMap:activeSessions.has(userId), alertsCount:alerts.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})+'\n');
-      // #endregion
-      
-      res.json({ 
-        sessionId,
-        pendingAlerts: alerts.length > 0 ? alerts : undefined,
-        active: sessionId !== null,
+      // Log when we return alerts for debugging
+      if (alerts.length > 0) {
+        console.log(`[Activity Session] Returning ${alerts.length} pending alerts to user ${userId}`);
+      }
+
+      // Get distracting apps list for this user (with their overrides applied)
+      const { getDistractingAppsForUser, getAllowedAppsForUser } = await import('./app-categorizer');
+      const distractingApps = await getDistractingAppsForUser(userId);
+      const allowedApps = await getAllowedAppsForUser(userId);
+
+      // Always send pendingAlerts as an array so desktop can parse consistently
+      // (omitting the key when empty caused desktop to see pendingAlerts: None)
+      res.json({
+        sessionId: activeSession?.sessionId || null,
+        pendingAlerts: alerts,
+        active: activeSession !== null,
+        distractingApps,
+        allowedApps,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching active session:", error);
       res.status(500).json({ message: "Failed to fetch active session" });
     }
@@ -1704,105 +1713,208 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
       const userId = req.user.claims.sub;
       const { sessionId, status } = req.body;
       
-      // #region agent log
-      const fs = require('fs');
-      const logPath = '/Users/mariablanchard/Downloads/FocusTogether/.cursor/debug.log';
-      fs.appendFileSync(logPath, JSON.stringify({location:'routes.ts:1671',message:'POST /api/activity/session received',data:{userId, sessionId, status, activeSessionsSize:activeSessions.size, allUserIds:Array.from(activeSessions.keys())},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})+'\n');
-      // #endregion
-      
       if (status === 'joined') {
-        activeSessions.set(userId, sessionId);
-        // #region agent log
-        fs.appendFileSync(logPath, JSON.stringify({location:'routes.ts:1677',message:'Session stored in activeSessions',data:{userId, sessionId, activeSessionsSize:activeSessions.size, storedValue:activeSessions.get(userId)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})+'\n');
-        // #endregion
-        console.log(`[Activity] User ${userId} joined session ${sessionId}`);
+        if (!sessionId) {
+          return res.status(400).json({ 
+            message: "sessionId is required when status is 'joined'" 
+          });
+        }
+        sessionManager.setUserActiveSession(userId, sessionId);
+        console.log(`[Activity Session] User ${userId} joined session ${sessionId}`);
       } else if (status === 'left') {
-        activeSessions.set(userId, null);
-        console.log(`[Activity] User ${userId} left session`);
+        sessionManager.clearUserActiveSession(userId);
+        console.log(`[Activity Session] User ${userId} left session`);
       } else {
         return res.status(400).json({ message: "Invalid status. Must be 'joined' or 'left'" });
       }
-      
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error updating session status:", error);
-      res.status(500).json({ message: "Failed to update session status" });
+
+      res.json({ 
+        success: true, 
+        message: status === 'joined' ? "Session join recorded" : "Session leave recorded",
+        data: { userId, sessionId: status === 'joined' ? sessionId : null, status }
+      });
+    } catch (error: any) {
+      console.error("Error processing activity session:", error);
+      res.status(500).json({ message: error.message || "Failed to process activity session" });
     }
   });
 
-  // Activity update endpoint (from Tauri desktop app)
-  // No auth required - Tauri app runs in background and sends activity updates
-  app.post('/api/activity/update', async (req: any, res) => {
+  // POST /api/activity/update - Receive activity state updates from desktop app
+  // No auth required for now (placeholder userId/sessionId)
+  app.post('/api/activity/update', async (req, res) => {
     try {
       const { userId, sessionId, status, timestamp } = req.body;
+      const actualTimestamp = timestamp || new Date().toISOString();
 
-      // Validate required fields (idleSeconds removed per Replit backend format)
+      // Validate required fields (timestamp is optional, defaults to now)
       if (!userId || !sessionId || !status) {
-        return res.status(400).json({ message: "Missing required fields: userId, sessionId, status" });
+        return res.status(400).json({ 
+          message: "Missing required fields: userId, sessionId, status" 
+        });
       }
 
-      // Validate status values (accept "idle" or "distracted" per desktop app)
-      if (!['idle', 'distracted', 'active'].includes(status)) {
-        return res.status(400).json({ message: "Invalid status. Must be 'idle', 'distracted', or 'active'" });
+      // Validate status value
+      if (!['active', 'idle', 'distracted'].includes(status)) {
+        return res.status(400).json({ 
+          message: "Status must be 'active', 'idle', or 'distracted'" 
+        });
       }
 
-      console.log(`[Activity Update] User ${userId} in session ${sessionId}: ${status}`);
+      // Log the activity update
+      console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      console.log(`[Activity Update] 📡 User ${userId} in session ${sessionId}: ${status} at ${actualTimestamp}`);
 
-      // Only queue alerts for "idle" or "distracted" status (not "active")
-      if (status === 'idle' || status === 'distracted') {
-        // Get all participants in this session from database
-        let sessionParticipants: string[] = [];
-        try {
-          const participants = await storage.getSessionParticipants(sessionId);
-          sessionParticipants = participants
-            .map(p => p.userId || p.id)
-            .filter(id => id !== userId); // Exclude the alerting user
-          console.log(`[Activity Update] Found ${sessionParticipants.length} other participants in session ${sessionId}`);
-        } catch (error) {
-          console.error(`[Activity Update] Error getting session participants:`, error);
-          // Fallback: use activeSessions map
-          for (const [uid, sid] of activeSessions.entries()) {
-            if (sid === sessionId && uid !== userId) {
-              sessionParticipants.push(uid);
+      // Get the user info for the notification
+      const user = await storage.getUser(userId);
+      console.log(`[Activity Update] 👤 Sending user: ${user?.firstName || user?.username || 'Unknown'}`);
+      
+      // Get all participants in the session to broadcast to
+      const participants = await storage.getSessionParticipants(sessionId);
+      console.log(`[Activity Update] 📊 Found ${participants.length} participants in session ${sessionId}`);
+      if (participants.length > 0) {
+        console.log(`[Activity Update] 👥 Participants:`, participants.map(p => `${p.id} (${p.firstName || p.username})`).join(', '));
+      } else {
+        console.log(`[Activity Update] ⚠️  WARNING: No participants found! The web app may not have registered users in this session.`);
+      }
+      
+      if (participants.length > 0) {
+        // Create the activity event to broadcast
+        const activityEvent = {
+          type: 'participant-activity',
+          sessionId,
+          userId,
+          username: user?.username || null,
+          firstName: user?.firstName || null,
+          profileImageUrl: user?.profileImageUrl || null,
+          status,
+          timestamp: actualTimestamp,
+        };
+
+        // Broadcast to all OTHER participants (not the user themselves)
+        let alertsQueued = 0;
+        for (const participant of participants) {
+          if (participant.id !== userId) {
+            // Send via WebSocket for web app
+            sessionManager.sendToUser(participant.id, activityEvent);
+            console.log(`[Activity Update] 📡 WebSocket notified ${participant.id} about ${userId}'s ${status} status`);
+            
+            // Queue for desktop app polling (only idle/distracted, not active)
+            if (status === 'idle' || status === 'distracted') {
+              sessionManager.queueAlertForUser(participant.id, {
+                type: 'participant-activity',
+                alertingUserId: userId,
+                alertingUsername: user?.username || null,
+                alertingFirstName: user?.firstName || null,
+                status,
+                sessionId,
+                timestamp: actualTimestamp,
+              });
+              alertsQueued++;
+              console.log(`[Activity Update] 🔔 Queued alert for participant ${participant.id} (${participant.firstName || participant.username}) about ${userId}'s ${status} status`);
             }
           }
         }
-
-        // Get user info for the alerting user
-        let alertingUsername: string | undefined;
-        let alertingFirstName: string | undefined;
-        try {
-          const alertingUser = await storage.getUser(userId);
-          if (alertingUser) {
-            alertingUsername = alertingUser.username || undefined;
-            alertingFirstName = alertingUser.firstName || undefined;
-          }
-        } catch (error) {
-          console.warn(`[Activity Update] Could not fetch user info for ${userId}:`, error);
-        }
-
-        // Queue alert for all other participants
-        for (const participantId of sessionParticipants) {
-          if (!pendingAlerts.has(participantId)) {
-            pendingAlerts.set(participantId, []);
-          }
-          pendingAlerts.get(participantId)!.push({
-            type: 'participant-activity',
-            alertingUserId: userId,
-            alertingUsername,
-            alertingFirstName,
-            status,
-            sessionId,
-            timestamp: timestamp || new Date().toISOString(),
-          });
-          console.log(`[Activity Update] Queued alert for participant ${participantId} about user ${userId} being ${status}`);
-        }
+        console.log(`[Activity Update] ✅ Queued ${alertsQueued} desktop alerts total`);
+      } else {
+        console.log(`[Activity Update] No participants found in session ${sessionId} - check if session exists`);
       }
 
-      res.json({ success: true, message: "Activity update received" });
-    } catch (error) {
+      res.json({ 
+        success: true, 
+        message: "Activity state received and broadcast",
+        data: { userId, sessionId, status, timestamp }
+      });
+    } catch (error: any) {
       console.error("Error processing activity update:", error);
-      res.status(500).json({ message: "Failed to process activity update" });
+      res.status(500).json({ message: error.message || "Failed to process activity update" });
+    }
+  });
+
+  // =====================================
+  // APP RULES (User app allow/block settings)
+  // =====================================
+
+  // GET /api/app-rules - Get user's app rules
+  app.get('/api/app-rules', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { getDistractingAppsForUser, getAllowedAppsForUser } = await import('./app-categorizer');
+      
+      const distractingApps = await getDistractingAppsForUser(userId);
+      const allowedApps = await getAllowedAppsForUser(userId);
+      
+      // Get user's custom rules
+      const { userAppRules } = await import('@shared/schema');
+      const { eq } = await import('drizzle-orm');
+      const rules = await db.select().from(userAppRules).where(eq(userAppRules.userId, userId));
+      
+      res.json({
+        distractingApps,
+        allowedApps,
+        customRules: rules.map(r => ({ appName: r.appName, rule: r.rule })),
+      });
+    } catch (error: any) {
+      console.error("Error fetching app rules:", error);
+      res.status(500).json({ message: "Failed to fetch app rules" });
+    }
+  });
+
+  // POST /api/app-rules - Set an app rule (allow or block)
+  app.post('/api/app-rules', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { appName, rule } = req.body;
+      
+      if (!appName || !rule) {
+        return res.status(400).json({ message: "appName and rule are required" });
+      }
+      
+      if (!['allowed', 'blocked'].includes(rule)) {
+        return res.status(400).json({ message: "rule must be 'allowed' or 'blocked'" });
+      }
+      
+      const { setUserAppRule } = await import('./app-categorizer');
+      await setUserAppRule(userId, appName, rule);
+      
+      res.json({ success: true, message: `App "${appName}" set to ${rule}` });
+    } catch (error: any) {
+      console.error("Error setting app rule:", error);
+      res.status(500).json({ message: "Failed to set app rule" });
+    }
+  });
+
+  // DELETE /api/app-rules/:appName - Remove an app rule
+  app.delete('/api/app-rules/:appName', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const appName = decodeURIComponent(req.params.appName);
+      
+      const { removeUserAppRule } = await import('./app-categorizer');
+      await removeUserAppRule(userId, appName);
+      
+      res.json({ success: true, message: `Rule for "${appName}" removed` });
+    } catch (error: any) {
+      console.error("Error removing app rule:", error);
+      res.status(500).json({ message: "Failed to remove app rule" });
+    }
+  });
+
+  // POST /api/app-categorize - Categorize an app (for testing/admin)
+  app.post('/api/app-categorize', async (req, res) => {
+    try {
+      const { appName } = req.body;
+      
+      if (!appName) {
+        return res.status(400).json({ message: "appName is required" });
+      }
+      
+      const { getAppCategory } = await import('./app-categorizer');
+      const category = await getAppCategory(appName);
+      
+      res.json({ appName, category });
+    } catch (error: any) {
+      console.error("Error categorizing app:", error);
+      res.status(500).json({ message: "Failed to categorize app" });
     }
   });
 
