@@ -13,6 +13,83 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use active_win_pos_rs::get_active_window;
+use std::io::Write;
+
+static LOG_FILE: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
+
+fn init_log_file() {
+    let log_path = dirs::desktop_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("focustogether-live.log");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .expect("Failed to open log file");
+    LOG_FILE.set(Mutex::new(file)).ok();
+    eprintln!("[Log] Writing to {}", log_path.display());
+}
+
+macro_rules! log {
+    ($($arg:tt)*) => {{
+        let msg = format!($($arg)*);
+        let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
+        let line = format!("[{}] {}", timestamp, msg);
+        println!("{}", line);
+        if let Some(f) = LOG_FILE.get() {
+            if let Ok(mut f) = f.lock() {
+                let _ = writeln!(f, "{}", line);
+                let _ = f.flush();
+            }
+        }
+    }};
+}
+
+/// On macOS, force a Tauri window to appear on screen using NSWindow APIs.
+/// Must dispatch Cocoa calls to the main thread — AppKit crashes otherwise.
+#[cfg(target_os = "macos")]
+fn force_show_window(app_handle: &tauri::AppHandle, window_label: String) {
+    let handle = app_handle.clone();
+    let revert_handle = app_handle.clone();
+    let _ = app_handle.run_on_main_thread(move || {
+        use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicy};
+        use cocoa::base::id;
+        use objc::runtime::YES;
+        #[allow(unused_imports)]
+        use objc::{sel, sel_impl, msg_send, class};
+        
+        unsafe {
+            let ns_app = NSApp();
+            ns_app.setActivationPolicy_(NSApplicationActivationPolicy::NSApplicationActivationPolicyRegular);
+            ns_app.activateIgnoringOtherApps_(YES);
+            
+            if let Some(window) = handle.get_window(&window_label) {
+                let ns_win: id = window.ns_window().unwrap() as id;
+                let _: () = msg_send![ns_win, setLevel: 25_i64];
+                let _: () = msg_send![ns_win, orderFrontRegardless];
+                log!("[macOS] force_show_window on main thread: level=25 + orderFrontRegardless for {}", window_label);
+            } else {
+                log!("[macOS] ⚠️ Window {} not found on main thread", window_label);
+            }
+        }
+    });
+    
+    // Revert to Accessory on the main thread after a short delay
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let _ = revert_handle.run_on_main_thread(move || {
+            unsafe {
+                use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicy};
+                let ns_app = NSApp();
+                ns_app.setActivationPolicy_(NSApplicationActivationPolicy::NSApplicationActivationPolicyAccessory);
+            }
+            log!("[macOS] Reverted to Accessory policy (main thread)");
+        });
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn force_show_window(_app_handle: &tauri::AppHandle, _window_label: String) {}
 
 
 // Global config storage
@@ -420,10 +497,9 @@ async fn show_notification(app: tauri::AppHandle, title: String, body: String) -
                     }
                 }
                 
-                // NOW show the window with content already loaded
                 let _ = window.show();
+                force_show_window(&app_clone, label.clone());
                 
-                // Play warning sound RIGHT AFTER window appears for perfect sync
                 play_warning_sound();
             }
         }
@@ -480,24 +556,24 @@ fn update_notification_to_distracted(app: tauri::AppHandle) -> Result<(), String
 
 #[tauri::command]
 async fn show_participant_alert(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
-    println!("[Tauri] Attempting to show participant alert window: {} - {}", title, body);
+    log!("[POPUP DEBUG] ──── show_participant_alert called: title=\"{}\" body=\"{}\" ────", title, body);
     
-    let window_label = "participant-alert";
+    // Unique label per alert so we never conflict with a previous window (server sends one per event)
+    let window_label = format!("participant-alert-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis());
     
-    // Check if alert window already exists, close it first and wait for cleanup
-    if let Some(existing) = app.get_window(window_label) {
-        println!("[Tauri] ⚠️  Closing existing participant alert window...");
-        let _ = existing.close();
-        // Wait for window to fully close before creating new one
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    }
+    // Check if this exact label somehow already exists (should be impossible with timestamp)
+    let label_exists = app.get_window(&window_label).is_some();
+    log!("[POPUP DEBUG] Generated window label: {} (already exists: {})", window_label, label_exists);
     
-    // Always use App URL - Tauri handles dev vs production
     let url = tauri::WindowUrl::App("participant-alert.html".into());
     
-    let _window = tauri::WindowBuilder::new(
+    log!("[POPUP DEBUG] Building WindowBuilder for label={}", window_label);
+    let build_result = tauri::WindowBuilder::new(
         &app,
-        window_label,
+        &window_label,
         url
     )
     .title(&title)
@@ -506,66 +582,86 @@ async fn show_participant_alert(app: tauri::AppHandle, title: String, body: Stri
     .decorations(false)
     .always_on_top(true)
     .skip_taskbar(true)
-    .visible(false) // Start hidden, will show after content is loaded
-    .focused(false) // Don't focus when shown
-    .accept_first_mouse(false) // Don't accept focus on first click (macOS)
-    .build()
-    .map_err(|e| format!("Failed to create alert window: {}", e))?;
+    .visible(false)
+    .focused(false)
+    .accept_first_mouse(false)
+    .build();
     
-    // Store app_handle instead of window to avoid dangling references
+    match build_result {
+        Ok(_window) => {
+            log!("[POPUP DEBUG] ✅ Window creation succeeded: label={}", window_label);
+        }
+        Err(e) => {
+            let err_msg = format!("Failed to create alert window: {}", e);
+            log!("[POPUP DEBUG] ❌ Window creation FAILED: {}", err_msg);
+            return Err(err_msg);
+        }
+    }
+    
     let app_clone = app.clone();
-    let label = window_label.to_string();
+    let label = window_label.clone();
     let title_clone = title.clone();
     let body_clone = body.clone();
     tauri::async_runtime::spawn(async move {
-        // Wait longer for the window's JavaScript to fully initialize
+        log!("[POPUP DEBUG] Spawn started for label={}, sleeping 500ms for JS init", label);
         std::thread::sleep(std::time::Duration::from_millis(500));
         
-        // Re-fetch window - it may have been closed during the delay
         if let Some(window) = app_clone.get_window(&label) {
-            // Send the message first (using participant-specific event name)
-            let _ = window.emit("participant-alert-message", serde_json::json!({
+            log!("[POPUP DEBUG] Window {} found after 500ms, emitting message", label);
+            let emit_result = window.emit("participant-alert-message", serde_json::json!({
                 "title": title_clone,
                 "body": body_clone
             }));
-            println!("[Tauri] 📨 Sent participant-alert-message event");
+            log!("[POPUP DEBUG] emit result: {:?}", emit_result);
             
-            // Longer delay to ensure JavaScript processes the message
             std::thread::sleep(std::time::Duration::from_millis(200));
             
-            // Re-fetch window again after delay
             if let Some(window) = app_clone.get_window(&label) {
-                // Position the window in top-right corner
                 if let Ok(Some(monitor)) = window.current_monitor() {
                     let screen_size = monitor.size();
                     if let Ok(window_size) = window.outer_size() {
-                        let x = (screen_size.width as i32 - window_size.width as i32) - 20; // 20px from right edge
-                        let y = 20; // 20px from top
+                        let x = (screen_size.width as i32 - window_size.width as i32) - 20;
+                        let y = 20;
                         let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+                        log!("[POPUP DEBUG] Positioned at ({}, {})", x, y);
                     }
                 }
                 
-                // NOW show the window with content already loaded
-                let _ = window.show();
+                let show_result = window.show();
+                log!("[POPUP DEBUG] window.show() result: {:?} — label={}", show_result, label);
                 
-                // Play alert sound RIGHT AFTER window appears for perfect sync
+                force_show_window(&app_clone, label.clone());
+                log!("[POPUP DEBUG] force_show_window dispatched to main thread — label={}", label);
+                
+                // Brief delay for main-thread dispatch to execute
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                
+                let is_visible = window.is_visible().unwrap_or(false);
+                log!("[POPUP DEBUG] is_visible after force_show: {} — label={}", is_visible, label);
+                
                 play_alert_sound();
+                log!("[POPUP DEBUG] Alert sound played for label={}", label);
+            } else {
+                log!("[POPUP DEBUG] ⚠️ Window {} disappeared after emit+200ms delay", label);
             }
+        } else {
+            log!("[POPUP DEBUG] ⚠️ Window {} NOT FOUND after 500ms — creation may have failed or window was closed", label);
         }
     });
 
-    // Auto-close the window after 5 seconds
     let app_for_close = app.clone();
-    let label_for_close = window_label.to_string();
+    let label_for_close = window_label.clone();
     tauri::async_runtime::spawn(async move {
         std::thread::sleep(std::time::Duration::from_millis(4700));
         if let Some(w) = app_for_close.get_window(&label_for_close) {
             let _ = w.close();
-            println!("[Tauri] ✅ Alert window auto-closed after 4.7 seconds");
+            log!("[POPUP DEBUG] Auto-closed window {} after 4.7s", label_for_close);
+        } else {
+            log!("[POPUP DEBUG] Window {} already gone at 4.7s auto-close", label_for_close);
         }
     });
     
-    println!("[Tauri] Participant alert window created and shown (top-right, auto-closes in 4.7s)");
+    log!("[POPUP DEBUG] show_participant_alert returning Ok for label={}", window_label);
     Ok(())
 }
 
@@ -836,6 +932,7 @@ fn show_distraction_warning(app_handle: &tauri::AppHandle) {
                         }
                         
                         let _ = window.show();
+                        force_show_window(&app_clone, label.clone());
                         
                         // Play warning sound
                         #[cfg(target_os = "macos")]
@@ -1203,10 +1300,12 @@ fn dismiss_all_notifications(app_handle: &tauri::AppHandle) {
         println!("[Cleanup] Closed notification (idle warning) window");
     }
     
-    // Close participant alert (blue popup)
-    if let Some(window) = app_handle.get_window("participant-alert") {
-        let _ = window.close();
-        println!("[Cleanup] Closed participant-alert window");
+    // Close all participant alert windows (blue popup; labels are participant-alert-{timestamp})
+    for (label, window) in app_handle.windows() {
+        if label.starts_with("participant-alert") {
+            let _ = window.close();
+            println!("[Cleanup] Closed {} window", label);
+        }
     }
     
     // Close startup notification (green popup)
@@ -1224,14 +1323,15 @@ fn dismiss_all_notifications(app_handle: &tauri::AppHandle) {
 #[tauri::command]
 async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Option<String>, String> {
     let poll_num = SESSION_POLL_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    println!("[Tauri] Poll #{} get_active_session userId={}", poll_num, userId);
+    let poll_start = std::time::Instant::now();
+    log!("[POLL DEBUG] ═══ Poll #{} cycle starting for userId={} ═══", poll_num, userId);
     
     // Read backend URL from environment variable, default to Replit URL
     let backend_url = std::env::var("BACKEND_URL")
         .unwrap_or_else(|_| "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev".to_string());
     
     let endpoint = format!("{}/api/activity/session?userId={}&source=desktop", backend_url, userId);
-    println!("[Tauri] GET endpoint: {}", endpoint);
+    log!("[POLL DEBUG] GET {}", endpoint);
     
     // Use Tauri's HTTP API to send GET request
     let client = tauri::api::http::ClientBuilder::new()
@@ -1257,7 +1357,9 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
         // response_data.data is a serde_json::Value, parse it directly
         let raw = response_data.data.clone();
         let raw_str = serde_json::to_string_pretty(&raw).unwrap_or_else(|_| format!("{:?}", raw));
-        println!("[Tauri] 📥 RAW response data: {}", raw_str);
+        log!("[POLL DEBUG] Raw response body: {}", raw_str);
+        log!("[POLL DEBUG] pendingAlerts in raw JSON: {}", 
+            raw.get("pendingAlerts").map(|v| serde_json::to_string(v).unwrap_or_default()).unwrap_or_else(|| "MISSING".to_string()));
         
         let session_response: SessionResponse = serde_json::from_value(raw.clone()).map_err(|e| {
             // When parse fails, inspect pendingAlerts specifically to debug desktop/server mismatch
@@ -1271,69 +1373,42 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
             format!("Failed to parse JSON response: {}", e)
         })?;
         
-        // Debug: Log the full response structure
-        println!("[Tauri] Session response - sessionId: {:?}, pendingAlerts: {:?}, distractingApps: {}", 
-                 session_response.session_id, 
-                 session_response.pending_alerts.as_ref().map(|a| a.len()),
-                 session_response.distracting_apps.len());
-        
-        // Note: distractingApps list is no longer used for local matching
-        // The desktop app now calls /api/desktop/apps directly for server-side categorization
+        let alert_count = session_response.pending_alerts.as_ref().map(|a| a.len()).unwrap_or(0);
+        log!("[POLL DEBUG] Parsed OK — sessionId={:?} pendingAlerts count={} distractingApps count={}",
+                 session_response.session_id, alert_count, session_response.distracting_apps.len());
         
         // Process pending alerts
         if let Some(ref alerts) = session_response.pending_alerts {
             if !alerts.is_empty() {
-                println!("[Tauri] 🔔 Processing {} pending alert(s) for userId: {}", alerts.len(), userId);
+                log!("[POLL DEBUG] 🔔 Processing {} pending alert(s)", alerts.len());
                 
                 // First, handle self-distraction alerts from browser extension
-                for alert in alerts {
+                for (i, alert) in alerts.iter().enumerate() {
+                    log!("[POLL DEBUG] Alert[{}]: type={} status={} alertingUserId={} alertingFirstName={:?}",
+                        i, alert.alert_type, alert.status, alert.alerting_user_id, alert.alerting_first_name);
+                    
                     if alert.alert_type == "self-distraction" {
                         let domain = alert.domain.clone().unwrap_or_else(|| "a distracting site".to_string());
-                        println!("[Tauri] 🌐 Self-distraction alert: browser detected distracting site: {}", domain);
-                        
-                        // Show the orange distraction warning popup
+                        log!("[POLL DEBUG] Alert[{}] → self-distraction (domain={}), showing orange warning", i, domain);
                         show_distraction_warning(&app);
-                        
-                        // Note: The 10-second countdown and distracted state transition
-                        // will be handled by the existing detection loop
                     }
                 }
                 
-                // Deduplicate partner alerts: keep only the one with the best display name for each alerting user
-                use std::collections::HashMap;
-                let mut best_alerts: HashMap<String, &PendingAlert> = HashMap::new();
-                
-                for alert in alerts {
-                    // Skip self-distraction alerts (already handled above)
-                    if alert.alert_type == "self-distraction" {
+                // Process partner alerts (idle/distracted). Server guarantees exactly one alert per
+                // distraction event — no client-side deduplication needed.
+                for (i, alert) in alerts.iter().enumerate() {
+                    let is_self = alert.alert_type == "self-distraction";
+                    let is_valid_status = alert.status == "idle" || alert.status == "distracted";
+                    log!("[POPUP DEBUG] Alert[{}] condition: is_self_distraction={} → {} | is_valid_status(idle|distracted)={} → {}",
+                        i, is_self, if is_self { "SKIP" } else { "pass" },
+                        is_valid_status, if is_valid_status { "pass" } else { "SKIP" });
+                    
+                    if is_self {
                         continue;
                     }
-                    
-                    // Only process "idle" or "distracted" status alerts
-                    if alert.status != "idle" && alert.status != "distracted" {
+                    if !is_valid_status {
                         continue;
                     }
-                    
-                    let alerting_user_id = &alert.alerting_user_id;
-                    
-                    // Check if we already have an alert for this user
-                    let should_replace = if let Some(existing) = best_alerts.get(alerting_user_id) {
-                        // Prefer alerts with firstName, then username, then keep existing
-                        alert.alerting_first_name.is_some() && existing.alerting_first_name.is_none()
-                    } else {
-                        true
-                    };
-                    
-                    if should_replace {
-                        best_alerts.insert(alerting_user_id.clone(), alert);
-                    }
-                }
-                
-                println!("[Tauri] 📊 After deduplication: {} unique alert(s)", best_alerts.len());
-                
-                // Now process the deduplicated alerts
-                for alert in best_alerts.values() {
-                    println!("[Tauri] 📋 Alert received - status: {}, alertingUserId: {}", alert.status, alert.alerting_user_id);
                     
                     // Get display name (prefer first name, fallback to username, then default)
                     let display_name = alert.alerting_first_name
@@ -1341,65 +1416,72 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
                         .or_else(|| alert.alerting_username.clone())
                         .unwrap_or_else(|| "A participant".to_string());
                     
-                    // Create message based on status
-                    let message = match alert.status.as_str() {
-                        "idle" => format!("{} is idle", display_name),
-                        "distracted" => format!("{} is distracted", display_name),
+                    let (title, message) = match alert.status.as_str() {
+                        "distracted" => {
+                            let msg = if let Some(ref domain) = alert.domain {
+                                format!("{} opened {}", display_name, domain)
+                            } else {
+                                format!("{} is distracted", display_name)
+                            };
+                            ("Partner Distracted".to_string(), msg)
+                        },
+                        "idle" => (
+                            "Partner Idle".to_string(),
+                            format!("{} has gone idle", display_name),
+                        ),
                         _ => continue,
                     };
                     
-                    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    println!("🚨 PARTICIPANT ALERT RECEIVED!");
-                    println!("📢 Message: {}", message);
-                    println!("👤 Alerting User: {}", alert.alerting_user_id);
-                    println!("⚠️  Status: {}", alert.status);
-                    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    // List all existing windows to check for conflicts
+                    let existing_windows: Vec<String> = app.windows().keys().cloned().collect();
+                    let participant_windows: Vec<&String> = existing_windows.iter()
+                        .filter(|l| l.starts_with("participant-alert"))
+                        .collect();
+                    log!("[POPUP DEBUG] All open windows: {:?}", existing_windows);
+                    log!("[POPUP DEBUG] Existing participant-alert windows: {:?}", participant_windows);
                     
-                    // ALWAYS use custom notification window in dev mode
-                    // Native notifications are unreliable without code signing
-                    let title = "FocusTogether Alert".to_string();
-                    println!("[Tauri] 🪟 Showing custom notification window title=\"{}\" message=\"{}\"", title, message);
+                    log!("[POPUP DEBUG] Attempting to create popup window for alert: type={} status={} alertingUserId={} firstName={:?} title=\"{}\" message=\"{}\"",
+                        alert.alert_type, alert.status, alert.alerting_user_id, alert.alerting_first_name, title, message);
+                    
                     match show_participant_alert(
                         app.clone(),
                         title,
                         message.clone(),
                     ).await {
                         Ok(_) => {
-                            println!("✅ ✅ ✅ CUSTOM NOTIFICATION WINDOW SHOWN ✅ ✅ ✅");
-                            // Sound is now played inside show_participant_alert after window shows
+                            log!("[POPUP DEBUG] ✅ show_participant_alert returned Ok");
                         }
                         Err(e) => {
-                            println!("❌ ❌ ❌ NOTIFICATION WINDOW FAILED: {} ❌ ❌ ❌", e);
+                            log!("[POPUP DEBUG] ❌ show_participant_alert returned Err: {}", e);
                         }
                     }
                 }
             } else {
-                println!("[Tauri] ⭕ pendingAlerts present but empty ([]) for userId={}", userId);
+                log!("[POLL DEBUG] pendingAlerts=[] (empty)");
             }
         } else {
-            println!("[Tauri] ⭕ No pendingAlerts field in response for userId={}", userId);
+            log!("[POLL DEBUG] pendingAlerts field is None/missing");
         }
         
-        match session_response.session_id {
+        let result = match session_response.session_id {
             Some(session_id) => {
                 println!("[Tauri] ✅ Active session found: {}", session_id);
-                // Start distraction detection if not already running
                 start_detection(app.clone(), userId.clone(), session_id.clone());
                 Ok(Some(session_id))
             }
             None => {
                 println!("[Tauri] No active session (sessionId is null)");
-                // Stop distraction detection
                 stop_detection(&app);
                 Ok(None)
             }
-        }
+        };
+        log!("[POLL DEBUG] ═══ Poll #{} complete in {}ms ═══", poll_num, poll_start.elapsed().as_millis());
+        result
     } else {
         let error_msg = format!("Backend returned error status: {}", status_code);
-        println!("[Tauri] ❌ {}", error_msg);
-        // Stop distraction detection on error
+        log!("[POLL DEBUG] ❌ HTTP error: {}", error_msg);
         stop_detection(&app);
-        // Return None on error (graceful degradation)
+        log!("[POLL DEBUG] ═══ Poll #{} complete in {}ms (error) ═══", poll_num, poll_start.elapsed().as_millis());
         Ok(None)
     }
 }
@@ -1493,6 +1575,7 @@ fn is_listener_only() -> bool {
 }
 
 fn main() {
+    init_log_file();
     println!("[Tauri] Starting FocusTogether Enforcer...");
     
     // Create system tray menu
@@ -1718,16 +1801,17 @@ fn main() {
                                 println!("[Tauri] Failed to send startup status: {}", e);
                             }
                             
-                            // Wait a bit more then show
-                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            // Wait longer for HTML/JS to fully render
+                            std::thread::sleep(std::time::Duration::from_millis(600));
                             
                             // Re-fetch again before show
                             if let Some(window) = app_handle.get_window(window_label) {
                                 let _ = window.show();
+                                force_show_window(&app_handle, window_label.to_string());
                                 println!("[Tauri] ✅ Startup notification shown");
                                 
-                                // Auto-close after 3 seconds
-                                std::thread::sleep(std::time::Duration::from_secs(3));
+                                // Auto-close after 5 seconds
+                                std::thread::sleep(std::time::Duration::from_secs(5));
                                 
                                 // Re-fetch before close
                                 if let Some(window) = app_handle.get_window(window_label) {

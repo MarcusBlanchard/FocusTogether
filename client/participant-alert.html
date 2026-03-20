@@ -30,9 +30,6 @@
       transition: opacity 0.3s ease-out;
     }
     
-    body.fade-out {
-      opacity: 0;
-    }
     
     .card {
       background: rgba(255, 255, 255, 0.95);
@@ -54,6 +51,17 @@
       to {
         opacity: 1;
         transform: translateX(0) scale(1);
+      }
+    }
+    
+    body.slide-out {
+      animation: slideOut 0.35s ease-in forwards;
+    }
+    
+    @keyframes slideOut {
+      to {
+        opacity: 0;
+        transform: translateX(60px) scale(0.96);
       }
     }
     
@@ -83,7 +91,7 @@
       stroke-linecap: round;
       stroke-dasharray: 75.4;
       stroke-dashoffset: 0;
-      animation: countdown 4s linear forwards;
+      animation: countdown 5s linear forwards;
     }
     
     @keyframes countdown {
@@ -166,7 +174,7 @@
       isClosing = true;
       
       try {
-        document.body.classList.add('fade-out');
+        document.body.classList.add('slide-out');
         await new Promise(resolve => setTimeout(resolve, 350));
         
         if (window.__TAURI__ && window.__TAURI__.window) {
@@ -197,14 +205,17 @@
             if (titleEl && title) titleEl.textContent = title;
             if (bodyEl && body) bodyEl.textContent = body;
             
-            // Restart countdown
+            // Restart countdown (5s)
             const timerProgress = document.querySelector('.timer-progress');
             if (timerProgress) {
               timerProgress.style.animation = 'none';
               setTimeout(() => {
-                timerProgress.style.animation = 'countdown 4s linear forwards';
+                timerProgress.style.animation = 'countdown 5s linear forwards';
               }, 10);
             }
+            
+            // Auto-dismiss after 5 seconds with slide-out animation
+            setTimeout(() => safeClose(), 5000);
           } catch (error) {
             // Silently ignore
           }

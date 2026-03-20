@@ -15,7 +15,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:dev:no-vite": "./scripts/tauri-dev-no-vite.sh",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "install:mac": "npm run build && npm run tauri:build && cp -R src-tauri/target/release/bundle/macos/FocusTogether.app /Applications/ && echo 'Installed to /Applications'"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
