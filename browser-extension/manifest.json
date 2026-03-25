@@ -5,6 +5,7 @@
   "description": "Stay focused during your FocusTogether sessions by detecting distracting websites",
   "permissions": [
     "tabs",
+    "windows",
     "storage",
     "alarms",
     "notifications",

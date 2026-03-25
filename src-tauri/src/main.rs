@@ -7,6 +7,7 @@
 use user_idle::UserIdle;
 use tauri::Manager;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -111,6 +112,92 @@ static SESSION_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
 // Single source of truth for current userId (pings and app reports must use the same value)
 static CURRENT_USER_ID: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
+/// sessionIds for which the session-ending floating popup was already shown (cleared when detection stops / no session).
+static SESSION_ENDING_SHOWN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn session_ending_shown() -> &'static Mutex<HashSet<String>> {
+    SESSION_ENDING_SHOWN.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Same default as other HTTP calls (override with `BACKEND_URL` for production).
+fn backend_base_url() -> String {
+    std::env::var("BACKEND_URL").unwrap_or_else(|_| {
+        "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev".to_string()
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FocusStatsPayload {
+    #[serde(rename = "idleWarningCount")]
+    idle_warning_count: u64,
+    #[serde(rename = "distractionCount")]
+    distraction_count: u64,
+}
+
+async fn fetch_focus_stats(user_id: &str) -> Result<FocusStatsPayload, String> {
+    let backend_url = backend_base_url();
+    let endpoint = format!("{}/api/focus-stats?userId={}", backend_url, user_id);
+    let client = tauri::api::http::ClientBuilder::new()
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    let request_builder = tauri::api::http::HttpRequestBuilder::new("GET", &endpoint)
+        .map_err(|e| format!("Failed to create request: {}", e))?;
+    let response = client
+        .send(request_builder)
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        return Err(format!("focus-stats returned HTTP {}", status));
+    }
+    let response_data = response
+        .read()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+    serde_json::from_value(response_data.data.clone())
+        .map_err(|e| format!("Invalid focus-stats JSON: {}", e))
+}
+
+fn update_tray_focus_stats(app: &tauri::AppHandle, stats: Option<&FocusStatsPayload>) {
+    let tray = app.tray_handle();
+    match stats {
+        Some(s) => {
+            let _ = tray.get_item("stats_idle").set_title(format!(
+                "Idle warnings: {}",
+                s.idle_warning_count
+            ));
+            let _ = tray.get_item("stats_distraction").set_title(format!(
+                "Distracting apps / sites opened: {}",
+                s.distraction_count
+            ));
+        }
+        None => {
+            let _ = tray
+                .get_item("stats_idle")
+                .set_title("Idle warnings: —".to_string());
+            let _ = tray
+                .get_item("stats_distraction")
+                .set_title("Distracting apps / sites opened: —".to_string());
+        }
+    }
+}
+
+fn spawn_focus_stats_refresher(app_handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            if let Some(uid) = get_current_user_id() {
+                match fetch_focus_stats(&uid).await {
+                    Ok(s) => update_tray_focus_stats(&app_handle, Some(&s)),
+                    Err(e) => println!("[FocusStats] {}", e),
+                }
+            } else {
+                update_tray_focus_stats(&app_handle, None);
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        }
+    });
+}
+
 /// Returns the global current userId. Initializes from config on first use.
 fn get_current_user_id() -> Option<String> {
     let mutex = CURRENT_USER_ID.get_or_init(|| Mutex::new(None));
@@ -163,7 +250,8 @@ fn check_apps_with_server(user_id: &str, foreground_app: &str) -> Option<bool> {
     let body = serde_json::json!({
         "userId": user_id,
         "apps": [foreground_app], // Only send the foreground app for now
-        "foregroundApp": foreground_app
+        "foregroundApp": foreground_app,
+        "source": "desktopNative"
     });
     
     // Use blocking HTTP request (we're in a thread)
@@ -665,6 +753,115 @@ async fn show_participant_alert(app: tauri::AppHandle, title: String, body: Stri
     Ok(())
 }
 
+/// Floating popup for `session-ending` pending alerts (not a native notification).
+#[tauri::command]
+async fn show_session_ending_alert(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    log!("[POPUP DEBUG] ──── show_session_ending_alert called: title=\"{}\" body=\"{}\" ────", title, body);
+
+    let window_label = format!(
+        "session-ending-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    );
+
+    let url = tauri::WindowUrl::App("session-ending.html".into());
+
+    log!("[POPUP DEBUG] Building session-ending WindowBuilder for label={}", window_label);
+    let build_result = tauri::WindowBuilder::new(&app, &window_label, url)
+        .title(&title)
+        // Compact window: purple frame wraps white card with margin on all sides
+        .inner_size(320.0, 268.0)
+        .transparent(true)
+        .resizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .focused(false)
+        .accept_first_mouse(false)
+        .build();
+
+    match build_result {
+        Ok(_) => {
+            log!("[POPUP DEBUG] ✅ session-ending window created: label={}", window_label);
+        }
+        Err(e) => {
+            let err_msg = format!("Failed to create session-ending window: {}", e);
+            log!("[POPUP DEBUG] ❌ {}", err_msg);
+            return Err(err_msg);
+        }
+    }
+
+    let app_clone = app.clone();
+    let label = window_label.clone();
+    let title_clone = title.clone();
+    let body_clone = body.clone();
+    tauri::async_runtime::spawn(async move {
+        log!("[POPUP DEBUG] session-ending spawn started for label={}, sleeping 500ms", label);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        if let Some(window) = app_clone.get_window(&label) {
+            log!("[POPUP DEBUG] session-ending window found, emitting message");
+            let emit_result = window.emit(
+                "session-ending-message",
+                serde_json::json!({
+                    "title": title_clone,
+                    "body": body_clone
+                }),
+            );
+            log!("[POPUP DEBUG] session-ending emit result: {:?}", emit_result);
+
+            std::thread::sleep(std::time::Duration::from_millis(200));
+
+            if let Some(window) = app_clone.get_window(&label) {
+                if let Ok(Some(monitor)) = window.current_monitor() {
+                    let screen_size = monitor.size();
+                    if let Ok(window_size) = window.outer_size() {
+                        let x = (screen_size.width as i32 - window_size.width as i32) / 2;
+                        let y = (screen_size.height as i32 - window_size.height as i32) / 2;
+                        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+                    }
+                }
+
+                let show_result = window.show();
+                log!("[POPUP DEBUG] session-ending window.show() {:?} — label={}", show_result, label);
+                force_show_window(&app_clone, label.clone());
+                play_warning_sound();
+            }
+        } else {
+            log!("[POPUP DEBUG] ⚠️ session-ending window {} not found after delay", label);
+        }
+    });
+
+    let app_for_close = app.clone();
+    let label_for_close = window_label.clone();
+    tauri::async_runtime::spawn(async move {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        if let Some(w) = app_for_close.get_window(&label_for_close) {
+            let _ = w.close();
+            log!("[POPUP DEBUG] session-ending auto-closed after 10s: {}", label_for_close);
+        }
+    });
+
+    log!("[POPUP DEBUG] show_session_ending_alert returning Ok for label={}", window_label);
+    Ok(())
+}
+
+/// Close session-ending popup from its webview (same idea as `dismiss_notification` for the yellow idle window).
+#[tauri::command]
+fn dismiss_session_ending_window(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    log!("[POPUP DEBUG] dismiss_session_ending_window invoked for label={}", label);
+    if let Some(w) = app.get_window(&label) {
+        w.close()
+            .map_err(|e| format!("Failed to close session-ending window: {}", e))?;
+    } else {
+        log!("[POPUP DEBUG] dismiss_session_ending_window: no window for label={}", label);
+    }
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ActivityUpdate {
     #[serde(rename = "userId")]
@@ -679,18 +876,26 @@ struct ActivityUpdate {
 struct PendingAlert {
     #[serde(rename = "type")]
     alert_type: String,
-    #[serde(rename = "alertingUserId")]
-    alerting_user_id: String,
-    #[serde(rename = "alertingUsername")]
+    /// Absent on `session-ending` alerts.
+    #[serde(default, rename = "alertingUserId")]
+    alerting_user_id: Option<String>,
+    #[serde(default, rename = "alertingUsername")]
     alerting_username: Option<String>,
-    #[serde(rename = "alertingFirstName")]
+    #[serde(default, rename = "alertingFirstName")]
     alerting_first_name: Option<String>,
-    status: String, // "idle" | "distracted"
-    #[serde(rename = "sessionId")]
-    session_id: String,
-    timestamp: String,
-    // For self-distraction alerts from browser extension
+    /// Absent on `session-ending` alerts.
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default, rename = "sessionId")]
+    session_id: Option<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
+    /// For self-distraction alerts from browser extension
+    #[serde(default)]
     domain: Option<String>,
+    /// For `session-ending` alerts (minutes until room closes).
+    #[serde(default, rename = "remainingMinutes")]
+    remaining_minutes: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -821,6 +1026,24 @@ fn get_foreground_info() -> Option<(String, String)> {
         }
         Err(_) => None,
     }
+}
+
+/// True when the focused app is a Chromium browser (extension can report the active tab).
+/// Server `currentDistraction` must only apply while this is true — otherwise a stale tab
+/// from an old browser session re-triggers the warning when switching from e.g. Chess → Chrome.
+fn foreground_is_chromium_browser() -> bool {
+    get_foreground_info()
+        .map(|(app_name, _)| {
+            let app_lower = app_name.to_lowercase();
+            app_lower.contains("chrome")
+                || app_lower.contains("chromium")
+                || app_lower.contains("arc")
+                || app_lower.contains("opera")
+                || app_lower.contains("vivaldi")
+                || app_lower.contains("edge")
+                || app_lower.contains("brave")
+        })
+        .unwrap_or(false)
 }
 
 /// Get the detection session mutex
@@ -988,44 +1211,6 @@ fn dismiss_distraction_warning(app_handle: &tauri::AppHandle) {
     BROWSER_DISTRACTION_ACTIVE.store(false, Ordering::SeqCst);
 }
 
-/// Poll server for self-distraction alerts from browser extension
-/// Returns true if a self-distraction alert was found
-fn poll_for_browser_alerts(user_id: &str) -> bool {
-    let backend_url = std::env::var("BACKEND_URL")
-        .unwrap_or_else(|_| "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev".to_string());
-    
-    let endpoint = format!("{}/api/activity/session?userId={}&source=desktop", backend_url, user_id);
-    
-    // Use blocking reqwest for simplicity in the detection thread
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build() {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-    
-    let response = match client.get(&endpoint).send() {
-        Ok(r) => r,
-        Err(_) => return false,
-    };
-    
-    let json: serde_json::Value = match response.json() {
-        Ok(j) => j,
-        Err(_) => return false,
-    };
-    
-    // Check for currentDistraction field (persistent while user is on distracting site)
-    if let Some(distraction) = json.get("currentDistraction") {
-        let domain = distraction.get("domain")
-            .and_then(|d| d.as_str())
-            .unwrap_or("a distracting site");
-        println!("[Detection] 🌐 Browser distraction active: {}", domain);
-        return true;
-    }
-    
-    false
-}
-
 /// Start distraction detection for a session
 fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: String) {
     println!("[Detection] 🚀 start_detection called with userId={}, sessionId={}", user_id, session_id);
@@ -1059,14 +1244,13 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         let mut warning_shown_at: Option<std::time::Instant> = None;
         let mut is_marked_distracted = false;
         let mut last_sent_state: Option<&str> = None;
-        let mut poll_counter: u32 = 0;
         let mut warning_from_browser = false; // Track if current warning is from browser vs local app
         let mut last_server_check: Option<std::time::Instant> = None;
         let mut last_server_result: Option<bool> = None;
         let mut last_checked_app: String = String::new();
         
+        /// Orange distraction warning: 10s countdown before red + sending distracted (idle uses useIdleWarning.ts)
         const WARNING_DURATION_SECS: u64 = 10;
-        const POLL_INTERVAL: u32 = 1; // Poll for browser alerts every 1 second for fast response
         const SERVER_CHECK_INTERVAL_MS: u128 = 2000; // Check with server every 2 seconds
         
         while DETECTION_RUNNING.load(Ordering::SeqCst) {
@@ -1076,27 +1260,6 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
             };
             
             if let Some((user_id, session_id)) = session_info {
-                // Poll for browser extension alerts every POLL_INTERVAL seconds (use current linked user for consistency with ping/app reports)
-                poll_counter += 1;
-                if poll_counter >= POLL_INTERVAL {
-                    poll_counter = 0;
-                    let current_user = get_current_user_id();
-                    let alert_user = current_user.as_deref().unwrap_or(&user_id);
-                    if poll_for_browser_alerts(alert_user) {
-                        // Browser detected a distracting site - set the flag
-                        if !BROWSER_DISTRACTION_ACTIVE.load(Ordering::SeqCst) {
-                            println!("[Detection] 🌐 Browser distraction detected - setting flag");
-                        }
-                        BROWSER_DISTRACTION_ACTIVE.store(true, Ordering::SeqCst);
-                    } else {
-                        // No browser distraction alert - clear the flag
-                        if BROWSER_DISTRACTION_ACTIVE.load(Ordering::SeqCst) {
-                            println!("[Detection] ✅ Browser distraction cleared - clearing flag");
-                        }
-                        BROWSER_DISTRACTION_ACTIVE.store(false, Ordering::SeqCst);
-                    }
-                }
-                
                 // Check browser distraction flag (updated by polling)
                 let browser_distraction_reported = BROWSER_DISTRACTION_ACTIVE.load(Ordering::SeqCst);
                 
@@ -1108,12 +1271,14 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     
                     // Check if foreground is Chrome (browser extension only runs in Chrome)
                     // Only show browser distraction warning when Chrome is the active app
-                    let is_chrome = app_lower.contains("chrome") 
+                    let is_chrome = app_lower.contains("chrome")
                         || app_lower.contains("chromium")
                         || app_lower.contains("arc") // Arc is Chromium-based and supports Chrome extensions
                         || app_lower.contains("opera")
-                        || app_lower.contains("vivaldi");
-                    
+                        || app_lower.contains("vivaldi")
+                        || app_lower.contains("edge")
+                        || app_lower.contains("brave");
+
                     // Browser distraction only counts when Chrome is in foreground
                     let is_browser_distracting = browser_distraction_reported && is_chrome;
                     
@@ -1216,7 +1381,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 println!("[Detection] ⚠️ Warning triggered - server identified '{}' as distracting", app_name);
                             }
                         } else if let Some(start_time) = warning_shown_at {
-                            // Warning already shown - check if 10 seconds passed
+                            // Warning already shown - check if distraction warning duration (10s) passed
                             if start_time.elapsed().as_secs() >= WARNING_DURATION_SECS && !is_marked_distracted {
                                 // Time's up - mark as distracted
                                 is_marked_distracted = true;
@@ -1265,6 +1430,11 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
 
 /// Stop distraction detection
 fn stop_detection(app_handle: &tauri::AppHandle) {
+    // Reset session-ending dedup when leaving a session so a future session can show it again.
+    if let Ok(mut guard) = session_ending_shown().lock() {
+        guard.clear();
+    }
+
     if !DETECTION_RUNNING.load(Ordering::SeqCst) {
         return;
     }
@@ -1300,9 +1470,9 @@ fn dismiss_all_notifications(app_handle: &tauri::AppHandle) {
         println!("[Cleanup] Closed notification (idle warning) window");
     }
     
-    // Close all participant alert windows (blue popup; labels are participant-alert-{timestamp})
+    // Close participant alerts (blue) and session-ending popups
     for (label, window) in app_handle.windows() {
-        if label.starts_with("participant-alert") {
+        if label.starts_with("participant-alert") || label.starts_with("session-ending-") {
             let _ = window.close();
             println!("[Cleanup] Closed {} window", label);
         }
@@ -1361,6 +1531,34 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
         log!("[POLL DEBUG] pendingAlerts in raw JSON: {}", 
             raw.get("pendingAlerts").map(|v| serde_json::to_string(v).unwrap_or_default()).unwrap_or_else(|| "MISSING".to_string()));
         
+        // IMPORTANT: Keep /api/activity/session as a single consumer to avoid racing and
+        // accidentally consuming one-shot pending alerts from a second polling loop.
+        let browser_distraction = raw.get("currentDistraction");
+        let cd_value = browser_distraction.filter(|v| !v.is_null());
+        let has_current_distraction_obj = cd_value.map(|v| v.is_object()).unwrap_or(false);
+        let cd_domain = cd_value
+            .and_then(|d| d.get("domain"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_lowercase());
+
+        // Server `currentDistraction` is driven by the extension + cleared when the desktop
+        // reports a native foreground app (see POST /api/desktop/apps source=desktopNative).
+        let browser_active_now =
+            has_current_distraction_obj && foreground_is_chromium_browser();
+        let browser_was_active = BROWSER_DISTRACTION_ACTIVE.swap(browser_active_now, Ordering::SeqCst);
+        if browser_active_now {
+            let domain = cd_domain
+                .as_deref()
+                .unwrap_or("a distracting site");
+            if !browser_was_active {
+                log!("[POLL DEBUG] 🌐 currentDistraction became ACTIVE (domain={})", domain);
+            } else {
+                log!("[POLL DEBUG] 🌐 currentDistraction still ACTIVE (domain={})", domain);
+            }
+        } else if browser_was_active {
+            log!("[POLL DEBUG] 🌐 currentDistraction cleared");
+        }
+        
         let session_response: SessionResponse = serde_json::from_value(raw.clone()).map_err(|e| {
             // When parse fails, inspect pendingAlerts specifically to debug desktop/server mismatch
             if let Some(pending) = raw.get("pendingAlerts") {
@@ -1382,49 +1580,124 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
             if !alerts.is_empty() {
                 log!("[POLL DEBUG] 🔔 Processing {} pending alert(s)", alerts.len());
                 
-                // First, handle self-distraction alerts from browser extension
+                // First: self-distraction + session-ending (floating popups, not native notifications)
                 for (i, alert) in alerts.iter().enumerate() {
-                    log!("[POLL DEBUG] Alert[{}]: type={} status={} alertingUserId={} alertingFirstName={:?}",
-                        i, alert.alert_type, alert.status, alert.alerting_user_id, alert.alerting_first_name);
-                    
+                    log!(
+                        "[POLL DEBUG] Alert[{}]: type={} status={:?} alertingUserId={:?} alertingFirstName={:?}",
+                        i,
+                        alert.alert_type,
+                        alert.status,
+                        alert.alerting_user_id,
+                        alert.alerting_first_name
+                    );
+
+                    if alert.alert_type == "session-ending" {
+                        let Some(sid) = alert.session_id.clone() else {
+                            log!("[POLL DEBUG] Alert[{}] session-ending missing sessionId — skip", i);
+                            continue;
+                        };
+                        let already = session_ending_shown()
+                            .lock()
+                            .map(|g| g.contains(&sid))
+                            .unwrap_or(false);
+                        if already {
+                            log!(
+                                "[POLL DEBUG] session-ending already shown for sessionId={} — skip (dedup)",
+                                sid
+                            );
+                            continue;
+                        }
+                        let mins = alert.remaining_minutes.unwrap_or(10);
+                        let body = if mins == 1 {
+                            "Room will close in 1 minute.".to_string()
+                        } else {
+                            format!("Room will close in {} minutes.", mins)
+                        };
+                        log!(
+                            "[POLL DEBUG] session-ending: sessionId={} remainingMinutes={} → showing popup",
+                            sid,
+                            mins
+                        );
+                        match show_session_ending_alert(
+                            app.clone(),
+                            "Session ended".to_string(),
+                            body,
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                if let Ok(mut g) = session_ending_shown().lock() {
+                                    g.insert(sid.clone());
+                                }
+                                log!("[POPUP DEBUG] ✅ session-ending popup shown for sessionId={}", sid);
+                            }
+                            Err(e) => {
+                                log!("[POPUP DEBUG] ❌ session-ending popup failed: {}", e);
+                            }
+                        }
+                        continue;
+                    }
+
                     if alert.alert_type == "self-distraction" {
-                        let domain = alert.domain.clone().unwrap_or_else(|| "a distracting site".to_string());
-                        log!("[POLL DEBUG] Alert[{}] → self-distraction (domain={}), showing orange warning", i, domain);
+                        if app.get_window("distraction-warning").is_some() {
+                            log!(
+                                "[POLL DEBUG] Alert[{}] → self-distraction — warning window already open, skip duplicate",
+                                i
+                            );
+                            continue;
+                        }
+                        let domain = alert
+                            .domain
+                            .clone()
+                            .unwrap_or_else(|| "a distracting site".to_string());
+                        log!(
+                            "[POLL DEBUG] Alert[{}] → self-distraction (domain={}), showing orange warning",
+                            i,
+                            domain
+                        );
                         show_distraction_warning(&app);
                     }
                 }
-                
+
                 // Process partner alerts (idle/distracted). Server guarantees exactly one alert per
                 // distraction event — no client-side deduplication needed.
                 for (i, alert) in alerts.iter().enumerate() {
                     let is_self = alert.alert_type == "self-distraction";
-                    let is_valid_status = alert.status == "idle" || alert.status == "distracted";
-                    log!("[POPUP DEBUG] Alert[{}] condition: is_self_distraction={} → {} | is_valid_status(idle|distracted)={} → {}",
+                    let is_session_ending = alert.alert_type == "session-ending";
+                    let is_valid_status =
+                        matches!(alert.status.as_deref(), Some("idle") | Some("distracted"));
+                    log!("[POPUP DEBUG] Alert[{}] condition: is_self_distraction={} → {} | is_session_ending={} → {} | is_valid_status(idle|distracted)={} → {}",
                         i, is_self, if is_self { "SKIP" } else { "pass" },
+                        is_session_ending, if is_session_ending { "SKIP" } else { "pass" },
                         is_valid_status, if is_valid_status { "pass" } else { "SKIP" });
-                    
-                    if is_self {
+
+                    if is_self || is_session_ending {
                         continue;
                     }
                     if !is_valid_status {
                         continue;
                     }
                     
-                    // Get display name (prefer first name, fallback to username, then default)
+                    // Display name for idle: prefer first name, then username
                     let display_name = alert.alerting_first_name
                         .clone()
                         .or_else(|| alert.alerting_username.clone())
                         .unwrap_or_else(|| "A participant".to_string());
+                    // Partner distracted pop-up: use username (fallback first name) — no app/site in copy
+                    let name_for_distracted = alert.alerting_username
+                        .clone()
+                        .or_else(|| alert.alerting_first_name.clone())
+                        .unwrap_or_else(|| "Someone".to_string());
                     
-                    let (title, message) = match alert.status.as_str() {
-                        "distracted" => {
-                            let msg = if let Some(ref domain) = alert.domain {
-                                format!("{} opened {}", display_name, domain)
-                            } else {
-                                format!("{} is distracted", display_name)
-                            };
-                            ("Partner Distracted".to_string(), msg)
-                        },
+                    let status_str = match alert.status.as_deref() {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    let (title, message) = match status_str {
+                        "distracted" => (
+                            format!("{} is distracted", name_for_distracted),
+                            format!("{} is using a distracting app", name_for_distracted),
+                        ),
                         "idle" => (
                             "Partner Idle".to_string(),
                             format!("{} has gone idle", display_name),
@@ -1440,7 +1713,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
                     log!("[POPUP DEBUG] All open windows: {:?}", existing_windows);
                     log!("[POPUP DEBUG] Existing participant-alert windows: {:?}", participant_windows);
                     
-                    log!("[POPUP DEBUG] Attempting to create popup window for alert: type={} status={} alertingUserId={} firstName={:?} title=\"{}\" message=\"{}\"",
+                    log!("[POPUP DEBUG] Attempting to create popup window for alert: type={} status={:?} alertingUserId={:?} firstName={:?} title=\"{}\" message=\"{}\"",
                         alert.alert_type, alert.status, alert.alerting_user_id, alert.alerting_first_name, title, message);
                     
                     match show_participant_alert(
@@ -1549,6 +1822,12 @@ async fn send_activity_update(
 }
 
 #[tauri::command]
+async fn get_focus_stats() -> Result<FocusStatsPayload, String> {
+    let uid = get_current_user_id().ok_or_else(|| "No user linked".to_string())?;
+    fetch_focus_stats(&uid).await
+}
+
+#[tauri::command]
 fn get_user_id() -> Option<String> {
     // Single source of truth (same value used for pings and session polling)
     if let Some(ref user_id) = get_current_user_id() {
@@ -1581,8 +1860,21 @@ fn main() {
     // Create system tray menu
     let quit = tauri::CustomMenuItem::new("quit".to_string(), "Quit FocusTogether");
     let status = tauri::CustomMenuItem::new("status".to_string(), "Monitoring: Inactive").disabled();
+    let stats_header =
+        tauri::CustomMenuItem::new("stats_header", "My stats (private)").disabled();
+    let stats_idle =
+        tauri::CustomMenuItem::new("stats_idle", "Idle warnings: —").disabled();
+    let stats_distraction = tauri::CustomMenuItem::new(
+        "stats_distraction",
+        "Distracting apps / sites opened: —",
+    )
+    .disabled();
     let tray_menu = tauri::SystemTrayMenu::new()
         .add_item(status)
+        .add_native_item(tauri::SystemTrayMenuItem::Separator)
+        .add_item(stats_header)
+        .add_item(stats_idle)
+        .add_item(stats_distraction)
         .add_native_item(tauri::SystemTrayMenuItem::Separator)
         .add_item(quit);
     
@@ -1604,7 +1896,7 @@ fn main() {
                 _ => {}
             }
         })
-        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, dismiss_notification, update_notification_to_distracted, send_activity_update, get_active_session, get_user_id, is_listener_only])
+        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, show_session_ending_alert, dismiss_session_ending_window, dismiss_notification, update_notification_to_distracted, send_activity_update, get_active_session, get_focus_stats, get_user_id, is_listener_only])
         .setup(|app| {
             println!("[Tauri] Setup callback called");
             
@@ -1826,6 +2118,8 @@ fn main() {
                     }
                 }
             });
+            
+            spawn_focus_stats_refresher(app.handle().clone());
             
             println!("[Tauri] Setup complete - app running in background");
             Ok(())

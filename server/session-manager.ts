@@ -54,6 +54,13 @@ class SessionManager {
   // This is the source of truth for "is user in an active session" for desktop polling
   private activeDesktopSessions: Map<string, { sessionId: string; joinedAt: Date }> = new Map();
   
+  /**
+   * Latest browser-tab distraction from the Chrome extension (domain only).
+   * Cleared when the desktop app reports a native foreground app (user left the browser)
+   * so Chess→Chrome doesn't reuse a stale tab from before Chess.
+   */
+  private userBrowserDistraction: Map<string, { domain: string }> = new Map();
+
   // Pending alerts for desktop app notifications: userId -> alerts[]
   private pendingAlerts: Map<string, Array<{
     type: 'participant-activity';
@@ -920,6 +927,7 @@ class SessionManager {
 
     // Clear pending alerts for this user
     this.pendingAlerts.delete(userId);
+    this.userBrowserDistraction.delete(userId);
 
     this.userSessions.delete(userId);
     console.log(`[SessionManager] User ${userId} disconnected (pending alerts cleared)`);
@@ -1307,6 +1315,25 @@ class SessionManager {
   // Called by desktop app to check if user is in an active session
   getUserActiveSession(userId: string): { sessionId: string; joinedAt: Date } | null {
     return this.activeDesktopSessions.get(userId) || null;
+  }
+
+  /** Extension: set/clear distracting domain for session polling. */
+  reportBrowserForegroundDomain(userId: string, domain: string, isDistracting: boolean): void {
+    const d = domain.trim().toLowerCase();
+    if (!d || !isDistracting) {
+      this.userBrowserDistraction.delete(userId);
+      return;
+    }
+    this.userBrowserDistraction.set(userId, { domain: d });
+  }
+
+  /** Desktop: user focused a native app — drop stale browser tab distraction. */
+  clearBrowserForegroundDistraction(userId: string): void {
+    this.userBrowserDistraction.delete(userId);
+  }
+
+  getCurrentBrowserDistraction(userId: string): { domain: string } | null {
+    return this.userBrowserDistraction.get(userId) ?? null;
   }
 
   // Check if a user is in any active session (for validation)

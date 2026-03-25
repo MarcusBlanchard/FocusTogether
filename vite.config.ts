@@ -37,6 +37,7 @@ export default defineConfig({
         "participant-alert": path.resolve(import.meta.dirname, "client/participant-alert.html"),
         "startup-notification": path.resolve(import.meta.dirname, "client/startup-notification.html"),
         "distraction-warning": path.resolve(import.meta.dirname, "client/distraction-warning.html"),
+        "session-ending": path.resolve(import.meta.dirname, "client/session-ending.html"),
       },
     },
   },

@@ -25,7 +25,7 @@ A productivity accountability app where partners monitor each other's focus duri
 - **macOS specifics**: Uses `cocoa` and `objc` crates. `force_show_window` sets `NSApplicationActivationPolicyRegular`, calls `activateIgnoringOtherApps`, sets window level to 25 (NSStatusWindowLevel), calls `orderFrontRegardless`. Then reverts to `Accessory` policy after 500ms to hide dock icon.
 
 ### `client/startup-notification.html` — Green startup popup
-Shows "FocusTogether Active (13)" when the app launches. Currently displays for 5 seconds.
+Shows "FocusTogether Active (26)" when the app launches. Currently displays for 5 seconds.
 
 ### `client/participant-alert.html` — Blue partner alert popup
 Displays partner distraction alerts. Receives data via Tauri event `participant-alert-message` with `{title, body}`.

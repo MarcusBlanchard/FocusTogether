@@ -2,10 +2,13 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen } from '@tauri-apps/api/event';
 
-const WARNING_THRESHOLD_SECONDS = 10; // Private warning at 10s (testing)
-const DISTRACTED_THRESHOLD_SECONDS = 15; // Distracted status at 15s (notifies everyone) (testing)
+// Yellow idle warning only from 60s–90s idle (30s), then red + notify everyone at 90s
+const WARNING_THRESHOLD_SECONDS = 60;
+const DISTRACTED_THRESHOLD_SECONDS = 90;
 const POLL_INTERVAL_MS = 250; // Update every 250ms for faster response
-const SESSION_POLL_INTERVAL_MS = 5000; // Poll session status every 5 seconds
+// How often we refresh session + browser distraction from the server. Lower = faster clear
+// when switching Chrome from YouTube → neutral tab (extension posts quickly; desktop must poll).
+const SESSION_POLL_INTERVAL_MS = 2000;
 
 export type IdlePhase = 'active' | 'warning' | 'idle';
 
@@ -305,9 +308,10 @@ export function useIdleMonitoring() {
           }
         }
         
-        // Transition to warning phase (10s) - trigger local notification and sound ONLY
+        // Yellow at ≥60s idle; red + backend at ≥90s (30s of yellow only)
         // No backend update at this stage - only local warning
-        if ((newPhase === 'warning' || newPhase === 'idle') && !warningShownRef.current && sessionIdRef.current !== null) {
+        // Only in `warning` phase (60–89s); at 90s phase is `idle` — red path below, no new yellow
+        if (newPhase === 'warning' && !warningShownRef.current && sessionIdRef.current !== null) {
           warningShownRef.current = true;
           console.log(`[IdleMonitor] Showing warning notification (phase: ${newPhase}, idle: ${idleSeconds}s)`);
           
@@ -324,7 +328,7 @@ export function useIdleMonitoring() {
           // Sound is now played by Rust after window is shown (for sync)
         }
         
-        // Transition to idle phase (15s) - send "idle" status to backend ONCE
+        // At DISTRACTED_THRESHOLD_SECONDS — send "idle" to backend + red notification ONCE
         // Only enforce if there's an active session AND not in listener-only mode
         if (idleSeconds >= DISTRACTED_THRESHOLD_SECONDS && !distractedSentRef.current && sessionIdRef.current !== null && !isListenerOnly) {
           distractedSentRef.current = true;

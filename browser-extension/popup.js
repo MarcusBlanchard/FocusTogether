@@ -11,7 +11,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   const nativeConnectBtn = document.getElementById('nativeConnectBtn');
   const nativeConnectHint = document.getElementById('nativeConnectHint');
   const autoSyncHint = document.getElementById('autoSyncHint');
+  const statIdle = document.getElementById('statIdle');
+  const statDistraction = document.getElementById('statDistraction');
   
+  function loadFocusStats() {
+    if (!statIdle || !statDistraction) return;
+    chrome.runtime.sendMessage({ type: 'GET_FOCUS_STATS' }, (response) => {
+      if (chrome.runtime.lastError || !response || !response.ok) {
+        statIdle.textContent = '—';
+        statDistraction.textContent = '—';
+        return;
+      }
+      statIdle.textContent = String(response.idleWarningCount);
+      statDistraction.textContent = String(response.distractionCount);
+    });
+  }
+
   // Get current status from background
   function updateStatus() {
     chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
@@ -34,12 +49,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         statusText.innerHTML = '<strong>Monitoring active</strong> - In session';
         notConnectedSection.classList.add('hidden');
         connectedSection.classList.remove('hidden');
+        loadFocusStats();
       } else {
         // Connected but not in session
         statusDot.className = 'status-dot active';
         statusText.innerHTML = '<strong>Connected</strong> - No active session';
         notConnectedSection.classList.add('hidden');
         connectedSection.classList.remove('hidden');
+        loadFocusStats();
       }
     });
   }
@@ -133,6 +150,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Initial status check
   updateStatus();
+  setTimeout(loadFocusStats, 400);
   
   // Try to sync with desktop app on popup open
   chrome.runtime.sendMessage({ type: 'TRY_NATIVE_MESSAGING' }, (response) => {
@@ -148,4 +166,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Refresh status periodically while popup is open
   setInterval(updateStatus, 2000);
+  // Stats change slowly; refresh every 60s while popup stays open
+  setInterval(loadFocusStats, 60000);
 });

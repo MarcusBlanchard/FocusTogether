@@ -5,6 +5,7 @@ import {
   scheduledSessions,
   scheduledSessionParticipants,
   notifications,
+  userFocusStatEvents,
   type User,
   type UpsertUser,
   type FocusSession,
@@ -69,6 +70,21 @@ export interface IStorage {
 
   // Session watchdog operations
   getExpirableSessions(gracePeriodMinutes: number): Promise<ScheduledSession[]>;
+
+  // Focus stats (private)
+  recordFocusStatEvent(
+    userId: string,
+    sessionId: string,
+    eventType: "idle_broadcast" | "distraction_broadcast",
+  ): Promise<void>;
+  getFocusStatsTotals(userId: string): Promise<{
+    idleWarningCount: number;
+    distractionCount: number;
+  }>;
+  getFocusStatsDailyDistractions(
+    userId: string,
+    opts: { longSessionsOnly: boolean },
+  ): Promise<Array<{ date: string; distractions: number }>>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -640,6 +656,94 @@ export class DatabaseStorage implements IStorage {
     }
 
     return result;
+  }
+
+  async recordFocusStatEvent(
+    userId: string,
+    sessionId: string,
+    eventType: "idle_broadcast" | "distraction_broadcast",
+  ): Promise<void> {
+    await db.insert(userFocusStatEvents).values({
+      userId,
+      sessionId,
+      eventType,
+    });
+  }
+
+  async getFocusStatsTotals(userId: string): Promise<{
+    idleWarningCount: number;
+    distractionCount: number;
+  }> {
+    const rows = await db
+      .select({ eventType: userFocusStatEvents.eventType })
+      .from(userFocusStatEvents)
+      .where(eq(userFocusStatEvents.userId, userId));
+    let idleWarningCount = 0;
+    let distractionCount = 0;
+    for (const r of rows) {
+      if (r.eventType === "idle_broadcast") idleWarningCount++;
+      else if (r.eventType === "distraction_broadcast") distractionCount++;
+    }
+    return { idleWarningCount, distractionCount };
+  }
+
+  /**
+   * Distractions per calendar day (UTC).
+   * longSessionsOnly: only events tied to a scheduled session with duration >= 30,
+   * and only days when the user participated in such a session (session start day UTC).
+   */
+  async getFocusStatsDailyDistractions(
+    userId: string,
+    opts: { longSessionsOnly: boolean },
+  ): Promise<Array<{ date: string; distractions: number }>> {
+    const allSessions = await db.select().from(scheduledSessions);
+    const sessionById = new Map(allSessions.map((s) => [s.id, s]));
+
+    const participations = await db
+      .select()
+      .from(scheduledSessionParticipants)
+      .where(eq(scheduledSessionParticipants.userId, userId));
+
+    const longSessionIds = new Set<string>();
+    const longSessionStartDaysUtc = new Set<string>();
+    for (const p of participations) {
+      const s = sessionById.get(p.sessionId);
+      if (!s) continue;
+      if ((s.durationMinutes ?? 0) >= 30) {
+        longSessionIds.add(p.sessionId);
+        const d = new Date(s.startAt);
+        longSessionStartDaysUtc.add(d.toISOString().slice(0, 10));
+      }
+    }
+
+    const events = await db
+      .select()
+      .from(userFocusStatEvents)
+      .where(
+        and(
+          eq(userFocusStatEvents.userId, userId),
+          eq(userFocusStatEvents.eventType, "distraction_broadcast"),
+        ),
+      );
+
+    const byDay = new Map<string, number>();
+    for (const e of events) {
+      if (opts.longSessionsOnly && !longSessionIds.has(e.sessionId)) continue;
+      const day = new Date(e.createdAt!).toISOString().slice(0, 10);
+      byDay.set(day, (byDay.get(day) ?? 0) + 1);
+    }
+
+    let days: string[];
+    if (opts.longSessionsOnly) {
+      days = Array.from(longSessionStartDaysUtc).sort();
+    } else {
+      days = Array.from(byDay.keys()).sort();
+    }
+
+    return days.map((date) => ({
+      date,
+      distractions: byDay.get(date) ?? 0,
+    }));
   }
 }
 

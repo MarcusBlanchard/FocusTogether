@@ -11,6 +11,36 @@ import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClie
 import { sql } from "drizzle-orm";
 import { db } from "./db";
 
+/** True when foregroundApp is probably a hostname from the extension (not a macOS .app name). */
+function isLikelyBrowserExtensionHostname(foregroundApp: string): boolean {
+  const t = foregroundApp.trim().toLowerCase();
+  if (!t || t.includes(" ") || !t.includes(".")) return false;
+  if (t.endsWith(".app")) return false;
+  return (
+    /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9-]+)+$/i.test(t) || t === "localhost"
+  );
+}
+
+/** OS foreground app name from Tauri (not a URL host). If true, extension owns tab distraction — do not clear it on desktopNative. */
+function isBrowserProcessForegroundName(foregroundApp: string): boolean {
+  const a = foregroundApp.trim().toLowerCase();
+  if (!a) return false;
+  return (
+    a.includes("chrome") ||
+    a.includes("chromium") ||
+    a.includes("firefox") ||
+    a.includes("safari") ||
+    a.includes("arc") ||
+    a.includes("opera") ||
+    a.includes("vivaldi") ||
+    a.includes("brave") ||
+    a.includes("edge") ||
+    a.includes("microsoft edge") ||
+    a.includes("tor browser") ||
+    a.includes("duckduckgo")
+  );
+}
+
 // Helper function to try re-matching remaining participants with others in the pool
 async function tryRematchSession(
   session: ScheduledSession, 
@@ -1691,6 +1721,7 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
       const { getDistractingAppsForUser, getAllowedAppsForUser } = await import('./app-categorizer');
       const distractingApps = await getDistractingAppsForUser(userId);
       const allowedApps = await getAllowedAppsForUser(userId);
+      const currentDistraction = sessionManager.getCurrentBrowserDistraction(userId);
 
       // Always send pendingAlerts as an array so desktop can parse consistently
       // (omitting the key when empty caused desktop to see pendingAlerts: None)
@@ -1700,6 +1731,7 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
         active: activeSession !== null,
         distractingApps,
         allowedApps,
+        ...(currentDistraction ? { currentDistraction } : {}),
       });
     } catch (error: any) {
       console.error("Error fetching active session:", error);
@@ -1792,8 +1824,10 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
 
         // Broadcast to all OTHER participants (not the user themselves)
         let alertsQueued = 0;
+        let notifiedOtherParticipants = false;
         for (const participant of participants) {
           if (participant.id !== userId) {
+            notifiedOtherParticipants = true;
             // Send via WebSocket for web app
             sessionManager.sendToUser(participant.id, activityEvent);
             console.log(`[Activity Update] 📡 WebSocket notified ${participant.id} about ${userId}'s ${status} status`);
@@ -1815,6 +1849,23 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
           }
         }
         console.log(`[Activity Update] ✅ Queued ${alertsQueued} desktop alerts total`);
+
+        // Private stats: idle only when partners were actually notified (not warning-only path);
+        // distraction when user reached distracted and others were notified.
+        if (
+          notifiedOtherParticipants &&
+          (status === "idle" || status === "distracted")
+        ) {
+          try {
+            await storage.recordFocusStatEvent(
+              userId,
+              sessionId,
+              status === "idle" ? "idle_broadcast" : "distraction_broadcast",
+            );
+          } catch (statErr) {
+            console.error("[Activity Update] Failed to record focus stat event:", statErr);
+          }
+        }
       } else {
         console.log(`[Activity Update] No participants found in session ${sessionId} - check if session exists`);
       }
@@ -1827,6 +1878,118 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
     } catch (error: any) {
       console.error("Error processing activity update:", error);
       res.status(500).json({ message: error.message || "Failed to process activity update" });
+    }
+  });
+
+  // GET /api/focus-stats — Totals for desktop/extension (query userId; same shape as before)
+  app.get("/api/focus-stats", async (req, res) => {
+    try {
+      const userId = req.query.userId as string;
+      if (!userId) {
+        return res.status(400).json({ message: "userId required" });
+      }
+      const totals = await storage.getFocusStatsTotals(userId);
+      res.json({
+        idleWarningCount: totals.idleWarningCount,
+        distractionCount: totals.distractionCount,
+      });
+    } catch (error: any) {
+      console.error("Error fetching focus stats:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch focus stats" });
+    }
+  });
+
+  // GET /api/focus-stats/daily — Authenticated daily series for web "Your stats" chart
+  app.get("/api/focus-stats/daily", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const longOnly =
+        String(req.query.longSessionsOnly ?? "false").toLowerCase() === "true";
+      const series = await storage.getFocusStatsDailyDistractions(userId, {
+        longSessionsOnly: longOnly,
+      });
+      res.json({ longSessionsOnly: longOnly, series });
+    } catch (error: any) {
+      console.error("Error fetching daily focus stats:", error);
+      res.status(500).json({ message: error.message || "Failed to fetch daily focus stats" });
+    }
+  });
+
+  // POST /api/desktop/apps — Classify foreground app / domain for desktop app & browser extension.
+  // IMPORTANT: This must NOT broadcast session activity or queue partner alerts. The Tauri app shows
+  // a local 10s warning first; only POST /api/activity/update with status "distracted" should
+  // notify other participants (after the client timer completes).
+  app.post('/api/desktop/apps', async (req, res) => {
+    try {
+      const { userId, apps, foregroundApp, domain, source } = req.body as {
+        userId?: string;
+        apps?: string[];
+        foregroundApp?: string;
+        /** Chrome extension sends `domain`; desktop sends `foregroundApp` */
+        domain?: string;
+        /** `browserExtension` | `desktopNative` — disambiguates tab domain vs native app name */
+        source?: string;
+      };
+
+      const effectiveForeground =
+        source === 'browserExtension' && domain != null && String(domain).trim() !== ''
+          ? String(domain).trim()
+          : foregroundApp != null && String(foregroundApp).trim() !== ''
+            ? String(foregroundApp).trim()
+            : '';
+
+      if (!userId || !effectiveForeground) {
+        return res.status(400).json({
+          success: false,
+          message: 'userId and (foregroundApp or domain for browserExtension) are required',
+        });
+      }
+
+      const {
+        isAppDistractingForUser,
+        getDistractingAppsForUser,
+        getAllowedAppsForUser,
+      } = await import('./app-categorizer');
+
+      const isForegroundBlocked = await isAppDistractingForUser(String(effectiveForeground), userId);
+
+      // Extension: tab domain only — own currentDistraction for the session poll.
+      // desktopNative: classify the foreground app for Tauri, but do NOT wipe extension state
+      // when the foreground is a browser (e.g. Chess → Chrome would clear YouTube otherwise).
+      const fromExtension =
+        source === 'browserExtension' ||
+        (source !== 'desktopNative' &&
+          isLikelyBrowserExtensionHostname(String(effectiveForeground)));
+      if (fromExtension) {
+        sessionManager.reportBrowserForegroundDomain(
+          String(userId),
+          String(effectiveForeground),
+          isForegroundBlocked,
+        );
+      } else if (!isBrowserProcessForegroundName(String(effectiveForeground))) {
+        sessionManager.clearBrowserForegroundDistraction(String(userId));
+      }
+      const appList = Array.isArray(apps) ? apps : [];
+      const blockedRunning: string[] = [];
+      for (const name of appList) {
+        if (await isAppDistractingForUser(String(name), userId)) {
+          blockedRunning.push(String(name));
+        }
+      }
+
+      const distractingApps = await getDistractingAppsForUser(userId);
+      const allowedApps = await getAllowedAppsForUser(userId);
+
+      res.json({
+        success: true,
+        isForegroundBlocked,
+        blockedRunning,
+        allowedApps,
+        blockedApps: distractingApps,
+      });
+    } catch (error: any) {
+      console.error('Error in POST /api/desktop/apps:', error);
+      res.status(500).json({ success: false, message: error.message || 'Failed to classify apps' });
     }
   });
 

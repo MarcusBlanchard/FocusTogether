@@ -192,6 +192,48 @@ function normalizeAppName(appName: string): string {
   return appName.toLowerCase().trim();
 }
 
+function stripWwwHostname(hostname: string): string {
+  const h = hostname.trim().toLowerCase();
+  return h.startsWith('www.') ? h.slice(4) : h;
+}
+
+/** Rough check: value looks like a URL hostname (extension reports these), not "Google Chrome". */
+function looksLikeHostname(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  if (!n.includes('.') || n.includes(' ')) return false;
+  if (n.endsWith('.app')) return false;
+  return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i.test(n) || n === 'localhost';
+}
+
+/**
+ * Keys to classify so www.youtube.com / m.youtube.com resolve to the same rules as "youtube".
+ * Order: prefer main domain label before full host (hits DEFAULT_CATEGORIES without AI).
+ */
+function domainCategoryLookupKeys(hostname: string): string[] {
+  const h = stripWwwHostname(hostname);
+  const parts = h.split('.').filter((p) => p.length > 0);
+  if (parts.length < 2) {
+    return [h];
+  }
+
+  const ordered: string[] = [];
+  const tld = parts[parts.length - 1];
+
+  if (tld === 'uk' && parts.length >= 3 && parts[parts.length - 2] === 'co') {
+    ordered.push(parts[parts.length - 3]);
+  } else {
+    ordered.push(parts[parts.length - 2]);
+  }
+
+  const first = parts[0];
+  if (first && first !== ordered[0]) {
+    ordered.push(first);
+  }
+  ordered.push(h);
+
+  return [...new Set(ordered)];
+}
+
 /**
  * Keywords that indicate distracting content (for domains/apps not in the list)
  */
@@ -486,7 +528,16 @@ export async function isAppDistractingForUser(
     }
   }
   
-  // Fall back to general category
-  const category = await getAppCategory(appName);
-  return category === 'distracting';
+  // Fall back to general category (try hostname-derived keys first so youtube.com → youtube)
+  const keysToClassify = looksLikeHostname(normalized)
+    ? domainCategoryLookupKeys(normalized)
+    : [normalized];
+
+  for (const key of keysToClassify) {
+    const category = await getAppCategory(key);
+    if (category === 'distracting') {
+      return true;
+    }
+  }
+  return false;
 }

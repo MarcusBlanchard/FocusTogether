@@ -1,8 +1,9 @@
 // FocusTogether Browser Extension - Background Service Worker
 // Reports active website to server, server decides if it's distracting
 
-// const API_BASE = 'https://focustogether.replit.app'; // Production
-const API_BASE = 'https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev'; // Replit dev
+// Default must match Tauri default BACKEND_URL (same host as the web app you open).
+// Production: set chrome.storage.local.set({ apiBaseOverride: 'https://focustogether.replit.app' })
+let API_BASE = 'https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev';
 
 // State
 let userId = null;
@@ -25,7 +26,11 @@ chrome.runtime.onStartup.addListener(() => {
 
 // Load user ID from storage, then sync with desktop app
 async function loadUserId() {
-  const result = await chrome.storage.local.get(['userId']);
+  const result = await chrome.storage.local.get(['userId', 'apiBaseOverride']);
+  if (result.apiBaseOverride && typeof result.apiBaseOverride === 'string') {
+    API_BASE = result.apiBaseOverride.replace(/\/$/, '');
+    console.log('[FocusTogether] Using apiBaseOverride:', API_BASE);
+  }
   userId = result.userId || null;
   console.log('[FocusTogether] Loaded userId from storage:', userId ? userId : 'not set');
   
@@ -265,7 +270,7 @@ function startDomainReporting() {
   if (reportInterval) return;
   
   reportCurrentDomain(); // Report immediately
-  reportInterval = setInterval(reportCurrentDomain, 5000); // Then every 5 seconds
+  reportInterval = setInterval(reportCurrentDomain, 2000); // Safety net if tab events are missed
 }
 
 // Report current domain to server
@@ -285,14 +290,15 @@ async function reportCurrentDomain() {
     console.log('[FocusTogether] Reporting domain to server:', domain);
     lastReportedDomain = domain;
     
-    // Send to server - server will decide if it's distracting
+    // Replit contract: source + domain (foregroundApp optional for older servers)
     const response = await fetch(`${API_BASE}/api/desktop/apps`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        userId: userId,
-        apps: [domain],
-        foregroundApp: domain
+        userId: String(userId),
+        source: 'browserExtension',
+        domain: domain,
+        foregroundApp: domain,
       })
     });
     
@@ -301,9 +307,6 @@ async function reportCurrentDomain() {
     } else {
       const data = await response.json();
       console.log('[FocusTogether] Server response:', data);
-      
-      // Desktop app will show the notification via server polling
-      // Browser notification disabled - desktop app handles it
       if (data.isForegroundBlocked) {
         console.log('[FocusTogether] Distracting site detected, desktop app will show notification');
       }
@@ -350,22 +353,43 @@ function updateIcon(monitoring) {
   });
 }
 
-// Listen for tab changes - report immediately when tab changes
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
+// Re-report after focus: one shot can race tab activation; burst + shorter interval helps
+// the server align `currentDistraction` with the real foreground tab faster.
+function scheduleDomainReportBurst() {
   if (!isMonitoring) return;
-  
-  // Reset last reported so we report the new tab
-  lastReportedDomain = null;
-  reportCurrentDomain();
+  const fire = () => {
+    lastReportedDomain = null;
+    reportCurrentDomain();
+  };
+  // Tab switch races: active tab URL may not be final on first tick — stagger fires
+  fire();
+  setTimeout(fire, 120);
+  setTimeout(fire, 400);
+  setTimeout(fire, 900);
+}
+
+// When the user switches from another app (e.g. Chess) back to Chrome, tabs may not change
+// but we must re-report the active tab so the server clears stale `currentDistraction`.
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (!isMonitoring) return;
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  chrome.windows.get(windowId, (win) => {
+    if (chrome.runtime.lastError || !win || win.focused !== true) return;
+    scheduleDomainReportBurst();
+  });
 });
 
-// Listen for tab URL changes
+// Tab switch: burst so we don't read stale URL and miss clearing distraction
+chrome.tabs.onActivated.addListener(() => {
+  if (!isMonitoring) return;
+  scheduleDomainReportBurst();
+});
+
+// SPA / in-tab navigation: URL can update after activation
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!isMonitoring) return;
   if (changeInfo.url && tab.active) {
-    // Reset last reported so we report the new URL
-    lastReportedDomain = null;
-    reportCurrentDomain();
+    scheduleDomainReportBurst();
   }
 });
 
@@ -399,6 +423,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: success, userId: userId });
     });
     return true; // Keep channel open for async response
+  } else if (message.type === 'GET_FOCUS_STATS') {
+    (async () => {
+      try {
+        const { userId: uid } = await chrome.storage.local.get(['userId']);
+        if (!uid) {
+          sendResponse({ ok: false, error: 'not_linked' });
+          return;
+        }
+        const r = await fetch(
+          `${API_BASE}/api/focus-stats?userId=${encodeURIComponent(uid)}`
+        );
+        if (!r.ok) {
+          sendResponse({ ok: false, error: 'http', status: r.status });
+          return;
+        }
+        const data = await r.json();
+        sendResponse({
+          ok: true,
+          idleWarningCount: Number(data.idleWarningCount) || 0,
+          distractionCount: Number(data.distractionCount) || 0,
+        });
+      } catch (e) {
+        sendResponse({
+          ok: false,
+          error: e && e.message ? e.message : String(e),
+        });
+      }
+    })();
+    return true;
   } else if (message.type === 'LOOKUP_USERNAME') {
     // Look up user ID by username
     lookupUserByUsername(message.username).then(foundUserId => {
