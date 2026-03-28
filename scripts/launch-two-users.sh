@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch two FocusTogether desktop instances, each tied to a different user.
+# Launch two Flowlocked desktop instances, each tied to a different user.
 # - Instance 1: Maria (44923348) using ~/.focustogether-user1/
 # - Instance 2: Marcus (50145776) using ~/.focustogether-user2/
 #
@@ -16,24 +16,24 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Prefer release bundle; fall back to debug
 APP_PATH="${APP_PATH:-$REPO_ROOT/src-tauri/target/release/bundle/macos}"
-if [[ ! -d "$APP_PATH/FocusTogether.app" ]]; then
+if [[ ! -d "$APP_PATH/Flowlocked.app" ]]; then
   APP_PATH="$REPO_ROOT/src-tauri/target/debug/bundle/macos"
 fi
-BINARY="$APP_PATH/FocusTogether.app/Contents/MacOS/FocusTogether"
+BINARY="$APP_PATH/Flowlocked.app/Contents/MacOS/Flowlocked"
 
 if [[ ! -x "$BINARY" ]]; then
-  echo "FocusTogether binary not found. Build first:"
+  echo "Flowlocked binary not found. Build first:"
   echo "  cd $REPO_ROOT && npm run tauri build"
   echo "Then run this script again."
   exit 1
 fi
 
-# Optional: create a second app bundle so you get two dock icons (FocusTogether and FocusTogether2)
-if [[ -n "${USE_TWO_BUNDLES:-}" ]] && [[ ! -d "$APP_PATH/FocusTogether2.app" ]]; then
-  echo "Creating FocusTogether2.app for second user..."
-  cp -R "$APP_PATH/FocusTogether.app" "$APP_PATH/FocusTogether2.app"
-  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.focustogether.app2" "$APP_PATH/FocusTogether2.app/Contents/Info.plist"
-  BINARY2="$APP_PATH/FocusTogether2.app/Contents/MacOS/FocusTogether"
+# Optional: create a second app bundle so you get two dock icons (Flowlocked and Flowlocked2)
+if [[ -n "${USE_TWO_BUNDLES:-}" ]] && [[ ! -d "$APP_PATH/Flowlocked2.app" ]]; then
+  echo "Creating Flowlocked2.app for second user..."
+  cp -R "$APP_PATH/Flowlocked.app" "$APP_PATH/Flowlocked2.app"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.focustogether.app2" "$APP_PATH/Flowlocked2.app/Contents/Info.plist"
+  BINARY2="$APP_PATH/Flowlocked2.app/Contents/MacOS/Flowlocked"
 else
   BINARY2="$BINARY"
 fi

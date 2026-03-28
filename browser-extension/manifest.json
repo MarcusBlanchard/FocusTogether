@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "FocusTogether",
+  "name": "Flowlocked",
   "version": "1.0.0",
-  "description": "Stay focused during your FocusTogether sessions by detecting distracting websites",
+  "description": "Stay focused during your Flowlocked sessions by detecting distracting websites",
   "permissions": [
     "tabs",
     "windows",
@@ -12,7 +12,7 @@
     "nativeMessaging"
   ],
   "host_permissions": [
-    "https://focustogether.replit.app/*",
+    "https://flowlocked.com/*",
     "https://*.replit.dev/*",
     "https://*.spock.replit.dev/*",
     "http://localhost:5001/*"

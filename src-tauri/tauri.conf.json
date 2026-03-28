@@ -7,7 +7,7 @@
     "withGlobalTauri": true
   },
   "package": {
-    "productName": "FocusTogether",
+    "productName": "Flowlocked",
     "version": "0.1.0"
   },
   "tauri": {
@@ -61,7 +61,7 @@
       }
     },
     "cli": {
-      "description": "FocusTogether Desktop App",
+      "description": "Flowlocked Desktop App",
       "args": [
         {
           "name": "url",
@@ -78,7 +78,7 @@
         "label": "main",
         "fullscreen": false,
         "resizable": true,
-        "title": "FocusTogether",
+        "title": "Flowlocked",
         "width": 1200,
         "height": 800,
         "visible": false

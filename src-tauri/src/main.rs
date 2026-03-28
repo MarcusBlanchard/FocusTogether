@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// FocusTogether Desktop App - Background Enforcement
+// Flowlocked Desktop App - Background Enforcement
 // Idle monitoring only
 
 use user_idle::UserIdle;
@@ -1267,7 +1267,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                 if let Some((app_name, _title)) = get_foreground_info() {
                     // Check if foreground is our own app (the warning popup itself)
                     let app_lower = app_name.to_lowercase();
-                    let is_our_app = app_lower.contains("focustogether") || app_lower.contains("focus together");
+                    let is_our_app = app_lower.contains("flowlocked");
                     
                     // Check if foreground is Chrome (browser extension only runs in Chrome)
                     // Only show browser distraction warning when Chrome is the active app
@@ -1855,10 +1855,10 @@ fn is_listener_only() -> bool {
 
 fn main() {
     init_log_file();
-    println!("[Tauri] Starting FocusTogether Enforcer...");
+    println!("[Tauri] Starting Flowlocked Enforcer...");
     
     // Create system tray menu
-    let quit = tauri::CustomMenuItem::new("quit".to_string(), "Quit FocusTogether");
+    let quit = tauri::CustomMenuItem::new("quit".to_string(), "Quit Flowlocked");
     let status = tauri::CustomMenuItem::new("status".to_string(), "Monitoring: Inactive").disabled();
     let stats_header =
         tauri::CustomMenuItem::new("stats_header", "My stats (private)").disabled();
@@ -1958,7 +1958,7 @@ fn main() {
                                         Ok(_) => {
                                             println!("[DeepLink] Backend registration successful");
                                             if let Err(e) = tauri::api::notification::Notification::new(&app_handle_clone.config().tauri.bundle.identifier)
-                                                .title("FocusTogether Connected!")
+                                                .title("Flowlocked Connected!")
                                                 .body("Desktop app linked to your account")
                                                 .show()
                                             {
@@ -1969,7 +1969,7 @@ fn main() {
                                             println!("[DeepLink] Backend registration failed: {} (heartbeat already running)", e);
                                             // Still show notification but with warning
                                             if let Err(e) = tauri::api::notification::Notification::new(&app_handle_clone.config().tauri.bundle.identifier)
-                                                .title("FocusTogether Connected")
+                                                .title("Flowlocked Connected")
                                                 .body("Linked locally - backend sync pending")
                                                 .show()
                                             {
@@ -2016,7 +2016,8 @@ fn main() {
                 println!("[Config] ⚠️  No user linked yet - waiting for deep link from web app");
             }
             
-            // Make app a background utility - hides from Dock and Cmd+Tab
+            // macOS: background utility — hides from Dock and Cmd+Tab
+            #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             
             // Hide the main window and remove from taskbar - app runs in background only
@@ -2035,7 +2036,7 @@ fn main() {
                 // Request permission by attempting to show a test notification
                 // This will trigger the macOS permission dialog if not already granted
                 match Notification::new(&app_id)
-                    .title("FocusTogether")
+                    .title("Flowlocked")
                     .body("Notification permission check")
                     .show()
                 {
@@ -2065,7 +2066,7 @@ fn main() {
                     window_label,
                     url
                 )
-                .title("FocusTogether")
+                .title("Flowlocked")
                 .inner_size(360.0, 260.0)
                 .resizable(false)
                 .decorations(false)

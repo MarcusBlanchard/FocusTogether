@@ -1,9 +1,9 @@
-// FocusTogether Browser Extension - Background Service Worker
+// Flowlocked Browser Extension - Background Service Worker
 // Reports active website to server, server decides if it's distracting
 
 // Default must match Tauri default BACKEND_URL (same host as the web app you open).
-// Production: set chrome.storage.local.set({ apiBaseOverride: 'https://focustogether.replit.app' })
-let API_BASE = 'https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev';
+// Production: set chrome.storage.local.set({ apiBaseOverride: 'https://flowlocked.com' })
+let API_BASE = 'https://flowlocked.com';
 
 // State
 let userId = null;
@@ -14,13 +14,13 @@ let reportInterval = null;
 
 // Initialize on install
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('[FocusTogether] Extension installed');
+  console.log('[Flowlocked] Extension installed');
   loadUserId();
 });
 
 // Initialize on startup
 chrome.runtime.onStartup.addListener(() => {
-  console.log('[FocusTogether] Extension started');
+  console.log('[Flowlocked] Extension started');
   loadUserId();
 });
 
@@ -29,10 +29,10 @@ async function loadUserId() {
   const result = await chrome.storage.local.get(['userId', 'apiBaseOverride']);
   if (result.apiBaseOverride && typeof result.apiBaseOverride === 'string') {
     API_BASE = result.apiBaseOverride.replace(/\/$/, '');
-    console.log('[FocusTogether] Using apiBaseOverride:', API_BASE);
+    console.log('[Flowlocked] Using apiBaseOverride:', API_BASE);
   }
   userId = result.userId || null;
-  console.log('[FocusTogether] Loaded userId from storage:', userId ? userId : 'not set');
+  console.log('[Flowlocked] Loaded userId from storage:', userId ? userId : 'not set');
   
   // Try to sync with desktop app
   await syncWithDesktopApp();
@@ -47,19 +47,19 @@ async function loadUserId() {
 
 // Sync user ID with desktop app via native messaging
 async function syncWithDesktopApp() {
-  console.log('[FocusTogether] Syncing with desktop app...');
+  console.log('[Flowlocked] Syncing with desktop app...');
   
   try {
     const result = await tryNativeMessaging();
     // tryNativeMessaging already saves the user ID if successful
   } catch (error) {
-    console.log('[FocusTogether] Desktop app sync failed:', error.message);
+    console.log('[Flowlocked] Desktop app sync failed:', error.message);
   }
 }
 
 // Try to get user ID from web app session (if logged in on same browser)
 async function tryAutoDetectUser() {
-  console.log('[FocusTogether] Trying to auto-detect user from web app...');
+  console.log('[Flowlocked] Trying to auto-detect user from web app...');
   
   try {
     // Add timeout to prevent hanging

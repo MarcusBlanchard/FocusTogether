@@ -192,7 +192,7 @@ export default function Waiting() {
     <div className="min-h-screen bg-background">
       <header className="border-b">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">FocusTogether</h1>
+          <h1 className="text-2xl font-semibold">Flowlocked</h1>
           <div className="flex items-center gap-4">
             {getStatusBadge()}
           </div>

@@ -10,7 +10,7 @@ FocusTogether consists of **two separate codebases**:
 - **Location**: Replit cloud environment
 - **Cannot be edited from Cursor** - changes must be made on Replit
 - **Stack**: React + TypeScript frontend, Express.js backend, PostgreSQL database
-- **URL (default in Cursor builds)**: dev Repl `https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev` — must match the tab where you use the web app. For production use `https://focustogether.replit.app` via env `BACKEND_URL` (Tauri) and extension `apiBaseOverride`.
+- **URL (default in Cursor builds)**: dev Repl `https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev` — must match the tab where you use the web app. For production use `https://flowlocked.com` via env `BACKEND_URL` (Tauri) and extension `apiBaseOverride`.
 
 ### 2. Desktop Application (Developed in Cursor)
 - **Location**: Local machine, edited in Cursor

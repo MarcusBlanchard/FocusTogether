@@ -1,4 +1,4 @@
-// FocusTogether Browser Extension - Popup Script
+// Flowlocked Browser Extension - Popup Script
 
 document.addEventListener('DOMContentLoaded', async () => {
   const statusDot = document.getElementById('statusDot');
@@ -110,7 +110,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         connectBtn.textContent = 'Connect Account';
         if (response && response.success) {
           // Reset hint and switch to connected view
-          manualHint.textContent = 'Enter your FocusTogether username (e.g. john_doe) or your numeric User ID.';
+          manualHint.textContent = 'Enter your Flowlocked username (e.g. john_doe) or your numeric User ID.';
           manualHint.style.color = '#6b7280';
           updateStatus();
         }
@@ -122,7 +122,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         connectBtn.textContent = 'Connect Account';
         if (response && response.success) {
           // Reset hint and switch to connected view
-          manualHint.textContent = 'Enter your FocusTogether username (e.g. john_doe) or your numeric User ID.';
+          manualHint.textContent = 'Enter your Flowlocked username (e.g. john_doe) or your numeric User ID.';
           manualHint.style.color = '#6b7280';
           updateStatus();
         } else {

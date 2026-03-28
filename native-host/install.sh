@@ -1,11 +1,11 @@
 #!/bin/bash
-# FocusTogether Native Messaging Host Installer
+# Flowlocked Native Messaging Host Installer
 # Run this script after loading the extension to enable auto-connect
 
 set -e
 
 echo "=========================================="
-echo "FocusTogether Native Messaging Installer"
+echo "Flowlocked Native Messaging Installer"
 echo "=========================================="
 echo ""
 
@@ -14,7 +14,7 @@ if [ -z "$1" ]; then
     echo "To find your extension ID:"
     echo "1. Open Chrome and go to chrome://extensions/"
     echo "2. Enable 'Developer mode' (top right)"
-    echo "3. Find FocusTogether and copy the ID"
+    echo "3. Find Flowlocked and copy the ID"
     echo ""
     read -p "Enter your Chrome extension ID: " EXTENSION_ID
 else
@@ -79,7 +79,7 @@ MANIFEST_FILE="$MANIFEST_DIR/com.focustogether.app.json"
 cat > "$MANIFEST_FILE" << EOF
 {
   "name": "com.focustogether.app",
-  "description": "FocusTogether Desktop App - Shares user ID with browser extension",
+  "description": "Flowlocked Desktop App - Shares user ID with browser extension",
   "path": "$NATIVE_HOST_PATH",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://$EXTENSION_ID/"]

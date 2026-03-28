@@ -1,4 +1,4 @@
-// FocusTogether Native Messaging Host
+// Flowlocked Native Messaging Host
 // Allows Chrome extension to get user ID from the desktop app config
 
 use serde::{Deserialize, Serialize};

@@ -21,7 +21,7 @@ export default function Status() {
       <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="max-w-md w-full">
           <CardHeader className="text-center">
-            <CardTitle className="text-2xl">FocusTogether Enforcer</CardTitle>
+            <CardTitle className="text-2xl">Flowlocked Enforcer</CardTitle>
             <CardDescription>Monitoring activity in background</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -42,7 +42,7 @@ export default function Status() {
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
       <Card className="max-w-md w-full">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">FocusTogether Enforcer</CardTitle>
+          <CardTitle className="text-2xl">Flowlocked Enforcer</CardTitle>
           <CardDescription>Monitoring activity in background</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">

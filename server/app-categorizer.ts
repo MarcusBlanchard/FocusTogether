@@ -173,7 +173,8 @@ const DEFAULT_CATEGORIES: Record<string, AppCategoryType> = {
   'messages': 'neutral',
   'facetime': 'neutral',
   
-  // FocusTogether itself - always neutral
+  // Flowlocked itself - always neutral
+  'flowlocked': 'neutral',
   'focustogether': 'neutral',
 };
 

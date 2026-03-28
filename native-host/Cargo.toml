@@ -1,7 +1,7 @@
 [package]
 name = "focustogether-native-host"
 version = "0.1.0"
-description = "Native messaging host for FocusTogether Chrome extension"
+description = "Native messaging host for Flowlocked Chrome extension"
 edition = "2021"
 
 [dependencies]
