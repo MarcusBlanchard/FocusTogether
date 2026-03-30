@@ -119,11 +119,10 @@ fn session_ending_shown() -> &'static Mutex<HashSet<String>> {
     SESSION_ENDING_SHOWN.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-/// Same default as other HTTP calls (override with `BACKEND_URL` for production).
+/// Production API (override with `BACKEND_URL` for staging / local dev).
+/// Must match the host users log into in the browser (e.g. flowlocked.com).
 fn backend_base_url() -> String {
-    std::env::var("BACKEND_URL").unwrap_or_else(|_| {
-        "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev".to_string()
-    })
+    std::env::var("BACKEND_URL").unwrap_or_else(|_| "https://flowlocked.com".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,9 +240,7 @@ fn check_apps_with_server(user_id: &str, foreground_app: &str) -> Option<bool> {
     println!("[Desktop] Sending app report for userId={}", user_id);
     println!("[Desktop Apps] 📤 Checking app with server: userId={}, foregroundApp={}", user_id, foreground_app);
     
-    let backend_url = std::env::var("BACKEND_URL")
-        .unwrap_or_else(|_| "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev".to_string());
-    
+    let backend_url = backend_base_url();
     let endpoint = format!("{}/api/desktop/apps", backend_url);
     
     // Build the request body
@@ -379,8 +376,7 @@ fn set_user_id(user_id: String) -> Result<(), String> {
 async fn register_desktop_connection(user_id: &str) -> Result<(), String> {
     use tauri::api::http::{ClientBuilder, HttpRequestBuilder, ResponseType};
     
-    let backend_url = std::env::var("BACKEND_URL")
-        .unwrap_or_else(|_| "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev".to_string());
+    let backend_url = backend_base_url();
     let url = format!("{}/api/desktop/connect", backend_url);
     
     println!("[DeepLink] 📡 Registering desktop connection for user: {} at {}", user_id, url);
@@ -411,8 +407,7 @@ async fn register_desktop_connection(user_id: &str) -> Result<(), String> {
 async fn send_heartbeat_ping(user_id: &str) -> Result<(), String> {
     use tauri::api::http::{ClientBuilder, HttpRequestBuilder, ResponseType};
     
-    let backend_url = std::env::var("BACKEND_URL")
-        .unwrap_or_else(|_| "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev".to_string());
+    let backend_url = backend_base_url();
     let url = format!("{}/api/desktop/ping", backend_url);
     
     let client = ClientBuilder::new().build().map_err(|e| format!("Failed to create HTTP client: {}", e))?;
@@ -1055,9 +1050,7 @@ fn get_detection_session() -> &'static Mutex<Option<(String, String)>> {
 fn send_focus_state(user_id: &str, session_id: &str, state: &str) {
     println!("[Focus State] 📡 Sending state update: userId={}, sessionId={}, state={}", user_id, session_id, state);
     
-    let backend_url = std::env::var("BACKEND_URL")
-        .unwrap_or_else(|_| "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev".to_string());
-    
+    let backend_url = backend_base_url();
     let endpoint = format!("{}/api/activity/update", backend_url);
     let timestamp = chrono::Utc::now().to_rfc3339();
     
@@ -1373,6 +1366,13 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         if warning_shown_at.is_none() && !is_marked_distracted {
                             // First detection - show warning
                             show_distraction_warning(&app_handle);
+                            if !is_browser_distracting {
+                                let app_id = app_handle.config().tauri.bundle.identifier.clone();
+                                let _ = tauri::api::notification::Notification::new(&app_id)
+                                    .title("Stay focused!")
+                                    .body(format!("You opened {}.", app_name))
+                                    .show();
+                            }
                             warning_shown_at = Some(std::time::Instant::now());
                             warning_from_browser = is_browser_distracting; // Track source of distraction
                             if is_browser_distracting {
@@ -1496,10 +1496,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
     let poll_start = std::time::Instant::now();
     log!("[POLL DEBUG] ═══ Poll #{} cycle starting for userId={} ═══", poll_num, userId);
     
-    // Read backend URL from environment variable, default to Replit URL
-    let backend_url = std::env::var("BACKEND_URL")
-        .unwrap_or_else(|_| "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev".to_string());
-    
+    let backend_url = backend_base_url();
     let endpoint = format!("{}/api/activity/session?userId={}&source=desktop", backend_url, userId);
     log!("[POLL DEBUG] GET {}", endpoint);
     
@@ -1768,10 +1765,7 @@ async fn send_activity_update(
     println!("[Tauri] Sending activity update: userId={}, sessionId={}, status={}", 
              userId, sessionId, status);
     
-    // Read backend URL from environment variable, default to Replit URL
-    let backend_url = std::env::var("BACKEND_URL")
-        .unwrap_or_else(|_| "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev".to_string());
-    
+    let backend_url = backend_base_url();
     let endpoint = format!("{}/api/activity/update", backend_url);
     println!("[Tauri] POST endpoint: {}", endpoint);
     
