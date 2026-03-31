@@ -1007,6 +1007,18 @@ struct SessionResponse {
     allowed_apps: Vec<String>,
 }
 
+/// Windows system beep via kernel32 — avoids spawning PowerShell (which flashes a console window).
+#[cfg(target_os = "windows")]
+fn windows_beep(freq_hz: u32, duration_ms: u32) {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn Beep(dw_freq: u32, dw_duration: u32) -> i32;
+    }
+    unsafe {
+        let _ = Beep(freq_hz, duration_ms);
+    }
+}
+
 /// Play warning sound for local idle warning (yellow notification)
 fn play_warning_sound() {
     #[cfg(target_os = "macos")]
@@ -1033,11 +1045,7 @@ fn play_warning_sound() {
     
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
-        // Higher pitch beep for warning
-        let _ = Command::new("powershell")
-            .args(&["-Command", "[console]::beep(1000,400)"])
-            .output();
+        windows_beep(1000, 400);
     }
 }
 
@@ -1069,10 +1077,7 @@ fn play_alert_sound() {
     
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
-        let _ = Command::new("powershell")
-            .args(&["-Command", "[console]::beep(800,300)"])
-            .output();
+        windows_beep(800, 300);
     }
 }
 
@@ -1097,10 +1102,7 @@ fn play_distracted_sound() {
     
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
-        let _ = Command::new("powershell")
-            .args(&["-Command", "[console]::beep(400,500)"])
-            .output();
+        windows_beep(400, 500);
     }
 }
 
