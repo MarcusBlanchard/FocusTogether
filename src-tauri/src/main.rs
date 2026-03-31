@@ -703,6 +703,20 @@ fn dismiss_notification(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Push idle warning countdown (seconds until marked distracted) to the yellow notification window.
+#[tauri::command]
+fn update_notification_idle_countdown(app: tauri::AppHandle, secondsRemaining: u32) -> Result<(), String> {
+    if let Some(window) = app.get_window("notification") {
+        let _ = window.emit(
+            "notification-message",
+            serde_json::json!({
+                "countdown": secondsRemaining,
+            }),
+        );
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn update_notification_to_distracted(app: tauri::AppHandle) -> Result<(), String> {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -1376,7 +1390,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         let mut last_server_result: Option<bool> = None;
         let mut last_checked_app: String = String::new();
         
-        /// Orange distraction warning: 10s countdown before red + sending distracted (idle uses useIdleWarning.ts)
+        /// Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
         const WARNING_DURATION_SECS: u64 = 10;
         const SERVER_CHECK_INTERVAL_MS: u128 = 2000; // Check with server every 2 seconds
         
@@ -2074,7 +2088,7 @@ fn main() {
                 _ => {}
             }
         })
-        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, show_session_ending_alert, dismiss_session_ending_window, dismiss_notification, update_notification_to_distracted, send_activity_update, get_active_session, get_focus_stats, get_user_id, is_listener_only, get_backend_base_url, set_backend_base_url])
+        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, show_session_ending_alert, dismiss_session_ending_window, dismiss_notification, update_notification_idle_countdown, update_notification_to_distracted, send_activity_update, get_active_session, get_focus_stats, get_user_id, is_listener_only, get_backend_base_url, set_backend_base_url])
         .setup(|app| {
             println!("[Tauri] Setup callback called");
             

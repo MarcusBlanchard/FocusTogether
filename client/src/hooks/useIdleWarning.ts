@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen } from '@tauri-apps/api/event';
 
-// Yellow idle warning only from 60s–90s idle (30s), then red + notify everyone at 90s
+// Yellow idle warning from 60s–90s (30s countdown in the popup), then red + POST distracted for partners at 90s
 const WARNING_THRESHOLD_SECONDS = 60;
 const DISTRACTED_THRESHOLD_SECONDS = 90;
 const POLL_INTERVAL_MS = 250; // Update every 250ms for faster response
@@ -89,6 +89,10 @@ export function useIdleMonitoring() {
   const warningShownRef = useRef(false);
   // Track if distracted status has been sent to backend
   const distractedSentRef = useRef(false);
+  /// Prevents parallel POSTs; cleared on success or after each attempt (retry next tick if needed)
+  const idleSendInFlightRef = useRef(false);
+  /// Last countdown seconds pushed to the yellow window (avoid redundant invokes)
+  const lastIdleCountdownRef = useRef(-1);
   // Track the notification object so we can close it when user becomes active
   const notificationRef = useRef<Notification | null>(null);
   // Track current active sessionId (null means no active session)
@@ -259,6 +263,80 @@ export function useIdleMonitoring() {
         newPhase = 'warning';
       }
 
+      // Countdown on yellow window (same idea as orange distraction warning)
+      if (
+        isTauriAvailable &&
+        !isListenerOnly &&
+        MOCK_USER_ID &&
+        sessionIdRef.current !== null &&
+        idleSeconds >= WARNING_THRESHOLD_SECONDS &&
+        idleSeconds < DISTRACTED_THRESHOLD_SECONDS
+      ) {
+        const remaining = DISTRACTED_THRESHOLD_SECONDS - idleSeconds;
+        if (remaining !== lastIdleCountdownRef.current) {
+          lastIdleCountdownRef.current = remaining;
+          invoke('update_notification_idle_countdown', { secondsRemaining: remaining }).catch(() => {});
+        }
+      } else if (idleSeconds < WARNING_THRESHOLD_SECONDS) {
+        lastIdleCountdownRef.current = -1;
+      }
+
+      // Send distracted to server + red UI once threshold reached (session id fetched here — not only the 2s poll ref)
+      if (
+        idleSeconds >= DISTRACTED_THRESHOLD_SECONDS &&
+        !distractedSentRef.current &&
+        !isListenerOnly &&
+        MOCK_USER_ID &&
+        !idleSendInFlightRef.current
+      ) {
+        idleSendInFlightRef.current = true;
+        (async () => {
+          try {
+            let idleNow = await invoke<number>('get_idle_seconds');
+            if (idleNow < DISTRACTED_THRESHOLD_SECONDS) {
+              return;
+            }
+            const sessionId = await invoke<string | null>('get_active_session', {
+              userId: MOCK_USER_ID,
+            });
+            if (!sessionId) {
+              console.warn('[IdleMonitor] No active session — cannot mark distracted for others');
+              return;
+            }
+            idleNow = await invoke<number>('get_idle_seconds');
+            if (idleNow < DISTRACTED_THRESHOLD_SECONDS) {
+              return;
+            }
+            await invoke('send_activity_update', {
+              userId: MOCK_USER_ID,
+              sessionId,
+              status: 'distracted',
+            });
+            distractedSentRef.current = true;
+            const idleAfter = await invoke<number>('get_idle_seconds');
+            if (idleAfter < DISTRACTED_THRESHOLD_SECONDS) {
+              await invoke('send_activity_update', {
+                userId: MOCK_USER_ID,
+                sessionId,
+                status: 'active',
+              });
+              distractedSentRef.current = false;
+              return;
+            }
+            try {
+              await invoke('update_notification_to_distracted');
+              console.log('[IdleMonitor] ✅ Marked distracted (idle timeout) and updated notification');
+            } catch (notifErr) {
+              console.error('[IdleMonitor] Failed to update idle notification UI:', notifErr);
+            }
+          } catch (error) {
+            console.error('[IdleMonitor] ❌ Idle mark failed:', error);
+          } finally {
+            idleSendInFlightRef.current = false;
+          }
+        })();
+      }
+
       setState(prev => {
         const prevPhase = prev.phase;
         
@@ -266,6 +344,8 @@ export function useIdleMonitoring() {
         if (newPhase === 'active' && prevPhase !== 'active') {
           warningShownRef.current = false;
           distractedSentRef.current = false;
+          idleSendInFlightRef.current = false;
+          lastIdleCountdownRef.current = -1;
           // Close any open notification immediately when user becomes active
           if (notificationRef.current) {
             const notification = notificationRef.current;
@@ -326,38 +406,6 @@ export function useIdleMonitoring() {
           });
           
           // Sound is now played by Rust after window is shown (for sync)
-        }
-        
-        // At DISTRACTED_THRESHOLD_SECONDS — send "idle" to backend + red notification ONCE
-        // Only enforce if there's an active session AND not in listener-only mode
-        if (idleSeconds >= DISTRACTED_THRESHOLD_SECONDS && !distractedSentRef.current && sessionIdRef.current !== null && !isListenerOnly) {
-          distractedSentRef.current = true;
-          console.log(`[IdleMonitor] IDLE TRIGGERED: ${prevPhase} -> Idle (${idleSeconds}s)`);
-          
-          // Send "idle" status to backend (Replit endpoint)
-          (async () => {
-            try {
-              console.log('[IdleMonitor] Sending idle status to backend...');
-              await invoke('send_activity_update', {
-                userId: MOCK_USER_ID,
-                sessionId: sessionIdRef.current,
-                status: 'idle',
-              });
-              console.log('[IdleMonitor] ✅ idle status sent to backend successfully');
-              
-              // Update the notification to red/distracted state
-              try {
-                await invoke('update_notification_to_distracted');
-                console.log('[IdleMonitor] ✅ Notification updated to distracted state');
-              } catch (notifError) {
-                console.error('[IdleMonitor] Failed to update notification:', notifError);
-              }
-            } catch (error) {
-              console.error('[IdleMonitor] ❌ Failed to send idle status to backend:', error);
-            }
-          })();
-        } else if (isListenerOnly && idleSeconds >= DISTRACTED_THRESHOLD_SECONDS) {
-          console.log(`[IdleMonitor] 🎧 LISTENER MODE: Idle detected but NOT sending to backend`);
         }
         
         return {
