@@ -93,6 +93,8 @@ export function useIdleMonitoring() {
   const idleSendInFlightRef = useRef(false);
   /// Last countdown seconds pushed to the yellow window (avoid redundant invokes)
   const lastIdleCountdownRef = useRef(-1);
+  /// Whether the idle notification UI has already flipped to red for this idle cycle
+  const idleUiMarkedRef = useRef(false);
   // Track the notification object so we can close it when user becomes active
   const notificationRef = useRef<Notification | null>(null);
   // Track current active sessionId (null means no active session)
@@ -293,6 +295,23 @@ export function useIdleMonitoring() {
         invoke('update_notification_idle_countdown', { secondsRemaining: 0 }).catch(() => {});
       }
 
+      // Flip UI to red immediately at 0, independent of network timing.
+      if (
+        isTauriAvailable &&
+        !isListenerOnly &&
+        MOCK_USER_ID &&
+        idleSeconds >= DISTRACTED_THRESHOLD_SECONDS &&
+        !idleUiMarkedRef.current
+      ) {
+        idleUiMarkedRef.current = true;
+        invoke('update_notification_to_idle_marked').catch((error) => {
+          console.error('[IdleMonitor] Failed to update idle notification UI:', error);
+          idleUiMarkedRef.current = false;
+        });
+      } else if (idleSeconds < DISTRACTED_THRESHOLD_SECONDS) {
+        idleUiMarkedRef.current = false;
+      }
+
       // POST idle to server + red UI once threshold reached (session id fetched here — not only the 2s poll ref)
       if (
         idleSeconds >= DISTRACTED_THRESHOLD_SECONDS &&
@@ -326,14 +345,10 @@ export function useIdleMonitoring() {
                 status: 'active',
               });
               distractedSentRef.current = false;
+              idleUiMarkedRef.current = false;
               return;
             }
-            try {
-              await invoke('update_notification_to_idle_marked');
-              console.log('[IdleMonitor] ✅ Marked idle and updated notification');
-            } catch (notifErr) {
-              console.error('[IdleMonitor] Failed to update idle notification UI:', notifErr);
-            }
+            console.log('[IdleMonitor] ✅ Marked idle and updated notification');
           } catch (error) {
             console.error('[IdleMonitor] ❌ Idle mark failed:', error);
           } finally {
@@ -351,6 +366,7 @@ export function useIdleMonitoring() {
           distractedSentRef.current = false;
           idleSendInFlightRef.current = false;
           lastIdleCountdownRef.current = -1;
+          idleUiMarkedRef.current = false;
           // Close any open notification immediately when user becomes active
           if (notificationRef.current) {
             const notification = notificationRef.current;
