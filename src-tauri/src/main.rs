@@ -273,15 +273,43 @@ struct DesktopAppsResponse {
     blocked_running: Vec<String>,
     #[serde(rename = "isForegroundBlocked", default)]
     is_foreground_blocked: bool,
+    #[serde(rename = "currentDistraction", default)]
+    current_distraction: Option<serde_json::Value>,
     #[serde(rename = "allowedApps", default)]
     allowed_apps: Vec<String>,
     #[serde(rename = "blockedApps", default)]
     blocked_apps: Vec<String>,
 }
 
-/// Check with server if foreground app is distracting
-/// This is the source of truth - server decides what's blocked
-fn check_apps_with_server(user_id: &str, foreground_app: &str) -> Option<bool> {
+/// Build a unique list of currently running app/process names.
+fn get_running_app_names() -> Vec<String> {
+    use sysinfo::{ProcessesToUpdate, System};
+
+    let mut system = System::new_all();
+    // Refresh processes list before sampling names.
+    system.refresh_processes(ProcessesToUpdate::All, true);
+
+    let mut seen = std::collections::HashSet::new();
+    let mut apps = Vec::new();
+
+    for process in system.processes().values() {
+        let raw_name = process.name().to_string_lossy().trim().to_string();
+        if raw_name.is_empty() {
+            continue;
+        }
+        let key = raw_name.to_lowercase();
+        if seen.insert(key) {
+            apps.push(raw_name);
+        }
+    }
+
+    // Keep payload deterministic for server-side logs/debugging.
+    apps.sort();
+    apps
+}
+
+/// Report current desktop state to server; server remains source of truth.
+fn check_apps_with_server(user_id: &str, foreground_app: &str) -> Option<DesktopAppsResponse> {
     println!("[Desktop] Sending app report for userId={}", user_id);
     println!("[Desktop Apps] 📤 Checking app with server: userId={}, foregroundApp={}", user_id, foreground_app);
     
@@ -289,9 +317,10 @@ fn check_apps_with_server(user_id: &str, foreground_app: &str) -> Option<bool> {
     let endpoint = format!("{}/api/desktop/apps", backend_url);
     
     // Build the request body
+    let running_apps = get_running_app_names();
     let body = serde_json::json!({
         "userId": user_id,
-        "apps": [foreground_app], // Only send the foreground app for now
+        "apps": running_apps,
         "foregroundApp": foreground_app,
         "source": "desktopNative"
     });
@@ -315,9 +344,13 @@ fn check_apps_with_server(user_id: &str, foreground_app: &str) -> Option<bool> {
                 match response.json::<DesktopAppsResponse>() {
                     Ok(data) => {
                         if data.success {
-                            println!("[Detection] Server response - isForegroundBlocked: {}, blockedRunning: {:?}", 
-                                     data.is_foreground_blocked, data.blocked_running);
-                            Some(data.is_foreground_blocked)
+                            println!(
+                                "[Detection] Server response - isForegroundBlocked: {}, blockedRunning: {:?}, currentDistractionPresent: {}",
+                                data.is_foreground_blocked,
+                                data.blocked_running,
+                                data.current_distraction.is_some()
+                            );
+                            Some(data)
                         } else {
                             println!("[Detection] Server returned success: false");
                             None
@@ -1417,13 +1450,13 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         let mut is_marked_distracted = false;
         let mut last_sent_state: Option<&str> = None;
         let mut warning_from_browser = false; // Track if current warning is from browser vs local app
-        let mut last_server_check: Option<std::time::Instant> = None;
+        let mut last_server_report: Option<std::time::Instant> = None;
         let mut last_server_result: Option<bool> = None;
-        let mut last_checked_app: String = String::new();
+        let mut last_reported_app: String = String::new();
         
         /// Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
         const WARNING_DURATION_SECS: u64 = 10;
-        const SERVER_CHECK_INTERVAL_MS: u128 = 2000; // Check with server every 2 seconds
+        const SERVER_REPORT_HEARTBEAT_SECS: u64 = 30; // Re-report even if foreground unchanged
         
         while DETECTION_RUNNING.load(Ordering::SeqCst) {
             // Get session info
@@ -1454,41 +1487,29 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     // Browser distraction only counts when Chrome is in foreground
                     let is_browser_distracting = browser_distraction_reported && is_chrome;
                     
-                    // Check with server if foreground app is distracting
-                    // Server is the source of truth - it handles all categorization
-                    let is_server_blocked = if is_our_app || is_chrome {
-                        // Don't check our own app or browsers (browser extension handles those)
-                        false
-                    } else {
-                        // Check if we need to query server (rate limit to every 2 seconds or when app changes)
-                        let should_check_server = match last_server_check {
-                            None => true,
-                            Some(last_check) => {
-                                last_check.elapsed().as_millis() >= SERVER_CHECK_INTERVAL_MS 
-                                || last_checked_app != app_name
-                            }
-                        };
-                        
-                        if should_check_server {
-                            last_server_check = Some(std::time::Instant::now());
-                            last_checked_app = app_name.clone();
-                            
-                            // Use current linked user (same as ping) so app reports stay in sync after deep link switch
-                            let is_blocked = if let Some(ref current_user) = get_current_user_id() {
-                                match check_apps_with_server(current_user, &app_name) {
-                                    Some(b) => b,
-                                    None => last_server_result.unwrap_or(false),
-                                }
-                            } else {
-                                last_server_result.unwrap_or(false)
-                            };
-                            last_server_result = Some(is_blocked);
-                            is_blocked
-                        } else {
-                            // Use cached result
-                            last_server_result.unwrap_or(false)
+                    // Report on every foreground change plus a 30s heartbeat while unchanged.
+                    let should_report_server = match last_server_report {
+                        None => true,
+                        Some(last_report) => {
+                            last_reported_app != app_name
+                                || last_report.elapsed().as_secs() >= SERVER_REPORT_HEARTBEAT_SECS
                         }
                     };
+
+                    if should_report_server {
+                        last_server_report = Some(std::time::Instant::now());
+                        last_reported_app = app_name.clone();
+
+                        // Use current linked user (same as ping) so app reports stay in sync after deep link switch.
+                        if let Some(ref current_user) = get_current_user_id() {
+                            if let Some(server_data) = check_apps_with_server(current_user, &app_name) {
+                                last_server_result = Some(server_data.is_foreground_blocked);
+                            }
+                        }
+                    }
+
+                    // Server remains source of truth; keep last known answer if report fails.
+                    let is_server_blocked = last_server_result.unwrap_or(false);
                     
                     // Determine if currently distracting
                     // Special case: if warning was from a LOCAL app (not browser) and user switched 
