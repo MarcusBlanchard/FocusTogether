@@ -1,9 +1,8 @@
 // Flowlocked Browser Extension - Background Service Worker
 // Reports active website to server, server decides if it's distracting
 
-// Default must match Tauri default BACKEND_URL (same host as the web app you open).
-// Production: set chrome.storage.local.set({ apiBaseOverride: 'https://flowlocked.com' })
-let API_BASE = 'https://flowlocked.com';
+// Default API host (Replit staging). For production: chrome.storage.local.set({ apiBaseOverride: 'https://flowlocked.com' })
+let API_BASE = 'https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev';
 
 // State
 let userId = null;

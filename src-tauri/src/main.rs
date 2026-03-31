@@ -119,10 +119,55 @@ fn session_ending_shown() -> &'static Mutex<HashSet<String>> {
     SESSION_ENDING_SHOWN.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-/// Production API (override with `BACKEND_URL` for staging / local dev).
-/// Must match the host users log into in the browser (e.g. flowlocked.com).
+/// Default API host (Replit staging). Override with `BACKEND_URL`, persisted `backend_url`, or ask to switch default to production.
+const DEFAULT_BACKEND_BASE_URL: &str =
+    "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev";
+
+/// Resolved API base: `BACKEND_URL` env → persisted `backend_url` in config → `DEFAULT_BACKEND_BASE_URL` (Replit staging).
 fn backend_base_url() -> String {
-    std::env::var("BACKEND_URL").unwrap_or_else(|_| "https://flowlocked.com".to_string())
+    if let Ok(env) = std::env::var("BACKEND_URL") {
+        let t = env.trim();
+        if !t.is_empty() {
+            return normalize_backend_url(t).unwrap_or_else(|_| t.to_string());
+        }
+    }
+    if let Ok(guard) = get_config().lock() {
+        if let Some(ref u) = guard.backend_url {
+            return u.clone();
+        }
+    }
+    DEFAULT_BACKEND_BASE_URL.to_string()
+}
+
+fn normalize_backend_url(input: &str) -> Result<String, String> {
+    let s = input.trim().trim_end_matches('/');
+    if s.is_empty() {
+        return Err("empty URL".to_string());
+    }
+    if s.starts_with("http://localhost") || s.starts_with("http://127.0.0.1") {
+        return Ok(s.to_string());
+    }
+    if s.starts_with("https://") {
+        return Ok(s.to_string());
+    }
+    if s.starts_with("http://") {
+        return Err("use https (or http only for localhost)".to_string());
+    }
+    Err("URL must start with https://".to_string())
+}
+
+fn set_backend_config_url(url: Option<String>) -> Result<(), String> {
+    let config = get_config();
+    let mut config_guard = config.lock().map_err(|e| format!("Failed to lock config: {}", e))?;
+    config_guard.backend_url = match url {
+        None => None,
+        Some(s) => {
+            let n = normalize_backend_url(&s)?;
+            Some(n)
+        }
+    };
+    save_config(&config_guard)?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -295,6 +340,9 @@ fn check_apps_with_server(user_id: &str, foreground_app: &str) -> Option<bool> {
 struct AppConfig {
     user_id: Option<String>,
     connected_at: Option<String>,
+    /// When set, desktop HTTP/WebSocket use this origin (e.g. Replit staging). Env `BACKEND_URL` overrides.
+    #[serde(default)]
+    backend_url: Option<String>,
 }
 
 /// Get the config file path (~/.focustogether/config.json)
@@ -481,25 +529,55 @@ fn start_heartbeat_loop() {
     });
 }
 
-/// Parse deep link URL and extract userId
-fn parse_deep_link(url: &str) -> Option<String> {
-    // Expected format: focustogether://auth?userId=XXX
-    if url.starts_with("focustogether://auth") {
-        // Parse query string
-        if let Some(query_start) = url.find('?') {
-            let query = &url[query_start + 1..];
-            for param in query.split('&') {
-                if let Some((key, value)) = param.split_once('=') {
-                    if key == "userId" {
-                        println!("[DeepLink] Parsed userId: {}", value);
-                        return Some(value.to_string());
-                    }
-                }
+/// Optional `backend` query sets or clears persisted API origin (must match the site you logged into).
+#[derive(Debug)]
+enum DeepLinkBackendParam {
+    /// No `backend` in URL — leave `config.backend_url` unchanged (old links).
+    Unspecified,
+    /// `backend=` or empty — clear persisted override (falls back to `DEFAULT_BACKEND_BASE_URL`).
+    Clear,
+    /// `backend=https://...`
+    Set(String),
+}
+
+#[derive(Debug)]
+struct DeepLinkAuth {
+    user_id: String,
+    backend: DeepLinkBackendParam,
+}
+
+/// Expected: `focustogether://auth?userId=XXX` with optional `&backend=https%3A%2F%2F...`
+fn parse_deep_link(url: &str) -> Option<DeepLinkAuth> {
+    if !url.starts_with("focustogether://auth") {
+        println!("[DeepLink] Failed to parse URL: {}", url);
+        return None;
+    }
+    let query = match url.find('?') {
+        Some(i) => &url[i + 1..],
+        None => {
+            println!("[DeepLink] Missing query string");
+            return None;
+        }
+    };
+    let mut user_id: Option<String> = None;
+    let mut backend = DeepLinkBackendParam::Unspecified;
+    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        match key.as_ref() {
+            "userId" => user_id = Some(value.into_owned()),
+            "backend" => {
+                let v = value.into_owned();
+                backend = if v.is_empty() {
+                    DeepLinkBackendParam::Clear
+                } else {
+                    DeepLinkBackendParam::Set(v)
+                };
             }
+            _ => {}
         }
     }
-    println!("[DeepLink] Failed to parse URL: {}", url);
-    None
+    let user_id = user_id?;
+    println!("[DeepLink] Parsed userId: {}", user_id);
+    Some(DeepLinkAuth { user_id, backend })
 }
 
 #[tauri::command]
@@ -507,6 +585,26 @@ fn get_idle_seconds() -> u64 {
     match UserIdle::get_time() {
         Ok(idle) => idle.as_seconds(),
         Err(_) => 0,
+    }
+}
+
+#[tauri::command]
+fn get_backend_base_url() -> String {
+    backend_base_url()
+}
+
+#[tauri::command]
+fn set_backend_base_url(url: Option<String>) -> Result<(), String> {
+    match url {
+        None => set_backend_config_url(None),
+        Some(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                set_backend_config_url(None)
+            } else {
+                set_backend_config_url(Some(t.to_string()))
+            }
+        }
     }
 }
 
@@ -1207,11 +1305,45 @@ fn dismiss_distraction_warning(app_handle: &tauri::AppHandle) {
 /// Start distraction detection for a session
 fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: String) {
     println!("[Detection] 🚀 start_detection called with userId={}, sessionId={}", user_id, session_id);
+    println!(
+        "[Detection] Backend base at start_detection: {}",
+        backend_base_url()
+    );
     
     // Already running?
+    // If the user is still in the same session, we can skip. If the session changes,
+    // we must restart so alerts/actions are associated with the correct sessionId.
     if DETECTION_RUNNING.load(Ordering::SeqCst) {
-        println!("[Detection] ⚠️ Detection already running - skipping start");
-        return;
+        let existing = get_detection_session()
+            .lock()
+            .ok()
+            .and_then(|s| s.clone());
+
+        let should_restart = match existing.as_ref() {
+            Some((existing_user_id, existing_session_id)) => {
+                existing_user_id != &user_id || existing_session_id != &session_id
+            }
+            None => true,
+        };
+
+        if !should_restart {
+            println!("[Detection] ⚠️ Detection already running for same user+session — skipping start");
+            return;
+        }
+
+        let (existing_user_id_str, existing_session_id_str) = existing
+            .as_ref()
+            .map(|(u, sid)| (u.as_str(), sid.as_str()))
+            .unwrap_or(("none", "none"));
+
+        println!(
+            "[Detection] ♻️ Detection restart needed (existing_userId={}, existing_sessionId={}, new_userId={}, new_sessionId={})",
+            existing_user_id_str,
+            existing_session_id_str,
+            user_id,
+            session_id
+        );
+        stop_detection(&app_handle);
     }
     
     // Store session info
@@ -1438,6 +1570,20 @@ fn stop_detection(app_handle: &tauri::AppHandle) {
     if !DETECTION_RUNNING.load(Ordering::SeqCst) {
         return;
     }
+
+    // Capture current stored session info for debugging.
+    let prior_session_info = get_detection_session()
+        .lock()
+        .ok()
+        .and_then(|s| s.clone());
+    if let Some((uid, sid)) = prior_session_info {
+        println!(
+            "[Detection] 🛑 stop_detection called while running (userId={}, sessionId={})",
+            uid, sid
+        );
+    } else {
+        println!("[Detection] 🛑 stop_detection called while running (no prior session stored)");
+    }
     
     DETECTION_RUNNING.store(false, Ordering::SeqCst);
     
@@ -1497,7 +1643,9 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
     log!("[POLL DEBUG] ═══ Poll #{} cycle starting for userId={} ═══", poll_num, userId);
     
     let backend_url = backend_base_url();
-    let endpoint = format!("{}/api/activity/session?userId={}&source=desktop", backend_url, userId);
+    // Replit staging protects /api/activity/session with auth, but provides a dedicated unauth endpoint
+    // for the desktop app polling.
+    let endpoint = format!("{}/api/desktop/poll?userId={}", backend_url, userId);
     log!("[POLL DEBUG] GET {}", endpoint);
     
     // Use Tauri's HTTP API to send GET request
@@ -1525,6 +1673,22 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
         let raw = response_data.data.clone();
         let raw_str = serde_json::to_string_pretty(&raw).unwrap_or_else(|_| format!("{:?}", raw));
         log!("[POLL DEBUG] Raw response body: {}", raw_str);
+        let raw_session_id = raw
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let raw_active = raw.get("active").and_then(|v| v.as_bool());
+        let raw_joined_at = raw
+            .get("joinedAt")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        log!(
+            "[POLL DEBUG] Raw summary keys: sessionId={:?} active={:?} joinedAt={:?} pendingAlerts_raw_present={}",
+            raw_session_id,
+            raw_active,
+            raw_joined_at,
+            raw.get("pendingAlerts").is_some()
+        );
         log!("[POLL DEBUG] pendingAlerts in raw JSON: {}", 
             raw.get("pendingAlerts").map(|v| serde_json::to_string(v).unwrap_or_default()).unwrap_or_else(|| "MISSING".to_string()));
         
@@ -1570,7 +1734,15 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
         
         let alert_count = session_response.pending_alerts.as_ref().map(|a| a.len()).unwrap_or(0);
         log!("[POLL DEBUG] Parsed OK — sessionId={:?} pendingAlerts count={} distractingApps count={}",
-                 session_response.session_id, alert_count, session_response.distracting_apps.len());
+                 session_response.session_id,
+                 alert_count,
+                 session_response.distracting_apps.len());
+        log!(
+            "[POLL DEBUG] Parsed extra: active={:?} joinedAt={:?} allowedApps count={}",
+            session_response.active,
+            session_response.joined_at,
+            session_response.allowed_apps.len()
+        );
         
         // Process pending alerts
         if let Some(ref alerts) = session_response.pending_alerts {
@@ -1740,7 +1912,17 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
                 Ok(Some(session_id))
             }
             None => {
-                println!("[Tauri] No active session (sessionId is null)");
+                let pending_count = session_response
+                    .pending_alerts
+                    .as_ref()
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                println!(
+                    "[Tauri] No active session (sessionId is null) for userId={} (active={:?}, pendingAlerts count={})",
+                    userId,
+                    session_response.active,
+                    pending_count
+                );
                 stop_detection(&app);
                 Ok(None)
             }
@@ -1890,7 +2072,7 @@ fn main() {
                 _ => {}
             }
         })
-        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, show_session_ending_alert, dismiss_session_ending_window, dismiss_notification, update_notification_to_distracted, send_activity_update, get_active_session, get_focus_stats, get_user_id, is_listener_only])
+        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, show_session_ending_alert, dismiss_session_ending_window, dismiss_notification, update_notification_to_distracted, send_activity_update, get_active_session, get_focus_stats, get_user_id, is_listener_only, get_backend_base_url, set_backend_base_url])
         .setup(|app| {
             println!("[Tauri] Setup callback called");
             
@@ -1906,9 +2088,27 @@ fn main() {
                 tauri_plugin_deep_link::register("focustogether", move |request| {
                     println!("[DeepLink] 🔗 Received deep link: {}", request);
                     
-                    // Parse the URL and extract userId
-                    if let Some(user_id) = parse_deep_link(&request) {
+                    if let Some(parsed) = parse_deep_link(&request) {
+                        let user_id = parsed.user_id.clone();
                         println!("[DeepLink] Extracted userId: {}", user_id);
+
+                        match parsed.backend {
+                            DeepLinkBackendParam::Unspecified => {}
+                            DeepLinkBackendParam::Clear => {
+                                if let Err(e) = set_backend_config_url(None) {
+                                    println!("[DeepLink] Failed to clear backend URL: {}", e);
+                                } else {
+                                    println!("[DeepLink] Backend URL reset to default ({})", backend_base_url());
+                                }
+                            }
+                            DeepLinkBackendParam::Set(v) => {
+                                if let Err(e) = set_backend_config_url(Some(v)) {
+                                    println!("[DeepLink] Invalid or failed to save backend URL: {}", e);
+                                } else {
+                                    println!("[DeepLink] Backend URL set to {}", backend_base_url());
+                                }
+                            }
+                        }
                         
                         let old_user_id = get_current_user_id();
                         

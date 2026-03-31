@@ -23,6 +23,7 @@ tauri-build = { version = "1.5", features = [] }
   active-win-pos-rs = "0.8"
   reqwest = { version = "0.11", features = ["blocking", "json"] }
   tokio = { version = "1", features = ["time"] }
+  url = "2.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
   cocoa = "0.25"

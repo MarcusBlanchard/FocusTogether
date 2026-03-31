@@ -190,7 +190,13 @@ for (const [app, category] of Object.entries(DEFAULT_CATEGORIES)) {
  * Normalize app name for consistent lookups
  */
 function normalizeAppName(appName: string): string {
-  return appName.toLowerCase().trim();
+  let n = appName.toLowerCase().trim();
+  // macOS sometimes reports active apps as "Chess.app" / "Steam.app".
+  // Strip the suffix so our default category keys like "chess" and "steam" match.
+  if (n.endsWith(".app")) {
+    n = n.slice(0, -4).trim();
+  }
+  return n;
 }
 
 function stripWwwHostname(hostname: string): string {
