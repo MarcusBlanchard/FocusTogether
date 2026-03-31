@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen } from '@tauri-apps/api/event';
 
-// Yellow idle warning from 60s–90s (30s countdown in the popup), then red + POST distracted for partners at 90s
+// Yellow idle warning from 60s–90s (30s countdown in the popup), then red + POST idle for partners at 90s
 const WARNING_THRESHOLD_SECONDS = 60;
 const DISTRACTED_THRESHOLD_SECONDS = 90;
 const POLL_INTERVAL_MS = 250; // Update every 250ms for faster response
@@ -281,7 +281,19 @@ export function useIdleMonitoring() {
         lastIdleCountdownRef.current = -1;
       }
 
-      // Send distracted to server + red UI once threshold reached (session id fetched here — not only the 2s poll ref)
+      // At threshold: hide countdown "1" (integer idle can flicker 89–90; don't gate red on that)
+      if (
+        isTauriAvailable &&
+        !isListenerOnly &&
+        MOCK_USER_ID &&
+        idleSeconds >= DISTRACTED_THRESHOLD_SECONDS &&
+        lastIdleCountdownRef.current !== 0
+      ) {
+        lastIdleCountdownRef.current = 0;
+        invoke('update_notification_idle_countdown', { secondsRemaining: 0 }).catch(() => {});
+      }
+
+      // POST idle to server + red UI once threshold reached (session id fetched here — not only the 2s poll ref)
       if (
         idleSeconds >= DISTRACTED_THRESHOLD_SECONDS &&
         !distractedSentRef.current &&
@@ -292,29 +304,22 @@ export function useIdleMonitoring() {
         idleSendInFlightRef.current = true;
         (async () => {
           try {
-            let idleNow = await invoke<number>('get_idle_seconds');
-            if (idleNow < DISTRACTED_THRESHOLD_SECONDS) {
-              return;
-            }
             const sessionId = await invoke<string | null>('get_active_session', {
               userId: MOCK_USER_ID,
             });
             if (!sessionId) {
-              console.warn('[IdleMonitor] No active session — cannot mark distracted for others');
-              return;
-            }
-            idleNow = await invoke<number>('get_idle_seconds');
-            if (idleNow < DISTRACTED_THRESHOLD_SECONDS) {
+              console.warn('[IdleMonitor] No active session — cannot mark idle for others');
               return;
             }
             await invoke('send_activity_update', {
               userId: MOCK_USER_ID,
               sessionId,
-              status: 'distracted',
+              status: 'idle',
             });
             distractedSentRef.current = true;
+            // Only revert if user is clearly active again (not 89 vs 90 floor from get_idle_seconds)
             const idleAfter = await invoke<number>('get_idle_seconds');
-            if (idleAfter < DISTRACTED_THRESHOLD_SECONDS) {
+            if (idleAfter < WARNING_THRESHOLD_SECONDS) {
               await invoke('send_activity_update', {
                 userId: MOCK_USER_ID,
                 sessionId,
@@ -324,8 +329,8 @@ export function useIdleMonitoring() {
               return;
             }
             try {
-              await invoke('update_notification_to_distracted');
-              console.log('[IdleMonitor] ✅ Marked distracted (idle timeout) and updated notification');
+              await invoke('update_notification_to_idle_marked');
+              console.log('[IdleMonitor] ✅ Marked idle and updated notification');
             } catch (notifErr) {
               console.error('[IdleMonitor] Failed to update idle notification UI:', notifErr);
             }
@@ -398,7 +403,7 @@ export function useIdleMonitoring() {
           // Show notification (visible even when tabbed out, will auto-close on activity)
           showDesktopNotification(
             'Idle Warning',
-            "You're about to be marked as distracted. Move your mouse or type."
+            "You're about to be marked as idle. Move your mouse or type."
           ).then(notification => {
             if (notification) {
               notificationRef.current = notification;

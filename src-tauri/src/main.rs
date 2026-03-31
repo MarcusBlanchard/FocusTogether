@@ -703,7 +703,7 @@ fn dismiss_notification(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Push idle warning countdown (seconds until marked distracted) to the yellow notification window.
+/// Push idle warning countdown (seconds until marked idle) to the yellow notification window.
 #[tauri::command]
 fn update_notification_idle_countdown(app: tauri::AppHandle, secondsRemaining: u32) -> Result<(), String> {
     if let Some(window) = app.get_window("notification") {
@@ -717,24 +717,25 @@ fn update_notification_idle_countdown(app: tauri::AppHandle, secondsRemaining: u
     Ok(())
 }
 
+/// Red state after idle timeout (distinct copy from app-distraction "distracted").
 #[tauri::command]
-fn update_notification_to_distracted(app: tauri::AppHandle) -> Result<(), String> {
+fn update_notification_to_idle_marked(app: tauri::AppHandle) -> Result<(), String> {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("🚨 🚨 🚨 MARKED AS DISTRACTED 🚨 🚨 🚨");
+    println!("🚨 🚨 🚨 MARKED AS IDLE 🚨 🚨 🚨");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    
+
     if let Some(window) = app.get_window("notification") {
-        // Emit event to update the notification to distracted state
         let payload = serde_json::json!({
-            "title": "Marked as Distracted",
-            "body": "You were marked as distracted. Everyone in the session has been notified.",
+            "title": "Marked as Idle",
+            "body": "You were marked as idle. Everyone in the session has been notified.",
             "isDistracted": true
         });
-        
-        window.emit("notification-message", payload)
-            .map_err(|e| format!("Failed to emit distracted event: {}", e))?;
-        
-        println!("[Tauri] ✅ Notification updated to distracted state");
+
+        window
+            .emit("notification-message", payload)
+            .map_err(|e| format!("Failed to emit idle-marked event: {}", e))?;
+
+        println!("[Tauri] ✅ Notification updated to idle-marked state");
         
         // Play sound in separate thread with small delay (non-blocking)
         std::thread::spawn(|| {
@@ -746,6 +747,36 @@ fn update_notification_to_distracted(app: tauri::AppHandle) -> Result<(), String
         println!("[Tauri] ⚠️ Notification window not found - may have been dismissed");
     }
     
+    Ok(())
+}
+
+#[tauri::command]
+fn update_notification_to_distracted(app: tauri::AppHandle) -> Result<(), String> {
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("🚨 🚨 🚨 MARKED AS DISTRACTED 🚨 🚨 🚨");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    if let Some(window) = app.get_window("notification") {
+        let payload = serde_json::json!({
+            "title": "Marked as Distracted",
+            "body": "You were marked as distracted. Everyone in the session has been notified.",
+            "isDistracted": true
+        });
+
+        window
+            .emit("notification-message", payload)
+            .map_err(|e| format!("Failed to emit distracted event: {}", e))?;
+
+        println!("[Tauri] ✅ Notification updated to distracted state");
+
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            play_distracted_sound();
+        });
+    } else {
+        println!("[Tauri] ⚠️ Notification window not found - may have been dismissed");
+    }
+
     Ok(())
 }
 
@@ -2088,7 +2119,7 @@ fn main() {
                 _ => {}
             }
         })
-        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, show_session_ending_alert, dismiss_session_ending_window, dismiss_notification, update_notification_idle_countdown, update_notification_to_distracted, send_activity_update, get_active_session, get_focus_stats, get_user_id, is_listener_only, get_backend_base_url, set_backend_base_url])
+        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, show_session_ending_alert, dismiss_session_ending_window, dismiss_notification, update_notification_idle_countdown, update_notification_to_idle_marked, update_notification_to_distracted, send_activity_update, get_active_session, get_focus_stats, get_user_id, is_listener_only, get_backend_base_url, set_backend_base_url])
         .setup(|app| {
             println!("[Tauri] Setup callback called");
             
