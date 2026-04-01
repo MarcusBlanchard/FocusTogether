@@ -511,6 +511,47 @@ async fn send_heartbeat_ping(user_id: &str) -> Result<(), String> {
     }
 }
 
+/// Best-effort: tell server desktop disconnected immediately (web gate), same base URL as ping.
+/// Blocking so shutdown can finish the request; 90s ping timeout remains fallback.
+fn send_desktop_disconnect_blocking(user_id: &str) {
+    let base = backend_base_url().trim_end_matches('/').to_string();
+    let url = format!("{}/api/desktop/disconnect", base);
+    let body = serde_json::json!({ "userId": user_id });
+
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            println!("[Disconnect] Failed to build HTTP client: {}", e);
+            return;
+        }
+    };
+
+    match client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+    {
+        Ok(response) => {
+            if response.status().is_success() {
+                println!(
+                    "[Disconnect] ✅ Server acknowledged disconnect (status {})",
+                    response.status()
+                );
+            } else {
+                println!(
+                    "[Disconnect] ⚠️ Server returned {} (gate may clear via ping timeout)",
+                    response.status()
+                );
+            }
+        }
+        Err(e) => println!("[Disconnect] ⚠️ Request failed: {} (gate may clear via ping timeout)", e),
+    }
+}
+
 /// Stop any existing heartbeat loop. Waits long enough for the loop thread to wake
 /// (it sleeps 1s at a time) and exit so only one loop runs after start_heartbeat_loop().
 fn stop_heartbeat_loop() {
@@ -2126,18 +2167,35 @@ fn main() {
     
     tauri::Builder::default()
         .system_tray(system_tray)
-        .on_system_tray_event(|app, event| {
+        .on_system_tray_event(|_app, event| {
             match event {
                 tauri::SystemTrayEvent::MenuItemClick { id, .. } => {
                     match id.as_str() {
                         "quit" => {
-                            println!("[Tray] Quit clicked - exiting app");
+                            println!("[Tray] Quit clicked — notifying server then exiting");
+                            if let Some(uid) = get_current_user_id() {
+                                send_desktop_disconnect_blocking(&uid);
+                            }
                             std::process::exit(0);
                         }
                         _ => {}
                     }
                 }
                 _ => {}
+            }
+        })
+        .on_window_event(|event| {
+            if event.window().label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { .. } = event.event() {
+                if let Some(uid) = get_current_user_id() {
+                    println!(
+                        "[Disconnect] Main window CloseRequested — POST /api/desktop/disconnect userId={}",
+                        uid
+                    );
+                    send_desktop_disconnect_blocking(&uid);
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, show_session_ending_alert, dismiss_session_ending_window, dismiss_notification, update_notification_idle_countdown, update_notification_to_idle_marked, update_notification_to_distracted, send_activity_update, get_active_session, get_focus_stats, get_user_id, is_listener_only, get_backend_base_url, set_backend_base_url])
