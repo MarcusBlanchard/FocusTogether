@@ -1138,6 +1138,17 @@ fn windows_beep(freq_hz: u32, duration_ms: u32) {
     }
 }
 
+/// Soft "glass" style chime sequence for Windows.
+#[cfg(target_os = "windows")]
+fn windows_soft_glass_chime(notes: &[(u32, u32)], gap_ms: u64) {
+    for (idx, (freq, dur)) in notes.iter().enumerate() {
+        windows_beep(*freq, *dur);
+        if idx + 1 < notes.len() && gap_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(gap_ms));
+        }
+    }
+}
+
 /// Play warning sound for local idle warning (yellow notification)
 fn play_warning_sound() {
     #[cfg(target_os = "macos")]
@@ -1164,7 +1175,8 @@ fn play_warning_sound() {
     
     #[cfg(target_os = "windows")]
     {
-        windows_beep(1000, 400);
+        // Soft glass warning: gentle rising two-note chime
+        windows_soft_glass_chime(&[(1120, 95), (1360, 140)], 25);
     }
 }
 
@@ -1196,7 +1208,8 @@ fn play_alert_sound() {
     
     #[cfg(target_os = "windows")]
     {
-        windows_beep(800, 300);
+        // Partner alert: lighter informational chime
+        windows_soft_glass_chime(&[(980, 85), (1240, 120)], 20);
     }
 }
 
@@ -1221,7 +1234,8 @@ fn play_distracted_sound() {
     
     #[cfg(target_os = "windows")]
     {
-        windows_beep(400, 500);
+        // Marked distracted/idle: more serious low-to-mid glass tone
+        windows_soft_glass_chime(&[(760, 110), (980, 170)], 30);
     }
 }
 
