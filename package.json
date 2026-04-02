@@ -13,9 +13,9 @@
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "node scripts/sync-tray-icon.cjs && tauri dev",
     "tauri:dev:no-vite": "./scripts/tauri-dev-no-vite.sh",
-    "tauri:build": "tauri build",
+    "tauri:build": "node scripts/sync-tray-icon.cjs && tauri build",
     "install:mac": "bash scripts/install-mac.sh"
   },
   "dependencies": {

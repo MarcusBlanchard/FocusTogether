@@ -12,6 +12,7 @@ on:
     paths:
       - "src-tauri/**"
       - "client/**"
+      - "scripts/**"
       - "package.json"
       - "package-lock.json"
       - "vite.config.ts"
@@ -49,7 +50,8 @@ jobs:
       - name: Build Tauri (Windows)
         env:
           CI: "true"
-        run: npm run tauri build
+        # Same as Mac: regenerates tray icon when possible; otherwise uses committed icons/tray-icon.png
+        run: npm run tauri:build
 
       - name: List bundle output (debug)
         if: always()
