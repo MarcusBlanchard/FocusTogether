@@ -1067,16 +1067,6 @@ async fn show_session_ending_alert(app: tauri::AppHandle, title: String, body: S
         }
     });
 
-    let app_for_close = app.clone();
-    let label_for_close = window_label.clone();
-    tauri::async_runtime::spawn(async move {
-        std::thread::sleep(std::time::Duration::from_secs(10));
-        if let Some(w) = app_for_close.get_window(&label_for_close) {
-            let _ = w.close();
-            log!("[POPUP DEBUG] session-ending auto-closed after 10s: {}", label_for_close);
-        }
-    });
-
     log!("[POPUP DEBUG] show_session_ending_alert returning Ok for label={}", window_label);
     Ok(())
 }
@@ -1122,6 +1112,8 @@ struct PendingAlert {
     session_id: Option<String>,
     #[serde(default)]
     timestamp: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
     /// For self-distraction alerts from browser extension
     #[serde(default)]
     domain: Option<String>,
@@ -1137,6 +1129,8 @@ struct SessionResponse {
     #[serde(rename = "joinedAt")]
     joined_at: Option<String>,
     active: Option<bool>,
+    #[serde(default)]
+    kicked: bool,
     /// Server always sends an array; default to empty if key is missing (defensive)
     #[serde(rename = "pendingAlerts", default)]
     pending_alerts: Option<Vec<PendingAlert>>,
@@ -1904,14 +1898,16 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let raw_active = raw.get("active").and_then(|v| v.as_bool());
+        let raw_kicked = raw.get("kicked").and_then(|v| v.as_bool());
         let raw_joined_at = raw
             .get("joinedAt")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         log!(
-            "[POLL DEBUG] Raw summary keys: sessionId={:?} active={:?} joinedAt={:?} pendingAlerts_raw_present={}",
+            "[POLL DEBUG] Raw summary keys: sessionId={:?} active={:?} kicked={:?} joinedAt={:?} pendingAlerts_raw_present={}",
             raw_session_id,
             raw_active,
+            raw_kicked,
             raw_joined_at,
             raw.get("pendingAlerts").is_some()
         );
@@ -1964,18 +1960,31 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
                  alert_count,
                  session_response.distracting_apps.len());
         log!(
-            "[POLL DEBUG] Parsed extra: active={:?} joinedAt={:?} allowedApps count={}",
+            "[POLL DEBUG] Parsed extra: active={:?} kicked={} joinedAt={:?} allowedApps count={}",
             session_response.active,
+            session_response.kicked,
             session_response.joined_at,
             session_response.allowed_apps.len()
         );
+
+        if session_response.kicked {
+            log!("[POLL DEBUG] 🚫 kicked=true received; notifying user and tearing down session state");
+            let app_id = app.config().tauri.bundle.identifier.clone();
+            let _ = tauri::api::notification::Notification::new(&app_id)
+                .title("Session update")
+                .body("You've been removed from the session.")
+                .show();
+            stop_detection(&app);
+            log!("[POLL DEBUG] ═══ Poll #{} complete in {}ms (kicked) ═══", poll_num, poll_start.elapsed().as_millis());
+            return Ok(None);
+        }
         
         // Process pending alerts
         if let Some(ref alerts) = session_response.pending_alerts {
             if !alerts.is_empty() {
                 log!("[POLL DEBUG] 🔔 Processing {} pending alert(s)", alerts.len());
                 
-                // First: self-distraction + session-ending (floating popups, not native notifications)
+                // First: handle explicit one-shot alert types from the server.
                 for (i, alert) in alerts.iter().enumerate() {
                     log!(
                         "[POLL DEBUG] Alert[{}]: type={} status={:?} alertingUserId={:?} alertingFirstName={:?}",
@@ -2003,11 +2012,13 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
                             continue;
                         }
                         let mins = alert.remaining_minutes.unwrap_or(10);
-                        let body = if mins == 1 {
-                            "Room will close in 1 minute.".to_string()
-                        } else {
-                            format!("Room will close in {} minutes.", mins)
-                        };
+                        let body = alert.message.clone().unwrap_or_else(|| {
+                            if mins == 1 {
+                                "Session ended. Room will close in 1 minute.".to_string()
+                            } else {
+                                format!("Session ended. Room will close in {} minutes.", mins)
+                            }
+                        });
                         log!(
                             "[POLL DEBUG] session-ending: sessionId={} remainingMinutes={} → showing popup",
                             sid,
@@ -2033,24 +2044,41 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
                         continue;
                     }
 
-                    if alert.alert_type == "self-distraction" {
-                        if app.get_window("distraction-warning").is_some() {
-                            log!(
-                                "[POLL DEBUG] Alert[{}] → self-distraction — warning window already open, skip duplicate",
-                                i
-                            );
-                            continue;
-                        }
-                        let domain = alert
-                            .domain
+                    if alert.alert_type == "participant-activity" {
+                        let body = alert
+                            .message
                             .clone()
-                            .unwrap_or_else(|| "a distracting site".to_string());
+                            .unwrap_or_else(|| "Your partner got distracted".to_string());
                         log!(
-                            "[POLL DEBUG] Alert[{}] → self-distraction (domain={}), showing orange warning",
+                            "[POLL DEBUG] Alert[{}] → participant-activity, showing native notification",
                             i,
-                            domain
                         );
-                        show_distraction_warning(&app);
+                        let app_id = app.config().tauri.bundle.identifier.clone();
+                        let _ = tauri::api::notification::Notification::new(&app_id)
+                            .title("FocusTogether")
+                            .body(body)
+                            .show();
+                        continue;
+                    }
+
+                    if alert.alert_type == "self-distraction" {
+                        let body = alert.message.clone().unwrap_or_else(|| {
+                            if let Some(domain) = alert.domain.clone() {
+                                format!("You visited a distracting site: {}", domain)
+                            } else {
+                                "You visited a distracting app".to_string()
+                            }
+                        });
+                        log!(
+                            "[POLL DEBUG] Alert[{}] → self-distraction, showing native notification",
+                            i
+                        );
+                        let app_id = app.config().tauri.bundle.identifier.clone();
+                        let _ = tauri::api::notification::Notification::new(&app_id)
+                            .title("FocusTogether")
+                            .body(body)
+                            .show();
+                        continue;
                     }
                 }
 
