@@ -209,6 +209,8 @@ function looksLikeHostname(name: string): boolean {
   const n = name.trim().toLowerCase();
   if (!n.includes('.') || n.includes(' ')) return false;
   if (n.endsWith('.app')) return false;
+  // Local files like focustogether-live.log look like hostnames but are not web hosts.
+  if (/\.(log|txt|md|csv|json|ts|tsx|js|jsx|html|css|map)$/i.test(n)) return false;
   return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i.test(n) || n === 'localhost';
 }
 
@@ -259,7 +261,15 @@ const DISTRACTING_KEYWORDS = [
  */
 function hasDistractingKeyword(name: string): boolean {
   const lower = name.toLowerCase();
-  return DISTRACTING_KEYWORDS.some(keyword => lower.includes(keyword));
+  return DISTRACTING_KEYWORDS.some((keyword) => {
+    // Short tokens (e.g. "tv", "bet") must be whole words or they false-positive inside filenames/paths.
+    if (keyword.length <= 3) {
+      return new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(
+        lower,
+      );
+    }
+    return lower.includes(keyword);
+  });
 }
 
 /**
@@ -515,6 +525,17 @@ export async function isAppDistractingForUser(
   userId?: string
 ): Promise<boolean> {
   const normalized = normalizeAppName(appName);
+
+  // Never flag our own log paths / bundle names as distracting (desktop may send titles or file-like strings).
+  const raw = appName.trim().toLowerCase();
+  if (
+    raw.includes('focustogether-live') ||
+    (raw.includes('focustogether') && raw.includes('.log')) ||
+    raw === 'flowlocked' ||
+    raw.includes('flowlocked.app')
+  ) {
+    return false;
+  }
   
   // Check user-specific override first
   if (userId) {

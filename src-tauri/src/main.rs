@@ -20,10 +20,24 @@ mod browser_url;
 
 static LOG_FILE: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
 
+/// Keep log small so TextEdit/Preview can open it; rotate when over limit.
+const LIVE_LOG_MAX_BYTES: u64 = 512 * 1024;
+
 fn init_log_file() {
     let log_path = dirs::desktop_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join("focustogether-live.log");
+    if let Ok(meta) = fs::metadata(&log_path) {
+        if meta.len() > LIVE_LOG_MAX_BYTES {
+            let rotated = log_path.with_extension("log.old");
+            let _ = fs::rename(&log_path, &rotated);
+            eprintln!(
+                "[Log] Rotated large log (>{}) to {}",
+                LIVE_LOG_MAX_BYTES,
+                rotated.display()
+            );
+        }
+    }
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -1397,13 +1411,17 @@ fn show_distraction_warning(app_handle: &tauri::AppHandle) {
                         let _ = window.show();
                         force_show_window(&app_clone, label.clone());
                         
-                        // Play warning sound
+                        // Play warning sound (same style as idle warning on Windows)
                         #[cfg(target_os = "macos")]
                         {
                             use std::process::Command;
                             let _ = Command::new("afplay")
                                 .arg("/System/Library/Sounds/Funk.aiff")
                                 .output();
+                        }
+                        #[cfg(target_os = "windows")]
+                        {
+                            play_warning_sound();
                         }
                     }
                 }
@@ -1528,9 +1546,11 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         /// Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
         const WARNING_DURATION_SECS: u64 = 10;
         /// Re-report on a timer when nothing else changed (browser tab switches use domain comparison instead).
-        const SERVER_REPORT_HEARTBEAT_SECS: u64 = 15;
+        const SERVER_REPORT_HEARTBEAT_SECS: u64 = 30;
         
         while DETECTION_RUNNING.load(Ordering::SeqCst) {
+            // Poll quickly while distracted or a warning is up so popups dismiss soon after switching apps/tabs.
+            let mut sleep_ms: u64 = 1000;
             // Get session info
             let session_info = {
                 get_detection_session().lock().ok().and_then(|s| s.clone())
@@ -1541,7 +1561,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                 let browser_distraction_reported = BROWSER_DISTRACTION_ACTIVE.load(Ordering::SeqCst);
                 
                 // Get foreground info and classify
-                if let Some((app_name, _title, pid)) = get_foreground_info() {
+                if let Some((app_name, title, pid)) = get_foreground_info() {
                     // Check if foreground is our own app (the warning popup itself)
                     let app_lower = app_name.to_lowercase();
                     let is_our_app = app_lower.contains("flowlocked");
@@ -1560,12 +1580,33 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     let is_browser_distracting = browser_distraction_reported && is_chrome;
                     
                     let is_fg_browser = is_browser(&app_name);
+                    // macOS osascript/AX can exceed short timeouts; browsers are "neutral" on the server without a hostname.
+                    #[cfg(target_os = "macos")]
+                    let url_read_timeout = std::time::Duration::from_millis(900);
+                    #[cfg(not(target_os = "macos"))]
+                    let url_read_timeout = std::time::Duration::from_millis(250);
+
                     // Resolve URL/domain every loop for browsers so tab-only changes re-report without waiting for heartbeat.
                     let domain = if is_fg_browser {
-                        browser_url::get_active_browser_domain_nonblocking(
+                        match browser_url::get_active_browser_domain_nonblocking(
                             pid,
-                            std::time::Duration::from_millis(250),
+                            url_read_timeout,
+                            Some(app_name.as_str()),
                         )
+                        {
+                            Some(d) => Some(d),
+                            None => {
+                                let inferred =
+                                    browser_url::infer_site_from_window_title(&title);
+                                if inferred.is_some() {
+                                    log!(
+                                        "[Desktop Apps] using title-based site hint (address bar unread); title_len={}",
+                                        title.len()
+                                    );
+                                }
+                                inferred
+                            }
+                        }
                     } else {
                         None
                     };
@@ -1599,7 +1640,6 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                             app_or_domain
                         );
 
-                        // Use current linked user (same as ping) so app reports stay in sync after deep link switch.
                         if let Some(ref current_user) = get_current_user_id() {
                             if let Some(server_data) = check_apps_with_server(
                                 current_user,
@@ -1641,7 +1681,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 println!("[Detection] Back to active");
                                 last_sent_state = Some("active");
                             }
-                            std::thread::sleep(std::time::Duration::from_secs(1));
+                            std::thread::sleep(std::time::Duration::from_millis(200));
                             continue;
                         }
                         
@@ -1660,7 +1700,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 }
                             }
                         }
-                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        std::thread::sleep(std::time::Duration::from_millis(200));
                         continue;
                     }
                     
@@ -1718,11 +1758,26 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                             last_sent_state = Some("active");
                         }
                     }
+
+                    // Faster polling while server says foreground is blocked or a warning/distracted state is active.
+                    sleep_ms = if warning_shown_at.is_some()
+                        || is_marked_distracted
+                        || last_server_result.unwrap_or(false)
+                    {
+                        200
+                    } else {
+                        1000
+                    };
+                } else {
+                    sleep_ms = if warning_shown_at.is_some() || is_marked_distracted {
+                        200
+                    } else {
+                        1000
+                    };
                 }
             }
             
-            // Check every 1 second for responsive warning countdown
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
         }
         
         // Cleanup on stop
@@ -2406,7 +2461,7 @@ fn main() {
                     let _ = std::process::Command::new("osascript")
                         .arg("-e")
                         .arg(
-                            r#"display dialog "Flowlocked needs accessibility access to read active browser URLs.\n\nGo to System Settings → Privacy & Security → Accessibility and enable Flowlocked." buttons {"OK"} default button "OK" with title "Enable Accessibility Access""#,
+                            r#"display dialog "Flowlocked needs Accessibility (Privacy & Security → Accessibility) to read the browser address bar. For Chrome/Safari you may also need Automation: allow Flowlocked to control your browser under Privacy & Security → Automation." buttons {"OK"} default button "OK" with title "Browser URL access""#,
                         )
                         .output();
                 }
