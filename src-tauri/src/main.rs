@@ -1522,10 +1522,13 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         let mut last_server_report: Option<std::time::Instant> = None;
         let mut last_server_result: Option<bool> = None;
         let mut last_reported_app: String = String::new();
+        /// Last domain we sent for `foregroundApp` when the foreground was a browser (tab changes do not change app name).
+        let mut last_reported_domain: Option<String> = None;
         
         /// Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
         const WARNING_DURATION_SECS: u64 = 10;
-        const SERVER_REPORT_HEARTBEAT_SECS: u64 = 30; // Re-report even if foreground unchanged
+        /// Re-report on a timer when nothing else changed (browser tab switches use domain comparison instead).
+        const SERVER_REPORT_HEARTBEAT_SECS: u64 = 15;
         
         while DETECTION_RUNNING.load(Ordering::SeqCst) {
             // Get session info
@@ -1556,11 +1559,26 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     // Browser distraction only counts when Chrome is in foreground
                     let is_browser_distracting = browser_distraction_reported && is_chrome;
                     
-                    // Report on every foreground change plus a 30s heartbeat while unchanged.
+                    let is_fg_browser = is_browser(&app_name);
+                    // Resolve URL/domain every loop for browsers so tab-only changes re-report without waiting for heartbeat.
+                    let domain = if is_fg_browser {
+                        browser_url::get_active_browser_domain_nonblocking(
+                            pid,
+                            std::time::Duration::from_millis(250),
+                        )
+                    } else {
+                        None
+                    };
+                    let app_or_domain = domain.clone().unwrap_or_else(|| app_name.clone());
+
+                    let foreground_identity_changed = last_reported_app != app_name
+                        || (is_fg_browser && last_reported_domain != domain);
+
+                    // Report on app switch, browser tab/site change, or periodic heartbeat.
                     let should_report_server = match last_server_report {
                         None => true,
                         Some(last_report) => {
-                            last_reported_app != app_name
+                            foreground_identity_changed
                                 || last_report.elapsed().as_secs() >= SERVER_REPORT_HEARTBEAT_SECS
                         }
                     };
@@ -1568,15 +1586,11 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     if should_report_server {
                         last_server_report = Some(std::time::Instant::now());
                         last_reported_app = app_name.clone();
-                        let domain = if is_browser(&app_name) {
-                            browser_url::get_active_browser_domain_nonblocking(
-                                pid,
-                                std::time::Duration::from_millis(120),
-                            )
+                        last_reported_domain = if is_fg_browser {
+                            domain.clone()
                         } else {
                             None
                         };
-                        let app_or_domain = domain.clone().unwrap_or_else(|| app_name.clone());
                         log!(
                             "[Desktop Apps] foreground report: app_name={} pid={} domain={:?} foregroundApp_sent={}",
                             app_name,
