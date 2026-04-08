@@ -50,8 +50,7 @@ jobs:
       - name: Build Tauri (Windows)
         env:
           CI: "true"
-        # Same as Mac: regenerates tray icon when possible; otherwise uses committed icons/tray-icon.png
-        run: npm run tauri:build
+        run: npm run tauri build
 
       - name: List bundle output (debug)
         if: always()

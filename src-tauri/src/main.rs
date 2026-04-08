@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use active_win_pos_rs::get_active_window;
 use std::io::Write;
 
+mod browser_url;
+
 static LOG_FILE: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
 
 fn init_log_file() {
@@ -308,7 +310,11 @@ fn get_running_app_names() -> Vec<String> {
 }
 
 /// Report current desktop state to server; server remains source of truth.
-fn check_apps_with_server(user_id: &str, foreground_app: &str) -> Option<DesktopAppsResponse> {
+fn check_apps_with_server(
+    user_id: &str,
+    foreground_app: &str,
+    domain: Option<&str>,
+) -> Option<DesktopAppsResponse> {
     println!("[Desktop] Sending app report for userId={}", user_id);
     println!("[Desktop Apps] 📤 Checking app with server: userId={}, foregroundApp={}", user_id, foreground_app);
     
@@ -321,6 +327,7 @@ fn check_apps_with_server(user_id: &str, foreground_app: &str) -> Option<Desktop
         "userId": user_id,
         "apps": running_apps,
         "foregroundApp": foreground_app,
+        "domain": domain,
         "source": "desktopNative"
     });
     
@@ -1242,14 +1249,15 @@ fn play_distracted_sound() {
 // DISTRACTION DETECTION
 // =====================================
 
-/// Get foreground app info. Returns (app_name, window_title).
+/// Get foreground app info. Returns (app_name, window_title, process_id).
 /// Data is used only for classification, then discarded.
-fn get_foreground_info() -> Option<(String, String)> {
+fn get_foreground_info() -> Option<(String, String, u32)> {
     match get_active_window() {
         Ok(window) => {
             let app_name = window.app_name;
             let title = window.title;
-            Some((app_name, title))
+            let pid = window.process_id as u32;
+            Some((app_name, title, pid))
         }
         Err(_) => None,
     }
@@ -1260,7 +1268,7 @@ fn get_foreground_info() -> Option<(String, String)> {
 /// from an old browser session re-triggers the warning when switching from e.g. Chess → Chrome.
 fn foreground_is_chromium_browser() -> bool {
     get_foreground_info()
-        .map(|(app_name, _)| {
+        .map(|(app_name, _, _)| {
             let app_lower = app_name.to_lowercase();
             app_lower.contains("chrome")
                 || app_lower.contains("chromium")
@@ -1271,6 +1279,13 @@ fn foreground_is_chromium_browser() -> bool {
                 || app_lower.contains("brave")
         })
         .unwrap_or(false)
+}
+
+fn is_browser(app_name: &str) -> bool {
+    let name = app_name.to_lowercase();
+    ["chrome", "firefox", "safari", "edge", "brave", "arc"]
+        .iter()
+        .any(|b| name.contains(b))
 }
 
 /// Get the detection session mutex
@@ -1523,7 +1538,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                 let browser_distraction_reported = BROWSER_DISTRACTION_ACTIVE.load(Ordering::SeqCst);
                 
                 // Get foreground info and classify
-                if let Some((app_name, _title)) = get_foreground_info() {
+                if let Some((app_name, _title, pid)) = get_foreground_info() {
                     // Check if foreground is our own app (the warning popup itself)
                     let app_lower = app_name.to_lowercase();
                     let is_our_app = app_lower.contains("flowlocked");
@@ -1553,10 +1568,30 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     if should_report_server {
                         last_server_report = Some(std::time::Instant::now());
                         last_reported_app = app_name.clone();
+                        let domain = if is_browser(&app_name) {
+                            browser_url::get_active_browser_domain_nonblocking(
+                                pid,
+                                std::time::Duration::from_millis(120),
+                            )
+                        } else {
+                            None
+                        };
+                        let app_or_domain = domain.clone().unwrap_or_else(|| app_name.clone());
+                        log!(
+                            "[Desktop Apps] foreground report: app_name={} pid={} domain={:?} foregroundApp_sent={}",
+                            app_name,
+                            pid,
+                            domain.as_deref(),
+                            app_or_domain
+                        );
 
                         // Use current linked user (same as ping) so app reports stay in sync after deep link switch.
                         if let Some(ref current_user) = get_current_user_id() {
-                            if let Some(server_data) = check_apps_with_server(current_user, &app_name) {
+                            if let Some(server_data) = check_apps_with_server(
+                                current_user,
+                                &app_or_domain,
+                                domain.as_deref(),
+                            ) {
                                 last_server_result = Some(server_data.is_foreground_blocked);
                             }
                         }
@@ -2351,7 +2386,17 @@ fn main() {
             
             // macOS: background utility — hides from Dock and Cmd+Tab
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            {
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                if !browser_url::accessibility_available() {
+                    let _ = std::process::Command::new("osascript")
+                        .arg("-e")
+                        .arg(
+                            r#"display dialog "Flowlocked needs accessibility access to read active browser URLs.\n\nGo to System Settings → Privacy & Security → Accessibility and enable Flowlocked." buttons {"OK"} default button "OK" with title "Enable Accessibility Access""#,
+                        )
+                        .output();
+                }
+            }
             
             // Hide the main window and remove from taskbar - app runs in background only
             if let Some(main_window) = app.get_window("main") {
