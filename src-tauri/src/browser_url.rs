@@ -142,9 +142,13 @@ return ""
 #[cfg(target_os = "windows")]
 mod windows {
     use uiautomation::controls::ControlType;
+    use uiautomation::patterns::UIValuePattern;
+    use uiautomation::types::{Handle, TreeScope, UIProperty};
+    use uiautomation::variants::Variant;
     use uiautomation::UIAutomation;
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
-    pub(super) fn get_active_browser_url(_pid: u32) -> Option<String> {
+    pub(super) fn get_active_browser_url(pid: u32) -> Option<String> {
         let automation = match UIAutomation::new() {
             Ok(a) => a,
             Err(e) => {
@@ -153,28 +157,52 @@ mod windows {
             }
         };
 
-        let root = match automation.get_focused_element() {
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.0 == 0 {
+            println!("[Browser URL] ⚠️ No foreground window");
+            return None;
+        }
+        let mut fg_pid = 0u32;
+        unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&mut fg_pid));
+        }
+        if fg_pid != pid {
+            return None;
+        }
+
+        let root = match automation.element_from_handle(Handle::from(hwnd)) {
             Ok(el) => el,
             Err(e) => {
-                println!("[Browser URL] ⚠️ UIA focused element read failed: {}", e);
+                println!("[Browser URL] ⚠️ element_from_handle failed: {}", e);
                 return None;
             }
         };
 
         let names = ["Address and search bar", "Search or enter address"];
         for name in names {
-            let cond = match automation.create_and_condition(vec![
-                automation
-                    .create_property_condition("ControlType", ControlType::Edit)
-                    .ok()?,
-                automation.create_property_condition("Name", name).ok()?,
-            ]) {
+            let type_cond = match automation.create_property_condition(
+                UIProperty::ControlType,
+                Variant::from(ControlType::Edit as i32),
+                None,
+            ) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let name_cond = match automation.create_property_condition(
+                UIProperty::Name,
+                Variant::from(name),
+                None,
+            ) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let and_cond = match automation.create_and_condition(type_cond, name_cond) {
                 Ok(c) => c,
                 Err(_) => continue,
             };
 
-            if let Ok(found) = root.find_first_descendant(cond) {
-                if let Ok(pattern) = found.get_value_pattern() {
+            if let Ok(found) = root.find_first(TreeScope::Subtree, &and_cond) {
+                if let Ok(pattern) = found.get_pattern::<UIValuePattern>() {
                     if let Ok(value) = pattern.get_value() {
                         let trimmed = value.trim().to_string();
                         if !trimmed.is_empty() {
