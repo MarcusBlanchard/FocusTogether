@@ -119,6 +119,9 @@ static DETECTION_SESSION: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::
 // Browser distraction state - set when browser extension detects distracting site
 static BROWSER_DISTRACTION_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// Server-driven: when true, desktop must not show the yellow idle warning UI (see GET /api/desktop/poll).
+static NOTE_TAKING_MODE: AtomicBool = AtomicBool::new(false);
+
 // Heartbeat loop state - ensures only one heartbeat loop runs at a time
 static HEARTBEAT_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -136,7 +139,8 @@ fn session_ending_shown() -> &'static Mutex<HashSet<String>> {
 }
 
 /// Default API host (production). Override with `BACKEND_URL` or persisted `backend_url` if needed.
-const DEFAULT_BACKEND_BASE_URL: &str = "https://flowlocked.com";
+const DEFAULT_BACKEND_BASE_URL: &str =
+    "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev";
 
 /// Resolved API base: `BACKEND_URL` env → persisted `backend_url` in config → `DEFAULT_BACKEND_BASE_URL`.
 fn backend_base_url() -> String {
@@ -1129,6 +1133,8 @@ struct SessionResponse {
     #[serde(rename = "joinedAt")]
     joined_at: Option<String>,
     active: Option<bool>,
+    #[serde(default, rename = "noteTakingMode")]
+    note_taking_mode: bool,
     #[serde(default)]
     kicked: bool,
     /// Server always sends an array; default to empty if key is missing (defensive)
@@ -1138,6 +1144,21 @@ struct SessionResponse {
     distracting_apps: Vec<String>,
     #[serde(rename = "allowedApps", default)]
     allowed_apps: Vec<String>,
+}
+
+/// Returned to the webview from `get_active_session` (desktop poll).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveSessionPollResult {
+    session_id: Option<String>,
+    note_taking_mode: bool,
+}
+
+/// Response body from `POST /api/activity/update` (fields we care about).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SendActivityUpdateResult {
+    note_taking_mode: bool,
 }
 
 /// Windows system beep via kernel32 — avoids spawning PowerShell (which flashes a console window).
@@ -1857,7 +1878,7 @@ fn dismiss_all_notifications(app_handle: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Option<String>, String> {
+async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<ActiveSessionPollResult, String> {
     let poll_num = SESSION_POLL_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     let poll_start = std::time::Instant::now();
     log!("[POLL DEBUG] ═══ Poll #{} cycle starting for userId={} ═══", poll_num, userId);
@@ -1968,6 +1989,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
         );
 
         if session_response.kicked {
+            NOTE_TAKING_MODE.store(false, Ordering::SeqCst);
             log!("[POLL DEBUG] 🚫 kicked=true received; notifying user and tearing down session state");
             let app_id = app.config().tauri.bundle.identifier.clone();
             let _ = tauri::api::notification::Notification::new(&app_id)
@@ -1976,8 +1998,20 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
                 .show();
             stop_detection(&app);
             log!("[POLL DEBUG] ═══ Poll #{} complete in {}ms (kicked) ═══", poll_num, poll_start.elapsed().as_millis());
-            return Ok(None);
+            return Ok(ActiveSessionPollResult {
+                session_id: None,
+                note_taking_mode: false,
+            });
         }
+
+        NOTE_TAKING_MODE.store(
+            session_response.note_taking_mode,
+            Ordering::SeqCst,
+        );
+        log!(
+            "[POLL DEBUG] noteTakingMode={} (stored)",
+            session_response.note_taking_mode
+        );
         
         // Process pending alerts
         if let Some(ref alerts) = session_response.pending_alerts {
@@ -2163,7 +2197,10 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
             Some(session_id) => {
                 println!("[Tauri] ✅ Active session found: {}", session_id);
                 start_detection(app.clone(), userId.clone(), session_id.clone());
-                Ok(Some(session_id))
+                Ok(ActiveSessionPollResult {
+                    session_id: Some(session_id),
+                    note_taking_mode: session_response.note_taking_mode,
+                })
             }
             None => {
                 let pending_count = session_response
@@ -2178,7 +2215,10 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
                     pending_count
                 );
                 stop_detection(&app);
-                Ok(None)
+                Ok(ActiveSessionPollResult {
+                    session_id: None,
+                    note_taking_mode: session_response.note_taking_mode,
+                })
             }
         };
         log!("[POLL DEBUG] ═══ Poll #{} complete in {}ms ═══", poll_num, poll_start.elapsed().as_millis());
@@ -2186,18 +2226,23 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Opt
     } else {
         let error_msg = format!("Backend returned error status: {}", status_code);
         log!("[POLL DEBUG] ❌ HTTP error: {}", error_msg);
+        NOTE_TAKING_MODE.store(false, Ordering::SeqCst);
         stop_detection(&app);
         log!("[POLL DEBUG] ═══ Poll #{} complete in {}ms (error) ═══", poll_num, poll_start.elapsed().as_millis());
-        Ok(None)
+        Ok(ActiveSessionPollResult {
+            session_id: None,
+            note_taking_mode: false,
+        })
     }
 }
 
 #[tauri::command]
 async fn send_activity_update(
+    app: tauri::AppHandle,
     userId: String,
     sessionId: String,
     status: String,
-) -> Result<(), String> {
+) -> Result<SendActivityUpdateResult, String> {
     println!("[Tauri] Sending activity update: userId={}, sessionId={}, status={}", 
              userId, sessionId, status);
     
@@ -2242,8 +2287,26 @@ async fn send_activity_update(
     let status = response.status();
     let status_code = status.as_u16();
     if status_code >= 200 && status_code < 300 {
-        println!("[Tauri] ✅ Activity update sent successfully (status: {})", status_code);
-        Ok(())
+        let response_data = response
+            .read()
+            .await
+            .map_err(|e| format!("Failed to read activity update response: {}", e))?;
+        let raw = response_data.data;
+        let note_taking = raw
+            .get("noteTakingMode")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if note_taking {
+            NOTE_TAKING_MODE.store(true, Ordering::SeqCst);
+            let _ = dismiss_notification(app.clone());
+            println!(
+                "[Tauri] ✅ Activity update OK (status: {}); noteTakingMode=true — idle UI suppressed",
+                status_code
+            );
+        } else {
+            println!("[Tauri] ✅ Activity update sent successfully (status: {})", status_code);
+        }
+        Ok(SendActivityUpdateResult { note_taking_mode: note_taking })
     } else {
         let error_msg = format!("Backend returned error status: {}", status_code);
         println!("[Tauri] ❌ {}", error_msg);
@@ -2403,10 +2466,13 @@ fn main() {
                                 let app_handle_for_session = app_handle.clone();
                                 tauri::async_runtime::spawn(async move {
                                     match get_active_session(app_handle_for_session, user_id_for_session).await {
-                                        Ok(Some(session_id)) => {
-                                            println!("[DeepLink] Detection restarted for new user with session: {}", session_id);
+                                        Ok(r) if r.session_id.is_some() => {
+                                            println!(
+                                                "[DeepLink] Detection restarted for new user with session: {:?}",
+                                                r.session_id
+                                            );
                                         }
-                                        Ok(None) => {
+                                        Ok(_) => {
                                             println!("[DeepLink] No active session for new user - detection will start when session begins");
                                         }
                                         Err(e) => {

@@ -12,6 +12,9 @@ import Calendar from "@/pages/calendar";
 import FreeRooms from "@/pages/free-rooms";
 import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
+import Download from "@/pages/download";
+import TermsOfService from "@/pages/legal/terms";
+import PrivacyPolicy from "@/pages/legal/privacy";
 
 function isTauriShell(): boolean {
   if (typeof window === "undefined") return false;
@@ -33,6 +36,9 @@ function WebRoutes() {
         <Route path="/calendar" component={Calendar} />
         <Route path="/free-rooms" component={FreeRooms} />
         <Route path="/landing" component={Landing} />
+        <Route path="/download" component={Download} />
+        <Route path="/legal/terms" component={TermsOfService} />
+        <Route path="/legal/privacy" component={PrivacyPolicy} />
         <Route component={NotFound} />
       </Switch>
     </Router>

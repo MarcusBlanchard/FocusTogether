@@ -13,7 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Users, History, Search, LogOut, Settings, Loader2, Calendar, User, UsersRound, Briefcase, Activity, Sparkles, Clock } from "lucide-react";
+import { Users, History, Search, LogOut, Settings, Loader2, Calendar, User, UsersRound, Briefcase, Activity, Sparkles, Clock, Download } from "lucide-react";
 import { format, addDays, startOfDay, endOfDay } from "date-fns";
 import { NotificationBell } from "@/components/notification-bell";
 import { useSessionClient } from "@/contexts/session-client-context";
@@ -206,6 +206,10 @@ export default function Home() {
                 <DropdownMenuItem onClick={() => setLocation("/profile")} data-testid="menu-item-profile">
                   <Settings className="mr-2 h-4 w-4" />
                   Profile Settings
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setLocation("/download")} data-testid="menu-item-download">
+                  <Download className="mr-2 h-4 w-4" />
+                  Download desktop app
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem asChild>

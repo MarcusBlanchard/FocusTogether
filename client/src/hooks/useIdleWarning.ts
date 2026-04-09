@@ -16,6 +16,18 @@ export interface IdleState {
   idleSeconds: number;
   phase: IdlePhase;
   isTauriAvailable: boolean;
+  /** When true, server note-taking mode is active — yellow idle pop-up must stay hidden. */
+  noteTakingMode: boolean;
+}
+
+/** Desktop poll (`get_active_session` → GET /api/desktop/poll). */
+interface ActiveSessionPollResult {
+  sessionId: string | null;
+  noteTakingMode: boolean;
+}
+
+interface SendActivityUpdateResult {
+  noteTakingMode: boolean;
 }
 
 /**
@@ -83,6 +95,7 @@ export function useIdleMonitoring() {
     idleSeconds: 0,
     phase: 'active',
     isTauriAvailable: false,
+    noteTakingMode: false,
   });
   
   // Track if warning has been shown for current idle period
@@ -99,6 +112,8 @@ export function useIdleMonitoring() {
   const notificationRef = useRef<Notification | null>(null);
   // Track current active sessionId (null means no active session)
   const sessionIdRef = useRef<string | null>(null);
+  /// Server flag from poll / activity-update: suppress yellow idle pop-up when true
+  const noteTakingModeRef = useRef(false);
   
   // Get userId from config file (set via deep link from web app)
   // Starts empty - user must connect via web app to set userId
@@ -198,13 +213,25 @@ export function useIdleMonitoring() {
     }
 
     try {
-      const sessionId = await invoke<string | null>('get_active_session', {
+      const result = await invoke<ActiveSessionPollResult>('get_active_session', {
         userId: MOCK_USER_ID,
       });
-      
+
+      const sessionId = result.sessionId;
       const prevSessionId = sessionIdRef.current;
+      const prevNoteTaking = noteTakingModeRef.current;
       sessionIdRef.current = sessionId;
-      
+      noteTakingModeRef.current = result.noteTakingMode;
+
+      if (result.noteTakingMode && !prevNoteTaking) {
+        console.log('[IdleMonitor] noteTakingMode=true — suppressing idle warning UI');
+        invoke('dismiss_notification').catch(() => {});
+        notificationRef.current = null;
+        warningShownRef.current = false;
+        lastIdleCountdownRef.current = -1;
+        idleUiMarkedRef.current = false;
+      }
+
       // Log session changes for debugging
       if (prevSessionId !== sessionId) {
         if (sessionId === null) {
@@ -228,6 +255,7 @@ export function useIdleMonitoring() {
         idleSeconds: 0,
         phase: 'active',
         isTauriAvailable: false,
+        noteTakingMode: false,
       });
       return;
     }
@@ -256,7 +284,9 @@ export function useIdleMonitoring() {
 
     try {
       const idleSeconds = await invoke<number>('get_idle_seconds');
-      
+
+      const suppressIdleUi = noteTakingModeRef.current;
+
       // Determine current phase
       let newPhase: IdlePhase = 'active';
       if (idleSeconds >= DISTRACTED_THRESHOLD_SECONDS) {
@@ -265,8 +295,11 @@ export function useIdleMonitoring() {
         newPhase = 'warning';
       }
 
+      const displayPhase: IdlePhase = suppressIdleUi ? 'active' : newPhase;
+
       // Countdown on yellow window (same idea as orange distraction warning)
       if (
+        !suppressIdleUi &&
         isTauriAvailable &&
         !isListenerOnly &&
         MOCK_USER_ID &&
@@ -285,6 +318,7 @@ export function useIdleMonitoring() {
 
       // At threshold: hide countdown "1" (integer idle can flicker 89–90; don't gate red on that)
       if (
+        !suppressIdleUi &&
         isTauriAvailable &&
         !isListenerOnly &&
         MOCK_USER_ID &&
@@ -297,6 +331,7 @@ export function useIdleMonitoring() {
 
       // Flip UI to red immediately at 0, independent of network timing.
       if (
+        !suppressIdleUi &&
         isTauriAvailable &&
         !isListenerOnly &&
         MOCK_USER_ID &&
@@ -323,27 +358,45 @@ export function useIdleMonitoring() {
         idleSendInFlightRef.current = true;
         (async () => {
           try {
-            const sessionId = await invoke<string | null>('get_active_session', {
+            const poll = await invoke<ActiveSessionPollResult>('get_active_session', {
               userId: MOCK_USER_ID,
             });
+            const sessionId = poll.sessionId;
             if (!sessionId) {
               console.warn('[IdleMonitor] No active session — cannot mark idle for others');
               return;
             }
-            await invoke('send_activity_update', {
+            noteTakingModeRef.current = poll.noteTakingMode;
+            const idleRes = await invoke<SendActivityUpdateResult>('send_activity_update', {
               userId: MOCK_USER_ID,
               sessionId,
               status: 'idle',
             });
+            if (idleRes.noteTakingMode) {
+              noteTakingModeRef.current = true;
+              invoke('dismiss_notification').catch(() => {});
+              notificationRef.current = null;
+              warningShownRef.current = false;
+              lastIdleCountdownRef.current = -1;
+              idleUiMarkedRef.current = false;
+            }
             distractedSentRef.current = true;
             // Only revert if user is clearly active again (not 89 vs 90 floor from get_idle_seconds)
             const idleAfter = await invoke<number>('get_idle_seconds');
             if (idleAfter < WARNING_THRESHOLD_SECONDS) {
-              await invoke('send_activity_update', {
+              const activeRes = await invoke<SendActivityUpdateResult>('send_activity_update', {
                 userId: MOCK_USER_ID,
                 sessionId,
                 status: 'active',
               });
+              if (activeRes.noteTakingMode) {
+                noteTakingModeRef.current = true;
+                invoke('dismiss_notification').catch(() => {});
+                notificationRef.current = null;
+                warningShownRef.current = false;
+                lastIdleCountdownRef.current = -1;
+                idleUiMarkedRef.current = false;
+              }
               distractedSentRef.current = false;
               idleUiMarkedRef.current = false;
               return;
@@ -396,11 +449,19 @@ export function useIdleMonitoring() {
             (async () => {
               try {
                 console.log('[IdleMonitor] Sending active status to backend...');
-                await invoke('send_activity_update', {
+                const activeRes = await invoke<SendActivityUpdateResult>('send_activity_update', {
                   userId: MOCK_USER_ID,
-                  sessionId: sessionIdRef.current,
+                  sessionId: sessionIdRef.current as string,
                   status: 'active',
                 });
+                if (activeRes.noteTakingMode) {
+                  noteTakingModeRef.current = true;
+                  invoke('dismiss_notification').catch(() => {});
+                  notificationRef.current = null;
+                  warningShownRef.current = false;
+                  lastIdleCountdownRef.current = -1;
+                  idleUiMarkedRef.current = false;
+                }
                 console.log('[IdleMonitor] ✅ active status sent to backend successfully');
               } catch (error) {
                 console.error('[IdleMonitor] ❌ Failed to send active status to backend:', error);
@@ -412,7 +473,12 @@ export function useIdleMonitoring() {
         // Yellow at ≥60s idle; red + backend at ≥90s (30s of yellow only)
         // No backend update at this stage - only local warning
         // Only in `warning` phase (60–89s); at 90s phase is `idle` — red path below, no new yellow
-        if (newPhase === 'warning' && !warningShownRef.current && sessionIdRef.current !== null) {
+        if (
+          newPhase === 'warning' &&
+          !suppressIdleUi &&
+          !warningShownRef.current &&
+          sessionIdRef.current !== null
+        ) {
           warningShownRef.current = true;
           console.log(`[IdleMonitor] Showing warning notification (phase: ${newPhase}, idle: ${idleSeconds}s)`);
           
@@ -431,8 +497,9 @@ export function useIdleMonitoring() {
         
         return {
           idleSeconds,
-          phase: newPhase,
+          phase: displayPhase,
           isTauriAvailable: true,
+          noteTakingMode: noteTakingModeRef.current,
         };
       });
     } catch (error) {

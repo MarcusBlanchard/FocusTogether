@@ -1,3 +1,4 @@
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Video, Calendar, Clock, Shield } from "lucide-react";
@@ -8,11 +9,16 @@ export default function Landing() {
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
           <h1 className="text-2xl font-semibold">Flowlocked</h1>
-          <Button asChild data-testid="button-login">
-            <a href="/api/login">Sign In</a>
-          </Button>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/download">Download</Link>
+            </Button>
+            <Button asChild data-testid="button-login">
+              <a href="/api/login">Sign In</a>
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -71,6 +77,26 @@ export default function Landing() {
           </Card>
         </div>
       </main>
+
+      <footer className="border-t mt-16">
+        <div className="max-w-6xl mx-auto px-4 py-8 flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-6 text-sm text-muted-foreground">
+          <Link href="/download" className="hover:text-foreground underline-offset-4 hover:underline">
+            Download for Mac
+          </Link>
+          <span className="hidden sm:inline" aria-hidden>
+            ·
+          </span>
+          <Link href="/legal/terms" className="hover:text-foreground underline-offset-4 hover:underline">
+            Terms of Service
+          </Link>
+          <span className="hidden sm:inline" aria-hidden>
+            ·
+          </span>
+          <Link href="/legal/privacy" className="hover:text-foreground underline-offset-4 hover:underline">
+            Privacy Policy
+          </Link>
+        </div>
+      </footer>
     </div>
   );
 }

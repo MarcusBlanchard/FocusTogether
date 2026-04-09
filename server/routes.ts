@@ -1729,6 +1729,7 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
         sessionId: activeSession?.sessionId || null,
         pendingAlerts: alerts,
         active: activeSession !== null,
+        noteTakingMode: false,
         distractingApps,
         allowedApps,
         ...(currentDistraction ? { currentDistraction } : {}),
@@ -1872,6 +1873,7 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
 
       res.json({ 
         success: true, 
+        noteTakingMode: false,
         message: "Activity state received and broadcast",
         data: { userId, sessionId, status, timestamp }
       });
