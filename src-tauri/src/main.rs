@@ -1161,117 +1161,47 @@ struct SendActivityUpdateResult {
     note_taking_mode: bool,
 }
 
-/// Windows system beep via kernel32 — avoids spawning PowerShell (which flashes a console window).
-#[cfg(target_os = "windows")]
-fn windows_beep(freq_hz: u32, duration_ms: u32) {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn Beep(dw_freq: u32, dw_duration: u32) -> i32;
-    }
-    unsafe {
-        let _ = Beep(freq_hz, duration_ms);
-    }
+/// Bundled MP3 notification assets (see `src-tauri/sounds/`). **macOS, Windows, and Linux use the
+/// same three files** — playback is always `rodio` + symphonia (no `afplay`, `paplay`, or PC beeps).
+/// - `notification-general.mp3` — default UI: idle yellow, session-ending, distraction popup
+/// - `notification-partner.mp3` — partner marked idle/distracted (blue participant alert)
+/// - `notification-user-marked.mp3` — this user marked idle/distracted (red confirmation)
+
+fn play_embedded_mp3(bytes: &'static [u8]) {
+    std::thread::spawn(move || {
+        use rodio::{Decoder, OutputStream, Sink};
+        use std::io::Cursor;
+        let cursor = Cursor::new(bytes.to_vec());
+        let Ok((_stream, stream_handle)) = OutputStream::try_default() else {
+            eprintln!("[Sound] OutputStream unavailable");
+            return;
+        };
+        let Ok(decoder) = Decoder::new(cursor) else {
+            eprintln!("[Sound] MP3 decode failed");
+            return;
+        };
+        let Ok(sink) = Sink::try_new(&stream_handle) else {
+            return;
+        };
+        sink.append(decoder);
+        sink.sleep_until_end();
+    });
 }
 
-/// Soft "glass" style chime sequence for Windows.
-#[cfg(target_os = "windows")]
-fn windows_soft_glass_chime(notes: &[(u32, u32)], gap_ms: u64) {
-    for (idx, (freq, dur)) in notes.iter().enumerate() {
-        windows_beep(*freq, *dur);
-        if idx + 1 < notes.len() && gap_ms > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(gap_ms));
-        }
-    }
-}
-
-/// Play warning sound for local idle warning (yellow notification)
+/// General notification (040): idle yellow, session-ending popup, orange distraction warning
 fn play_warning_sound() {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        // Use Ping sound for personal warning - attention-grabbing
-        let _ = Command::new("afplay")
-            .arg("/System/Library/Sounds/Ping.aiff")
-            .output();
-    }
-    
-    #[cfg(target_os = "linux")]
-    {
-        use std::process::Command;
-        let _ = Command::new("paplay")
-            .arg("/usr/share/sounds/freedesktop/stereo/bell.oga")
-            .output()
-            .or_else(|_| {
-                Command::new("aplay")
-                    .arg("/usr/share/sounds/alsa/Front_Left.wav")
-                    .output()
-            });
-    }
-    
-    #[cfg(target_os = "windows")]
-    {
-        // Soft glass warning: gentle rising two-note chime
-        windows_soft_glass_chime(&[(1120, 95), (1360, 140)], 25);
-    }
+    play_embedded_mp3(include_bytes!("../sounds/notification-general.mp3"));
 }
 
-/// Play alert sound when another participant goes idle (blue notification)
+/// Partner activity (017): someone else marked idle/distracted
 fn play_alert_sound() {
-    println!("[Sound] 🔊 Playing alert sound (Glass.aiff)");
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        // Use Glass sound for participant alerts - softer, informational
-        let _ = Command::new("afplay")
-            .arg("/System/Library/Sounds/Glass.aiff")
-            .output();
-        println!("[Sound] ✅ Alert sound played");
-    }
-    
-    #[cfg(target_os = "linux")]
-    {
-        use std::process::Command;
-        let _ = Command::new("paplay")
-            .arg("/usr/share/sounds/freedesktop/stereo/notification.oga")
-            .output()
-            .or_else(|_| {
-                Command::new("aplay")
-                    .arg("/usr/share/sounds/alsa/Front_Left.wav")
-                    .output()
-            });
-    }
-    
-    #[cfg(target_os = "windows")]
-    {
-        // Partner alert: lighter informational chime
-        windows_soft_glass_chime(&[(980, 85), (1240, 120)], 20);
-    }
+    println!("[Sound] Partner notification (017)");
+    play_embedded_mp3(include_bytes!("../sounds/notification-partner.mp3"));
 }
 
-/// Play distracted sound when user is marked as distracted (yellow→red notification)
+/// This user marked idle/distracted (error tone)
 fn play_distracted_sound() {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        // Use Basso sound for distracted - more urgent/serious
-        let _ = Command::new("afplay")
-            .arg("/System/Library/Sounds/Basso.aiff")
-            .output();
-    }
-    
-    #[cfg(target_os = "linux")]
-    {
-        use std::process::Command;
-        let _ = Command::new("paplay")
-            .arg("/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga")
-            .output();
-    }
-    
-    #[cfg(target_os = "windows")]
-    {
-        // Marked distracted/idle: more serious low-to-mid glass tone
-        windows_soft_glass_chime(&[(760, 110), (980, 170)], 30);
-    }
+    play_embedded_mp3(include_bytes!("../sounds/notification-user-marked.mp3"));
 }
 
 // =====================================
@@ -1426,18 +1356,8 @@ fn show_distraction_warning(app_handle: &tauri::AppHandle) {
                         let _ = window.show();
                         force_show_window(&app_clone, label.clone());
                         
-                        // Play warning sound (same style as idle warning on Windows)
-                        #[cfg(target_os = "macos")]
-                        {
-                            use std::process::Command;
-                            let _ = Command::new("afplay")
-                                .arg("/System/Library/Sounds/Funk.aiff")
-                                .output();
-                        }
-                        #[cfg(target_os = "windows")]
-                        {
-                            play_warning_sound();
-                        }
+                        // General notification (040) — same as idle yellow / session-ending
+                        play_warning_sound();
                     }
                 }
             });
@@ -1458,16 +1378,10 @@ fn update_distraction_warning_to_distracted(app_handle: &tauri::AppHandle) {
             "isDistracted": true
         }));
         
-        // Play distracted sound
+        // User-marked error tone (same as idle/distracted red notification)
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_millis(300));
-            #[cfg(target_os = "macos")]
-            {
-                use std::process::Command;
-                let _ = Command::new("afplay")
-                    .arg("/System/Library/Sounds/Basso.aiff")
-                    .output();
-            }
+            play_distracted_sound();
         });
         
         println!("[Detection] Warning updated to distracted state");
