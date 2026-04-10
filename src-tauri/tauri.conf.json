@@ -57,7 +57,13 @@
       "windows": {
         "certificateThumbprint": null,
         "digestAlgorithm": "sha256",
-        "timestampUrl": ""
+        "timestampUrl": "",
+        "wix": {
+          "license": "windows/installer-license.rtf"
+        },
+        "nsis": {
+          "license": "windows/installer-license.rtf"
+        }
       }
     },
     "cli": {
