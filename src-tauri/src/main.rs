@@ -764,7 +764,7 @@ async fn show_notification(app: tauri::AppHandle, title: String, body: String) -
         url
     )
     .title(&title)
-    .inner_size(380.0, 280.0)
+    .inner_size(380.0, 340.0)
     .resizable(false)
     .decorations(false)
     .always_on_top(true)
