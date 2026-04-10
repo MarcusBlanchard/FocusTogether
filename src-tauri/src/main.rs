@@ -644,9 +644,10 @@ struct DeepLinkAuth {
     backend: DeepLinkBackendParam,
 }
 
-/// Expected: `focustogether://auth?userId=XXX` with optional `&backend=https%3A%2F%2F...`
+/// Expected: `flowlocked://auth?userId=XXX` (or legacy `focustogether://auth?...`) with optional `&backend=https%3A%2F%2F...`
 fn parse_deep_link(url: &str) -> Option<DeepLinkAuth> {
-    if !url.starts_with("focustogether://auth") {
+    let ok = url.starts_with("flowlocked://auth") || url.starts_with("focustogether://auth");
+    if !ok {
         println!("[DeepLink] Failed to parse URL: {}", url);
         return None;
     }
@@ -676,6 +677,36 @@ fn parse_deep_link(url: &str) -> Option<DeepLinkAuth> {
     let user_id = user_id?;
     println!("[DeepLink] Parsed userId: {}", user_id);
     Some(DeepLinkAuth { user_id, backend })
+}
+
+/// Second URL scheme for the same executable (`tauri-plugin-deep-link` only registers one scheme on Windows).
+/// Keeps `focustogether://` working after migrating the site to `flowlocked://`.
+#[cfg(target_os = "windows")]
+fn register_windows_legacy_focustogether_url_scheme() -> std::io::Result<()> {
+    use std::path::Path;
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let exe = std::env::current_exe()?
+        .display()
+        .to_string()
+        .replace("\\\\?\\", "");
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let base = Path::new("Software").join("Classes").join("focustogether");
+    let (key, _) = hkcu.create_subkey(&base)?;
+    // Match `prepare("Flowlocked")` + plugin behavior (URL: label in Default Programs).
+    key.set_value("", &"URL:Flowlocked")?;
+    key.set_value("URL Protocol", &"")?;
+
+    let (icon, _) = hkcu.create_subkey(base.join("DefaultIcon"))?;
+    icon.set_value("", &format!("{},0", exe.as_str()))?;
+
+    let (cmd, _) = hkcu.create_subkey(base.join("shell").join("open").join("command"))?;
+    cmd.set_value("", &format!("{} \"%1\"", exe))?;
+
+    println!("[DeepLink] ✅ Windows: registered legacy focustogether:// (same exe as flowlocked://)");
+    Ok(())
 }
 
 #[tauri::command]
@@ -2327,13 +2358,13 @@ fn main() {
             // Initialize deep link plugin
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             {
-                // Prepare deep link handler for "focustogether" scheme
-                tauri_plugin_deep_link::prepare("focustogether");
-                println!("[DeepLink] ✅ Deep link handler prepared for focustogether://");
+                // `prepare` sets the Windows "URL:" protocol label (e.g. URL:Flowlocked) and instance id.
+                tauri_plugin_deep_link::prepare("Flowlocked");
+                println!("[DeepLink] ✅ Deep link handler prepared for flowlocked://");
                 
-                // Register handler for deep link events
+                // Register handler for deep link events (scheme must match site + default OS handler)
                 let app_handle = app.handle();
-                tauri_plugin_deep_link::register("focustogether", move |request| {
+                tauri_plugin_deep_link::register("flowlocked", move |request| {
                     println!("[DeepLink] 🔗 Received deep link: {}", request);
                     
                     if let Some(parsed) = parse_deep_link(&request) {
@@ -2430,6 +2461,16 @@ fn main() {
                         }
                     }
                 }).map_err(|e| format!("Failed to register deep link handler: {}", e))?;
+
+                #[cfg(target_os = "windows")]
+                {
+                    if let Err(e) = register_windows_legacy_focustogether_url_scheme() {
+                        eprintln!(
+                            "[DeepLink] ⚠️ Failed to register legacy focustogether:// on Windows: {}",
+                            e
+                        );
+                    }
+                }
             }
             
             // Load existing config to check if user is already linked
