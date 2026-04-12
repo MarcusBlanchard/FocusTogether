@@ -125,6 +125,12 @@ static NOTE_TAKING_MODE: AtomicBool = AtomicBool::new(false);
 // Heartbeat loop state - ensures only one heartbeat loop runs at a time
 static HEARTBEAT_RUNNING: AtomicBool = AtomicBool::new(false);
 
+/// Interval between `POST /api/desktop/ping`. Keep below the server's desktop-disconnect window (~20s).
+const DESKTOP_PING_INTERVAL_SECS: u64 = 10;
+
+/// Throttle burst `POST /api/desktop/apps` when poll repeats `requestImmediateAppReport: true`.
+static LAST_IMMEDIATE_APP_REPORT_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
 // Session poll counter for Cursor/device console logging (correlate with server logs)
 static SESSION_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -593,7 +599,14 @@ fn start_heartbeat_loop() {
     // Stop any existing heartbeat loop first
     stop_heartbeat_loop();
     
-    println!("[Heartbeat] 💓 Starting heartbeat loop (userId from global each ping)");
+    println!(
+        "[Heartbeat] 💓 Starting heartbeat loop pid={} config_path={:?}",
+        std::process::id(),
+        get_config_path()
+    );
+    println!(
+        "[Heartbeat] Multi-user on one machine: set FOCUSTOGETHER_CONFIG_DIR so each instance has its own config.json (otherwise userId/backend overwrite each other)."
+    );
     HEARTBEAT_RUNNING.store(true, Ordering::SeqCst);
     
     std::thread::spawn(|| {
@@ -602,7 +615,11 @@ fn start_heartbeat_loop() {
         while HEARTBEAT_RUNNING.load(Ordering::SeqCst) {
             if let Some(user_id) = get_current_user_id() {
                 ping_count += 1;
-                println!("[Desktop] Sending ping for userId={}", user_id);
+                println!(
+                    "[Desktop] Sending ping for userId={} pid={}",
+                    user_id,
+                    std::process::id()
+                );
                 let ping_num = ping_count;
                 tauri::async_runtime::spawn(async move {
                     match send_heartbeat_ping(&user_id).await {
@@ -615,7 +632,7 @@ fn start_heartbeat_loop() {
                     }
                 });
             }
-            for _ in 0..10 {
+            for _ in 0..DESKTOP_PING_INTERVAL_SECS {
                 if !HEARTBEAT_RUNNING.load(Ordering::SeqCst) {
                     println!("[Heartbeat] 🛑 Heartbeat loop stopped");
                     return;
@@ -1168,6 +1185,9 @@ struct SessionResponse {
     note_taking_mode: bool,
     #[serde(default)]
     kicked: bool,
+    /// When true, send `POST /api/desktop/apps` immediately (distraction clearance latency).
+    #[serde(default, rename = "requestImmediateAppReport")]
+    request_immediate_app_report: bool,
     /// Server always sends an array; default to empty if key is missing (defensive)
     #[serde(rename = "pendingAlerts", default)]
     pending_alerts: Option<Vec<PendingAlert>>,
@@ -1276,6 +1296,60 @@ fn is_browser(app_name: &str) -> bool {
     ["chrome", "firefox", "safari", "edge", "brave", "arc"]
         .iter()
         .any(|b| name.contains(b))
+}
+
+/// Foreground snapshot for `POST /api/desktop/apps` (aligned with detection loop).
+fn resolve_foreground_for_app_report() -> Option<(String, Option<String>)> {
+    let (app_name, title, pid) = get_foreground_info()?;
+    let is_fg_browser = is_browser(&app_name);
+    #[cfg(target_os = "macos")]
+    let url_read_timeout = std::time::Duration::from_millis(900);
+    #[cfg(not(target_os = "macos"))]
+    let url_read_timeout = std::time::Duration::from_millis(250);
+    let domain = if is_fg_browser {
+        match browser_url::get_active_browser_domain_nonblocking(
+            pid,
+            url_read_timeout,
+            Some(app_name.as_str()),
+        ) {
+            Some(d) => Some(d),
+            None => browser_url::infer_site_from_window_title(&title),
+        }
+    } else {
+        None
+    };
+    let app_or_domain = domain.clone().unwrap_or_else(|| app_name.clone());
+    Some((app_or_domain, domain))
+}
+
+/// Server asked for an immediate native app report (e.g. distraction active — clear faster than periodic timer).
+fn maybe_throttled_immediate_app_report(user_id: &str) {
+    const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+    {
+        let mut g = LAST_IMMEDIATE_APP_REPORT_AT.lock().unwrap();
+        let now = std::time::Instant::now();
+        if let Some(prev) = *g {
+            if now.duration_since(prev) < MIN_INTERVAL {
+                log!(
+                    "[POLL] requestImmediateAppReport: throttled (interval {:?})",
+                    MIN_INTERVAL
+                );
+                return;
+            }
+        }
+        *g = Some(now);
+    }
+    let Some((foreground_app, domain)) = resolve_foreground_for_app_report() else {
+        log!("[POLL] requestImmediateAppReport: no foreground — skip");
+        return;
+    };
+    log!(
+        "[Desktop] Immediate app report (poll) userId={} pid={} foregroundApp={}",
+        user_id,
+        std::process::id(),
+        foreground_app
+    );
+    let _ = check_apps_with_server(user_id, &foreground_app, domain.as_deref());
 }
 
 /// Get the detection session mutex
@@ -1506,7 +1580,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         /// Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
         const WARNING_DURATION_SECS: u64 = 10;
         /// Re-report on a timer when nothing else changed (browser tab switches use domain comparison instead).
-        const SERVER_REPORT_HEARTBEAT_SECS: u64 = 30;
+        const SERVER_REPORT_HEARTBEAT_SECS: u64 = 10;
         
         while DETECTION_RUNNING.load(Ordering::SeqCst) {
             // Poll quickly while distracted or a warning is up so popups dismiss soon after switching apps/tabs.
@@ -1926,11 +2000,12 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
                  alert_count,
                  session_response.distracting_apps.len());
         log!(
-            "[POLL DEBUG] Parsed extra: active={:?} kicked={} joinedAt={:?} allowedApps count={}",
+            "[POLL DEBUG] Parsed extra: active={:?} kicked={} joinedAt={:?} allowedApps count={} requestImmediateAppReport={}",
             session_response.active,
             session_response.kicked,
             session_response.joined_at,
-            session_response.allowed_apps.len()
+            session_response.allowed_apps.len(),
+            session_response.request_immediate_app_report
         );
 
         if session_response.kicked {
@@ -1957,6 +2032,14 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
             "[POLL DEBUG] noteTakingMode={} (stored)",
             session_response.note_taking_mode
         );
+
+        if session_response.request_immediate_app_report {
+            log!("[POLL DEBUG] requestImmediateAppReport=true — scheduling immediate POST /api/desktop/apps");
+            let uid = userId.clone();
+            std::thread::spawn(move || {
+                maybe_throttled_immediate_app_report(&uid);
+            });
+        }
         
         // Process pending alerts
         if let Some(ref alerts) = session_response.pending_alerts {
@@ -2354,6 +2437,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, show_session_ending_alert, dismiss_session_ending_window, dismiss_notification, update_notification_idle_countdown, update_notification_to_idle_marked, update_notification_to_distracted, send_activity_update, get_active_session, get_focus_stats, get_user_id, is_listener_only, get_backend_base_url, set_backend_base_url])
         .setup(|app| {
             println!("[Tauri] Setup callback called");
+            println!(
+                "[Config] pid={} config_file={:?} — two desktop instances on one machine must use separate FOCUSTOGETHER_CONFIG_DIR (shared default ~/.focustogether overwrites userId).",
+                std::process::id(),
+                get_config_path()
+            );
             
             // Initialize deep link plugin
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
