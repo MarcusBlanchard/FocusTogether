@@ -422,14 +422,12 @@ fn run_immediate_desktop_apps_report(user_id: &str) {
     } else {
         None
     };
-    let app_or_domain = domain.clone().unwrap_or_else(|| app_name.clone());
     println!(
-        "[Desktop] Immediate report foreground: app={} domain={:?} foregroundApp={}",
+        "[Desktop] Immediate report foreground: process={} domain={:?} (foregroundApp=process name)",
         app_name,
-        domain.as_deref(),
-        app_or_domain
+        domain.as_deref()
     );
-    let _ = check_apps_with_server(user_id, &app_or_domain, domain.as_deref());
+    let _ = check_apps_with_server(user_id, &app_name, domain.as_deref());
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1194,6 +1192,12 @@ struct PendingAlert {
     timestamp: Option<String>,
     #[serde(default)]
     message: Option<String>,
+    /// Full notification body from server (takes precedence over constructed copy when set).
+    #[serde(default, rename = "notificationBody")]
+    notification_body: Option<String>,
+    /// Optional title from server when using `notificationBody`.
+    #[serde(default, rename = "notificationTitle")]
+    notification_title: Option<String>,
     /// For self-distraction alerts from browser extension
     #[serde(default)]
     domain: Option<String>,
@@ -1619,7 +1623,6 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     } else {
                         None
                     };
-                    let app_or_domain = domain.clone().unwrap_or_else(|| app_name.clone());
 
                     let foreground_identity_changed = last_reported_app != app_name
                         || (is_fg_browser && last_reported_domain != domain);
@@ -1642,17 +1645,16 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                             None
                         };
                         log!(
-                            "[Desktop Apps] foreground report: app_name={} pid={} domain={:?} foregroundApp_sent={}",
+                            "[Desktop Apps] foreground report: process={} pid={} domain={:?} (API foregroundApp=process)",
                             app_name,
                             pid,
-                            domain.as_deref(),
-                            app_or_domain
+                            domain.as_deref()
                         );
 
                         if let Some(ref current_user) = get_current_user_id() {
                             if let Some(server_data) = check_apps_with_server(
                                 current_user,
-                                &app_or_domain,
+                                &app_name,
                                 domain.as_deref(),
                             ) {
                                 last_server_result = Some(server_data.is_foreground_blocked);
@@ -2086,36 +2088,53 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
 
                     if alert.alert_type == "participant-activity" {
                         let body = alert
-                            .message
+                            .notification_body
                             .clone()
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| alert.message.clone())
                             .unwrap_or_else(|| "Your partner got distracted".to_string());
+                        let notif_title = alert
+                            .notification_title
+                            .clone()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| "Flowlocked".to_string());
                         log!(
                             "[POLL DEBUG] Alert[{}] → participant-activity, showing native notification",
                             i,
                         );
                         let app_id = app.config().tauri.bundle.identifier.clone();
                         let _ = tauri::api::notification::Notification::new(&app_id)
-                            .title("FocusTogether")
+                            .title(&notif_title)
                             .body(body)
                             .show();
                         continue;
                     }
 
                     if alert.alert_type == "self-distraction" {
-                        let body = alert.message.clone().unwrap_or_else(|| {
-                            if let Some(domain) = alert.domain.clone() {
-                                format!("You visited a distracting site: {}", domain)
-                            } else {
-                                "You visited a distracting app".to_string()
-                            }
-                        });
+                        let body = alert
+                            .notification_body
+                            .clone()
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| alert.message.clone())
+                            .unwrap_or_else(|| {
+                                if let Some(domain) = alert.domain.clone() {
+                                    format!("You visited a distracting site: {}", domain)
+                                } else {
+                                    "You visited a distracting app".to_string()
+                                }
+                            });
+                        let notif_title = alert
+                            .notification_title
+                            .clone()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| "Flowlocked".to_string());
                         log!(
                             "[POLL DEBUG] Alert[{}] → self-distraction, showing native notification",
                             i
                         );
                         let app_id = app.config().tauri.bundle.identifier.clone();
                         let _ = tauri::api::notification::Notification::new(&app_id)
-                            .title("FocusTogether")
+                            .title(&notif_title)
                             .body(body)
                             .show();
                         continue;
@@ -2157,14 +2176,37 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
                         None => continue,
                     };
                     let (title, message) = match status_str {
-                        "distracted" => (
-                            format!("{} is distracted", name_for_distracted),
-                            format!("{} is using a distracting app", name_for_distracted),
-                        ),
-                        "idle" => (
-                            "Partner Idle".to_string(),
-                            format!("{} has gone idle", display_name),
-                        ),
+                        "distracted" => {
+                            let default_title = format!("{} is distracted", name_for_distracted);
+                            let default_msg =
+                                format!("{} is using a distracting app", name_for_distracted);
+                            let title = alert
+                                .notification_title
+                                .clone()
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or(default_title);
+                            let message = alert
+                                .notification_body
+                                .clone()
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or(default_msg);
+                            (title, message)
+                        }
+                        "idle" => {
+                            let default_title = "Partner Idle".to_string();
+                            let default_msg = format!("{} has gone idle", display_name);
+                            let title = alert
+                                .notification_title
+                                .clone()
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or(default_title);
+                            let message = alert
+                                .notification_body
+                                .clone()
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or(default_msg);
+                            (title, message)
+                        }
                         _ => continue,
                     };
                     
