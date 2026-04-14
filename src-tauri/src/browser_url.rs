@@ -103,6 +103,35 @@ pub(crate) fn infer_site_from_window_title(title: &str) -> Option<String> {
         return Some("twitter.com".to_string());
     }
 
+    // Geometry Dash demon lists / level databases (titles often omit full URL).
+    if lower.contains("pointercrate.com") || lower.contains("pointercrate") {
+        return Some("pointercrate.com".to_string());
+    }
+    if lower.contains("aredl.net") || lower.contains("aredl") {
+        return Some("aredl.net".to_string());
+    }
+
+    None
+}
+
+/// Best-effort: find a hostname-like token in the window title when the address bar is unreadable.
+pub(crate) fn host_hint_from_title(title: &str) -> Option<String> {
+    for raw in title.split(|c: char| {
+        c.is_whitespace() || "|/\\()[]{}\"'«»•·–—".contains(c)
+    }) {
+        let s = raw.trim().trim_end_matches('.');
+        if s.len() < 4 || !s.contains('.') || s.contains('@') {
+            continue;
+        }
+        let cand = s.trim_start_matches("www.");
+        if let Some(host) = extract_domain(&format!("https://{}", cand)) {
+            // Skip common non-site tokens
+            if host.ends_with(".js") || host.ends_with(".css") || host.ends_with(".png") {
+                continue;
+            }
+            return Some(host);
+        }
+    }
     None
 }
 

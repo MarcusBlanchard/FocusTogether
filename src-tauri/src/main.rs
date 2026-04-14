@@ -17,8 +17,15 @@ use active_win_pos_rs::get_active_window;
 use std::io::Write;
 
 mod browser_url;
+mod browser_title_target;
 
 static LOG_FILE: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
+
+static LAST_CLASSIFY_AT: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+
+fn last_classify_at_lock() -> &'static Mutex<Option<std::time::Instant>> {
+    LAST_CLASSIFY_AT.get_or_init(|| Mutex::new(None))
+}
 
 /// Keep log small so TextEdit/Preview can open it; rotate when over limit.
 const LIVE_LOG_MAX_BYTES: u64 = 512 * 1024;
@@ -108,7 +115,6 @@ fn force_show_window(app_handle: &tauri::AppHandle, window_label: String) {
 #[cfg(not(target_os = "macos"))]
 fn force_show_window(_app_handle: &tauri::AppHandle, _window_label: String) {}
 
-
 // Global config storage
 static CONFIG: OnceLock<Mutex<AppConfig>> = OnceLock::new();
 
@@ -117,7 +123,6 @@ static DETECTION_RUNNING: AtomicBool = AtomicBool::new(false);
 static DETECTION_SESSION: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::new();
 static DISTRACTION_RULES: OnceLock<Mutex<(HashSet<String>, HashSet<String>)>> = OnceLock::new();
 static AI_CLASSIFICATIONS: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
-static AI_CLASSIFICATIONS_PENDING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 /// Server-driven: when true, desktop must not show the yellow idle warning UI (see GET /api/desktop/poll).
 static NOTE_TAKING_MODE: AtomicBool = AtomicBool::new(false);
@@ -148,10 +153,6 @@ fn distraction_rules() -> &'static Mutex<(HashSet<String>, HashSet<String>)> {
 
 fn ai_classifications() -> &'static Mutex<HashMap<String, bool>> {
     AI_CLASSIFICATIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn ai_classifications_pending() -> &'static Mutex<HashSet<String>> {
-    AI_CLASSIFICATIONS_PENDING.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 fn normalize_rule_value(v: &str) -> Option<String> {
@@ -208,84 +209,128 @@ fn distracting_keywords() -> &'static [&'static str] {
     ]
 }
 
-fn ai_categorize_target(target: &str) -> Option<bool> {
-    let key = std::env::var("OPENAI_API_KEY").ok()?;
-    if key.trim().is_empty() {
-        return None;
+/// Env `OPENAI_API_KEY` wins; else `openaiApiKey` in ~/.focustogether/config.json.
+fn resolve_openai_api_key() -> Option<String> {
+    if let Ok(k) = std::env::var("OPENAI_API_KEY") {
+        let t = k.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
     }
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(4))
-        .build()
-        .ok()?;
-    let payload = serde_json::json!({
-        "model": "gpt-4o-mini",
-        "messages": [
-            {
-                "role": "system",
-                "content": "Classify productivity context into exactly one token: distracting, productive, or neutral."
-            },
-            {
-                "role": "user",
-                "content": format!("Classify this app/site context: {}", target)
+    if let Ok(guard) = get_config().lock() {
+        if let Some(ref k) = guard.openai_api_key {
+            let t = k.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
             }
-        ],
-        "max_tokens": 8,
-        "temperature": 0
-    });
-    let resp = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Content-Type", "application/json")
-        .bearer_auth(key)
-        .json(&payload)
-        .send()
-        .ok()?;
-    let json: serde_json::Value = resp.json().ok()?;
-    let raw = json
-        .get("choices")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
-    if raw.contains("distracting") {
-        Some(true)
-    } else if raw.contains("productive") || raw.contains("neutral") {
-        Some(false)
+        }
+    }
+    None
+}
+
+fn truncate_debug_body(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
     } else {
-        None
+        let cut = s.get(..max).unwrap_or(s);
+        format!("{}… (truncated)", cut)
     }
 }
 
-fn enqueue_ai_classification(target: String) {
-    {
-        let mut pending = match ai_classifications_pending().lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-        if pending.contains(&target) {
-            return;
-        }
-        pending.insert(target.clone());
+fn is_browser_internal_marker_target(target: &str) -> bool {
+    let t = target.trim().to_lowercase();
+    t.ends_with("-internal")
+        || t == "chrome-internal"
+        || t == "safari-internal"
+        || t == "firefox-internal"
+        || t == "browser-internal"
+}
+
+/// Server-side classify via `POST /api/desktop/classify-target` (OpenAI only on server). Blocking.
+fn server_classify_target_with_detail(user_id: &str, target: &str) -> (Option<bool>, String) {
+    if is_browser_internal_marker_target(target) {
+        return (
+            Some(false),
+            "internal browser marker — skipped".to_string(),
+        );
     }
-    std::thread::spawn(move || {
-        let result = ai_categorize_target(&target);
-        if let Some(is_distracting) = result {
-            if let Ok(mut cache) = ai_classifications().lock() {
-                cache.insert(target.clone(), is_distracting);
+    {
+        let last = last_classify_at_lock().lock().unwrap();
+        if let Some(t) = *last {
+            if t.elapsed() < std::time::Duration::from_secs(1) {
+                return (
+                    None,
+                    "rate limited (max 1 classify/s)".to_string(),
+                );
             }
-            println!(
-                "[AI Classifier] {} => {}",
-                target,
-                if is_distracting { "distracting" } else { "non-distracting" }
+        }
+    }
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return (None, format!("HTTP client build failed: {}", e)),
+    };
+    let base = backend_base_url().trim_end_matches('/').to_string();
+    let url = format!("{}/api/desktop/classify-target", base);
+    let body = serde_json::json!({ "userId": user_id, "target": target });
+    {
+        let mut last = last_classify_at_lock().lock().unwrap();
+        *last = Some(std::time::Instant::now());
+    }
+    let resp = match client.post(&url).json(&body).send() {
+        Ok(r) => r,
+        Err(e) => return (None, format!("network error: {}", e)),
+    };
+    let status = resp.status();
+    let body_text = match resp.text() {
+        Ok(b) => b,
+        Err(e) => return (None, format!("read body: {}", e)),
+    };
+    if !status.is_success() {
+        return (
+            None,
+            format!(
+                "HTTP {} — {}",
+                status.as_u16(),
+                truncate_debug_body(&body_text, 800)
+            ),
+        );
+    }
+    let json: serde_json::Value = match serde_json::from_str(&body_text) {
+        Ok(j) => j,
+        Err(e) => {
+            return (
+                None,
+                format!(
+                    "invalid JSON ({}): {}",
+                    e,
+                    truncate_debug_body(&body_text, 400)
+                ),
             );
         }
-        if let Ok(mut pending) = ai_classifications_pending().lock() {
-            pending.remove(&target);
-        }
-    });
+    };
+    if json.get("success").and_then(|v| v.as_bool()) == Some(false) {
+        let msg = json
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        return (None, msg.to_string());
+    }
+    match json.get("distracting").and_then(|v| v.as_bool()) {
+        Some(d) => (
+            Some(d),
+            format!("POST /api/desktop/classify-target distracting={}", d),
+        ),
+        None => (
+            None,
+            format!(
+                "missing distracting in response: {}",
+                truncate_debug_body(&body_text, 500)
+            ),
+        ),
+    }
 }
 
 fn update_distraction_rules_from_poll(distracting: &[String], allowed: &[String], blocked: &[String]) {
@@ -316,9 +361,25 @@ fn rule_matches(value: &str, rules: &HashSet<String>) -> bool {
     rules.iter().any(|r| n.ends_with(&format!(".{}", r)) || n.contains(r))
 }
 
-fn classify_local_distraction(app_name: &str, domain: Option<&str>) -> Option<String> {
+fn cache_false_on_classify_failure(cache_key: &str, detail: &str) {
+    if detail.contains("rate limited") {
+        return;
+    }
+    if let Ok(mut cache) = ai_classifications().lock() {
+        cache.insert(cache_key.to_string(), false);
+    }
+}
+
+fn classify_local_distraction(
+    app_name: &str,
+    domain: Option<&str>,
+    user_id: Option<&str>,
+) -> Option<String> {
     let app = app_name.to_lowercase();
     if app.contains("flowlocked") || app.contains("focustogether") {
+        return None;
+    }
+    if is_browser(app_name) && domain.is_none() {
         return None;
     }
     let Ok((distracting, allowed)) = distraction_rules().lock().map(|g| (g.0.clone(), g.1.clone())) else {
@@ -343,7 +404,28 @@ fn classify_local_distraction(app_name: &str, domain: Option<&str>) -> Option<St
                     return if *v { Some(key) } else { None };
                 }
             }
-            enqueue_ai_classification(key);
+            if let Some(uid) = user_id {
+                let (opt, detail) = server_classify_target_with_detail(uid, &key);
+                match opt {
+                    Some(true) => {
+                        println!("[Server Classifier] {} => distracting ({})", key, detail);
+                        if let Ok(mut cache) = ai_classifications().lock() {
+                            cache.insert(key.clone(), true);
+                        }
+                        return Some(key);
+                    }
+                    Some(false) => {
+                        println!("[Server Classifier] {} => not distracting ({})", key, detail);
+                        if let Ok(mut cache) = ai_classifications().lock() {
+                            cache.insert(key.clone(), false);
+                        }
+                    }
+                    None => {
+                        println!("[Server Classifier] {} FAILED: {}", key, detail);
+                        cache_false_on_classify_failure(&key, &detail);
+                    }
+                }
+            }
         }
         return None;
     }
@@ -368,7 +450,28 @@ fn classify_local_distraction(app_name: &str, domain: Option<&str>) -> Option<St
             return if *v { Some(app_norm.clone()) } else { None };
         }
     }
-    enqueue_ai_classification(app_norm);
+    if let Some(uid) = user_id {
+        let (opt, detail) = server_classify_target_with_detail(uid, &app_norm);
+        match opt {
+            Some(true) => {
+                println!("[Server Classifier] {} => distracting ({})", app_norm, detail);
+                if let Ok(mut cache) = ai_classifications().lock() {
+                    cache.insert(app_norm.clone(), true);
+                }
+                return Some(app_norm);
+            }
+            Some(false) => {
+                println!("[Server Classifier] {} => not distracting ({})", app_norm, detail);
+                if let Ok(mut cache) = ai_classifications().lock() {
+                    cache.insert(app_norm.clone(), false);
+                }
+            }
+            None => {
+                println!("[Server Classifier] {} FAILED: {}", app_norm, detail);
+                cache_false_on_classify_failure(&app_norm, &detail);
+            }
+        }
+    }
     None
 }
 
@@ -419,6 +522,16 @@ fn set_backend_config_url(url: Option<String>) -> Result<(), String> {
             Some(n)
         }
     };
+    save_config(&config_guard)?;
+    Ok(())
+}
+
+fn set_openai_api_key_config(key: Option<String>) -> Result<(), String> {
+    let config = get_config();
+    let mut config_guard = config.lock().map_err(|e| format!("Failed to lock config: {}", e))?;
+    config_guard.openai_api_key = key
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     save_config(&config_guard)?;
     Ok(())
 }
@@ -627,7 +740,8 @@ fn resolve_focused_browser_domain(app_name: &str, title: &str, pid: u32) -> Opti
         url_read_timeout,
         Some(app_name),
     )
-    .or_else(|| browser_url::infer_site_from_window_title(title));
+    .or_else(|| browser_url::infer_site_from_window_title(title))
+    .or_else(|| browser_url::host_hint_from_title(title));
     // Snapshot must still match when we finish.
     if let Some((_, _, curr_pid)) = get_foreground_info() {
         if curr_pid != pid {
@@ -639,51 +753,24 @@ fn resolve_focused_browser_domain(app_name: &str, title: &str, pid: u32) -> Opti
     domain
 }
 
-fn browser_internal_domain_marker(app_name: &str) -> &'static str {
-    let lower = app_name.to_lowercase();
-    if lower.contains("chrome")
-        || lower.contains("chromium")
-        || lower.contains("arc")
-        || lower.contains("opera")
-        || lower.contains("vivaldi")
-        || lower.contains("edge")
-        || lower.contains("brave")
-    {
-        "chrome-internal"
-    } else if lower.contains("safari") {
-        "safari-internal"
-    } else if lower.contains("firefox") {
-        "firefox-internal"
-    } else {
-        "browser-internal"
-    }
-}
-
-/// Browser reports must always send a non-empty domain value.
-/// If we cannot resolve a real host (new tab, settings, restricted URL, permission issue),
-/// send an explicit internal marker so server can treat it as non-website context.
-fn resolve_browser_domain_for_reporting(app_name: &str, title: &str, pid: u32) -> Option<String> {
+/// Unified classify/report target: real URL-derived host when available, else title-derived target.
+fn resolve_foreground_browser_target(app_name: &str, title: &str, pid: u32) -> Option<String> {
     if !is_browser(app_name) {
         return None;
     }
-    match resolve_focused_browser_domain(app_name, title, pid) {
-        Some(domain) => Some(domain),
-        None => {
-            let marker = browser_internal_domain_marker(app_name).to_string();
-            println!(
-                "[Browser URL] Using fallback domain marker for {}: {}",
-                app_name, marker
-            );
-            Some(marker)
+    if let Some(d) = resolve_focused_browser_domain(app_name, title, pid) {
+        if !is_browser_internal_marker_target(&d) {
+            return Some(d);
         }
     }
+    browser_title_target::target_from_window_title(title)
 }
 
 /// Report current desktop state to server; server remains source of truth.
 fn check_apps_with_server(
     user_id: &str,
     foreground_app: &str,
-    domain: Option<&str>,
+    foreground_process: Option<&str>,
 ) -> Option<DesktopAppsResponse> {
     if APPS_REPORT_IN_FLIGHT
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -696,20 +783,30 @@ fn check_apps_with_server(
         return None;
     }
     println!("[Desktop] Sending app report for userId={}", user_id);
-    println!("[Desktop Apps] 📤 Checking app with server: userId={}, foregroundApp={}", user_id, foreground_app);
+    println!(
+        "[Desktop Apps] Checking app with server: userId={}, foregroundApp={}, foregroundProcess={:?}",
+        user_id, foreground_app, foreground_process
+    );
     
     let backend_url = backend_base_url();
     let endpoint = format!("{}/api/desktop/apps", backend_url);
     
     // Build the request body
     let running_apps = get_running_app_names();
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "userId": user_id,
         "apps": running_apps,
         "foregroundApp": foreground_app,
-        "domain": domain,
         "source": "desktopNative"
     });
+    if let Some(p) = foreground_process {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert(
+                "foregroundProcess".to_string(),
+                serde_json::Value::String(p.to_string()),
+            );
+        }
+    }
     
     let result = (|| {
         // Use blocking HTTP request (we're in a thread)
@@ -763,12 +860,21 @@ fn run_immediate_desktop_apps_report(user_id: &str) {
     let Some((app_name, title, pid)) = get_foreground_info() else {
         return;
     };
-    let reporting_domain = if is_browser(&app_name) {
-        resolve_browser_domain_for_reporting(&app_name, &title, pid)
+    let effective_target = resolve_foreground_browser_target(&app_name, &title, pid);
+    let foreground_app = if is_browser(&app_name) {
+        effective_target
+            .as_deref()
+            .unwrap_or(app_name.as_str())
+            .to_string()
+    } else {
+        app_name.clone()
+    };
+    let foreground_process = if is_browser(&app_name) {
+        Some(app_name.as_str())
     } else {
         None
     };
-    let _ = check_apps_with_server(user_id, &app_name, reporting_domain.as_deref());
+    let _ = check_apps_with_server(user_id, &foreground_app, foreground_process);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -778,6 +884,12 @@ struct AppConfig {
     /// When set, desktop HTTP/WebSocket use this origin (e.g. Replit staging). Env `BACKEND_URL` overrides.
     #[serde(default)]
     backend_url: Option<String>,
+    /// OpenAI key for local site/app classification. Env `OPENAI_API_KEY` overrides when set.
+    #[serde(default, rename = "openaiApiKey")]
+    openai_api_key: Option<String>,
+    /// Hostnames / app tokens classified as distracting by AI; checked before calling OpenAI again.
+    #[serde(default, rename = "learnedDistracting")]
+    learned_distracting: Vec<String>,
 }
 
 /// Get the config file path (~/.focustogether/config.json)
@@ -1119,6 +1231,39 @@ fn set_backend_base_url(url: Option<String>) -> Result<(), String> {
             }
         }
     }
+}
+
+/// Legacy: optional local `openaiApiKey` in config (classification uses server OpenAI; this is unused for the hot path).
+#[tauri::command]
+fn set_openai_api_key(key: Option<String>) -> Result<(), String> {
+    set_openai_api_key_config(key)
+}
+
+#[tauri::command]
+fn has_openai_api_key() -> bool {
+    resolve_openai_api_key().is_some()
+}
+
+/// Debug: `POST /api/desktop/classify-target` on the configured backend (same as session classification).
+#[tauri::command]
+fn debug_ai_classify(hostname: String) -> Result<String, String> {
+    let t = hostname.trim().to_string();
+    if t.is_empty() {
+        return Err("empty hostname".to_string());
+    }
+    let Some(uid) = get_current_user_id() else {
+        return Err(
+            "No linked userId — sign in via the web app and open Flowlocked from the site (deep link)."
+                .to_string(),
+        );
+    };
+    let (opt, detail) = server_classify_target_with_detail(&uid, &t);
+    Ok(format!(
+        "backend={}\nuserId_linked=true\nclassification={:?} — distracting=true blocks, false=allow, None=error\n{}",
+        backend_base_url(),
+        opt,
+        detail
+    ))
 }
 
 #[tauri::command]
@@ -1514,9 +1659,10 @@ struct ActivityUpdate {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 struct PendingAlert {
     #[serde(rename = "type")]
-    alert_type: String,
+    alert_type: Option<String>,
     /// Absent on `session-ending` alerts.
     #[serde(default, rename = "alertingUserId")]
     alerting_user_id: Option<String>,
@@ -1545,6 +1691,25 @@ struct PendingAlert {
     /// For `session-ending` alerts (minutes until room closes).
     #[serde(default, rename = "remainingMinutes")]
     remaining_minutes: Option<u32>,
+}
+
+impl Default for PendingAlert {
+    fn default() -> Self {
+        Self {
+            alert_type: None,
+            alerting_user_id: None,
+            alerting_username: None,
+            alerting_first_name: None,
+            status: None,
+            session_id: None,
+            timestamp: None,
+            message: None,
+            notification_body: None,
+            notification_title: None,
+            domain: None,
+            remaining_minutes: None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1648,10 +1813,7 @@ fn get_foreground_info() -> Option<(String, String, u32)> {
 }
 
 fn is_browser(app_name: &str) -> bool {
-    let name = app_name.to_lowercase();
-    ["chrome", "firefox", "safari", "edge", "brave", "arc"]
-        .iter()
-        .any(|b| name.contains(b))
+    browser_title_target::is_browser_app(app_name)
 }
 
 /// Get the detection session mutex
@@ -1903,8 +2065,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         let mut last_sent_state: Option<&str> = None;
         let mut last_server_report: Option<std::time::Instant> = None;
         let mut last_reported_app: String = String::new();
-        // Last domain we sent for `foregroundApp` when the foreground was a browser (tab changes do not change app name).
-        let mut last_reported_domain: Option<String> = None;
+        // Last unified target (hostname or title) we reported for browsers (tab/title changes do not change app name).
+        let mut last_reported_target: Option<String> = None;
         let mut active_distraction_key: Option<String> = None;
 
         // Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
@@ -1927,21 +2089,21 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     let app_lower = app_name.to_lowercase();
                     let is_our_app = app_lower.contains("flowlocked");
                     
-                    // Resolve actual focused browser domain for local distraction matching.
-                    let local_domain = resolve_focused_browser_domain(&app_name, &title, pid);
-                    // Reporting domain may use internal marker fallback if URL is unreadable.
-                    let reporting_domain = if is_browser(&app_name) {
-                        resolve_browser_domain_for_reporting(&app_name, &title, pid)
-                    } else {
-                        None
-                    };
-                    let local_distraction_key =
-                        classify_local_distraction(&app_name, local_domain.as_deref());
+                    let effective_target =
+                        resolve_foreground_browser_target(&app_name, &title, pid);
+                    let local_distraction_key = classify_local_distraction(
+                        &app_name,
+                        effective_target.as_deref(),
+                        Some(user_id.as_str()),
+                    );
+                    // Any match while foreground is a real browser counts as browser distraction (not the
+                    // "You opened Google Chrome" notification path). Do not require URL bar read: title hints
+                    // and URL read both feed `effective_target`.
                     let is_browser_distracting =
-                        local_distraction_key.is_some() && local_domain.is_some();
+                        is_browser(&app_name) && local_distraction_key.is_some();
 
                     let foreground_identity_changed = last_reported_app != app_name
-                        || (is_browser(&app_name) && last_reported_domain != local_domain);
+                        || (is_browser(&app_name) && last_reported_target != effective_target);
 
                     // Report on app switch, browser tab/site change, or periodic heartbeat.
                     let should_report_server = match last_server_report {
@@ -1955,30 +2117,37 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     if should_report_server {
                         last_server_report = Some(std::time::Instant::now());
                         last_reported_app = app_name.clone();
-                        last_reported_domain = if is_browser(&app_name) {
-                            local_domain.clone()
+                        last_reported_target = if is_browser(&app_name) {
+                            effective_target.clone()
                         } else {
                             None
                         };
                         log!(
-                            "[Desktop Apps] foreground report: process={} pid={} local_domain={:?} report_domain={:?}",
+                            "[Desktop Apps] foreground report: process={} pid={} target={:?}",
                             app_name,
                             pid,
-                            local_domain.as_deref(),
-                            reporting_domain.as_deref()
+                            effective_target.as_deref()
                         );
 
                         if let Some(ref current_user) = get_current_user_id() {
                             let uid = current_user.clone();
-                            let app_for_report = app_name.clone();
-                            let domain_for_report = reporting_domain.clone();
+                            let proc_name = app_name.clone();
+                            let fg_app = if is_browser(&app_name) {
+                                effective_target
+                                    .clone()
+                                    .unwrap_or_else(|| proc_name.clone())
+                            } else {
+                                proc_name.clone()
+                            };
+                            let fg_proc = if is_browser(&app_name) {
+                                Some(proc_name)
+                            } else {
+                                None
+                            };
                             // Non-blocking: local distraction decisions should never wait on network.
                             std::thread::spawn(move || {
-                                let _ = check_apps_with_server(
-                                    &uid,
-                                    &app_for_report,
-                                    domain_for_report.as_deref(),
-                                );
+                                let proc_ref = fg_proc.as_deref();
+                                let _ = check_apps_with_server(&uid, &fg_app, proc_ref);
                             });
                         }
                     }
@@ -2311,7 +2480,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
                 // First: handle explicit one-shot alert types from the server.
                 for (i, alert) in alerts.iter().enumerate() {
                     log!(
-                        "[POLL DEBUG] Alert[{}]: type={} status={:?} alertingUserId={:?} alertingFirstName={:?}",
+                        "[POLL DEBUG] Alert[{}]: type={:?} status={:?} alertingUserId={:?} alertingFirstName={:?}",
                         i,
                         alert.alert_type,
                         alert.status,
@@ -2319,7 +2488,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
                         alert.alerting_first_name
                     );
 
-                    if alert.alert_type == "session-ending" {
+                    if alert.alert_type.as_deref() == Some("session-ending") {
                         let Some(sid) = alert.session_id.clone() else {
                             log!("[POLL DEBUG] Alert[{}] session-ending missing sessionId — skip", i);
                             continue;
@@ -2368,31 +2537,32 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
                         continue;
                     }
 
-                    if alert.alert_type == "participant-activity" {
+                    if alert.alert_type.as_deref() == Some("participant-activity") {
+                        let title = alert
+                            .notification_title
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("Flowlocked");
                         let body = alert
                             .notification_body
-                            .clone()
+                            .as_deref()
+                            .map(str::trim)
                             .filter(|s| !s.is_empty())
-                            .or_else(|| alert.message.clone())
-                            .unwrap_or_else(|| "Your partner got distracted".to_string());
-                        let notif_title = alert
-                            .notification_title
-                            .clone()
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or_else(|| "Flowlocked".to_string());
+                            .unwrap_or("A participant is distracted");
                         log!(
                             "[POLL DEBUG] Alert[{}] → participant-activity, showing native notification",
                             i,
                         );
                         let app_id = app.config().tauri.bundle.identifier.clone();
                         let _ = tauri::api::notification::Notification::new(&app_id)
-                            .title(&notif_title)
+                            .title(title)
                             .body(body)
                             .show();
                         continue;
                     }
 
-                    if alert.alert_type == "self-distraction" {
+                    if alert.alert_type.as_deref() == Some("self-distraction") {
                         let body = alert
                             .notification_body
                             .clone()
@@ -2426,8 +2596,8 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
                 // Process partner alerts (idle/distracted). Server guarantees exactly one alert per
                 // distraction event — no client-side deduplication needed.
                 for (i, alert) in alerts.iter().enumerate() {
-                    let is_self = alert.alert_type == "self-distraction";
-                    let is_session_ending = alert.alert_type == "session-ending";
+                    let is_self = alert.alert_type.as_deref() == Some("self-distraction");
+                    let is_session_ending = alert.alert_type.as_deref() == Some("session-ending");
                     let is_valid_status =
                         matches!(alert.status.as_deref(), Some("idle") | Some("distracted"));
                     log!("[POPUP DEBUG] Alert[{}] condition: is_self_distraction={} → {} | is_session_ending={} → {} | is_valid_status(idle|distracted)={} → {}",
@@ -2500,7 +2670,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
                     log!("[POPUP DEBUG] All open windows: {:?}", existing_windows);
                     log!("[POPUP DEBUG] Existing participant-alert windows: {:?}", participant_windows);
                     
-                    log!("[POPUP DEBUG] Attempting to create popup window for alert: type={} status={:?} alertingUserId={:?} firstName={:?} title=\"{}\" message=\"{}\"",
+                    log!("[POPUP DEBUG] Attempting to create popup window for alert: type={:?} status={:?} alertingUserId={:?} firstName={:?} title=\"{}\" message=\"{}\"",
                         alert.alert_type, alert.status, alert.alerting_user_id, alert.alerting_first_name, title, message);
                     
                     match show_participant_alert(
@@ -2743,10 +2913,10 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, show_session_ending_alert, dismiss_session_ending_window, dismiss_notification, update_notification_idle_countdown, update_notification_to_idle_marked, update_notification_to_distracted, send_activity_update, get_active_session, get_focus_stats, get_user_id, is_listener_only, get_backend_base_url, set_backend_base_url])
+        .invoke_handler(tauri::generate_handler![get_idle_seconds, show_notification, show_participant_alert, show_session_ending_alert, dismiss_session_ending_window, dismiss_notification, update_notification_idle_countdown, update_notification_to_idle_marked, update_notification_to_distracted, send_activity_update, get_active_session, get_focus_stats, get_user_id, is_listener_only, get_backend_base_url, set_backend_base_url, set_openai_api_key, has_openai_api_key, debug_ai_classify])
         .setup(|app| {
             println!("[Tauri] Setup callback called");
-            
+
             // Initialize deep link plugin
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             {

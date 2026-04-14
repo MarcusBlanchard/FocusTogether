@@ -1,6 +1,6 @@
 import { Router, Route, Switch } from "wouter";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import Status from "@/pages/status";
+import { useIdleMonitoring } from "@/hooks/useIdleWarning";
 import Home from "@/pages/home";
 import Friends from "@/pages/friends";
 import YourStats from "@/pages/your-stats";
@@ -19,6 +19,12 @@ import PrivacyPolicy from "@/pages/legal/privacy";
 function isTauriShell(): boolean {
   if (typeof window === "undefined") return false;
   return Boolean((window as unknown as { __TAURI__?: unknown }).__TAURI__);
+}
+
+/** Hidden main window: only runs idle/session polling; no visible status UI. */
+function TauriBackgroundShell() {
+  useIdleMonitoring();
+  return null;
 }
 
 function WebRoutes() {
@@ -49,7 +55,7 @@ function App() {
   if (isTauriShell()) {
     return (
       <TooltipProvider>
-        <Status />
+        <TauriBackgroundShell />
       </TooltipProvider>
     );
   }

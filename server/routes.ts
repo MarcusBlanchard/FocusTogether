@@ -1923,7 +1923,7 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
   // notify other participants (after the client timer completes).
   app.post('/api/desktop/apps', async (req, res) => {
     try {
-      const { userId, apps, foregroundApp, domain, source } = req.body as {
+      const { userId, apps, foregroundApp, domain, source, foregroundProcess } = req.body as {
         userId?: string;
         apps?: string[];
         foregroundApp?: string;
@@ -1931,6 +1931,8 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
         domain?: string;
         /** `browserExtension` | `desktopNative` — disambiguates tab domain vs native app name */
         source?: string;
+        /** Desktop: OS browser bundle name (e.g. Google Chrome) while `foregroundApp` is classify target */
+        foregroundProcess?: string;
       };
 
       const effectiveForeground =
@@ -1939,6 +1941,13 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
           : foregroundApp != null && String(foregroundApp).trim() !== ''
             ? String(foregroundApp).trim()
             : '';
+
+      const processForBrowserGuard =
+        source === 'desktopNative' &&
+        foregroundProcess != null &&
+        String(foregroundProcess).trim() !== ''
+          ? String(foregroundProcess).trim()
+          : effectiveForeground;
 
       if (!userId || !effectiveForeground) {
         return res.status(400).json({
@@ -1968,7 +1977,7 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
           String(effectiveForeground),
           isForegroundBlocked,
         );
-      } else if (!isBrowserProcessForegroundName(String(effectiveForeground))) {
+      } else if (!isBrowserProcessForegroundName(String(processForBrowserGuard))) {
         sessionManager.clearBrowserForegroundDistraction(String(userId));
       }
       const appList = Array.isArray(apps) ? apps : [];
