@@ -7,7 +7,7 @@
 use user_idle::UserIdle;
 use tauri::Manager;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -115,15 +115,19 @@ static CONFIG: OnceLock<Mutex<AppConfig>> = OnceLock::new();
 // Distraction detection state
 static DETECTION_RUNNING: AtomicBool = AtomicBool::new(false);
 static DETECTION_SESSION: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::new();
-
-// Browser distraction state - set when browser extension detects distracting site
-static BROWSER_DISTRACTION_ACTIVE: AtomicBool = AtomicBool::new(false);
+static DISTRACTION_RULES: OnceLock<Mutex<(HashSet<String>, HashSet<String>)>> = OnceLock::new();
+static AI_CLASSIFICATIONS: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+static AI_CLASSIFICATIONS_PENDING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 /// Server-driven: when true, desktop must not show the yellow idle warning UI (see GET /api/desktop/poll).
 static NOTE_TAKING_MODE: AtomicBool = AtomicBool::new(false);
 
 // Heartbeat loop state - ensures only one heartbeat loop runs at a time
 static HEARTBEAT_RUNNING: AtomicBool = AtomicBool::new(false);
+// Guard to prevent overlapping /api/desktop/apps requests (can race when poll-triggered and loop-triggered reports coincide).
+static APPS_REPORT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+// True only after server acked distracted=true; cleared only after server acked distracted=false.
+static DISTRACTION_REPORTED: AtomicBool = AtomicBool::new(false);
 
 // Session poll counter for Cursor/device console logging (correlate with server logs)
 static SESSION_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -136,6 +140,236 @@ static SESSION_ENDING_SHOWN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn session_ending_shown() -> &'static Mutex<HashSet<String>> {
     SESSION_ENDING_SHOWN.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn distraction_rules() -> &'static Mutex<(HashSet<String>, HashSet<String>)> {
+    DISTRACTION_RULES.get_or_init(|| Mutex::new((HashSet::new(), HashSet::new())))
+}
+
+fn ai_classifications() -> &'static Mutex<HashMap<String, bool>> {
+    AI_CLASSIFICATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn ai_classifications_pending() -> &'static Mutex<HashSet<String>> {
+    AI_CLASSIFICATIONS_PENDING.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn normalize_rule_value(v: &str) -> Option<String> {
+    let s = v.trim().trim_start_matches("www.").trim_end_matches('/').to_lowercase();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn normalize_app_name(v: &str) -> Option<String> {
+    let mut n = v.trim().to_lowercase();
+    if n.ends_with(".app") {
+        n = n.trim_end_matches(".app").trim().to_string();
+    }
+    normalize_rule_value(&n)
+}
+
+fn default_distracting_entries() -> &'static [&'static str] {
+    &[
+        "youtube",
+        "youtube.com",
+        "reddit",
+        "reddit.com",
+        "twitter",
+        "x.com",
+        "facebook",
+        "instagram",
+        "tiktok",
+        "discord",
+        "netflix",
+        "twitch",
+        "steam",
+        "chess",
+        "deviantart",
+        "deviantart.com",
+    ]
+}
+
+fn distracting_keywords() -> &'static [&'static str] {
+    &[
+        "game",
+        "games",
+        "gaming",
+        "play",
+        "casino",
+        "gambling",
+        "stream",
+        "movie",
+        "movies",
+        "anime",
+        "meme",
+    ]
+}
+
+fn ai_categorize_target(target: &str) -> Option<bool> {
+    let key = std::env::var("OPENAI_API_KEY").ok()?;
+    if key.trim().is_empty() {
+        return None;
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(4))
+        .build()
+        .ok()?;
+    let payload = serde_json::json!({
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "system",
+                "content": "Classify productivity context into exactly one token: distracting, productive, or neutral."
+            },
+            {
+                "role": "user",
+                "content": format!("Classify this app/site context: {}", target)
+            }
+        ],
+        "max_tokens": 8,
+        "temperature": 0
+    });
+    let resp = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .header("Content-Type", "application/json")
+        .bearer_auth(key)
+        .json(&payload)
+        .send()
+        .ok()?;
+    let json: serde_json::Value = resp.json().ok()?;
+    let raw = json
+        .get("choices")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    if raw.contains("distracting") {
+        Some(true)
+    } else if raw.contains("productive") || raw.contains("neutral") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn enqueue_ai_classification(target: String) {
+    {
+        let mut pending = match ai_classifications_pending().lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if pending.contains(&target) {
+            return;
+        }
+        pending.insert(target.clone());
+    }
+    std::thread::spawn(move || {
+        let result = ai_categorize_target(&target);
+        if let Some(is_distracting) = result {
+            if let Ok(mut cache) = ai_classifications().lock() {
+                cache.insert(target.clone(), is_distracting);
+            }
+            println!(
+                "[AI Classifier] {} => {}",
+                target,
+                if is_distracting { "distracting" } else { "non-distracting" }
+            );
+        }
+        if let Ok(mut pending) = ai_classifications_pending().lock() {
+            pending.remove(&target);
+        }
+    });
+}
+
+fn update_distraction_rules_from_poll(distracting: &[String], allowed: &[String], blocked: &[String]) {
+    let mut dset = HashSet::new();
+    for v in distracting.iter().chain(blocked.iter()) {
+        if let Some(n) = normalize_rule_value(v) {
+            dset.insert(n);
+        }
+    }
+    let mut aset = HashSet::new();
+    for v in allowed {
+        if let Some(n) = normalize_rule_value(v) {
+            aset.insert(n);
+        }
+    }
+    if let Ok(mut g) = distraction_rules().lock() {
+        *g = (dset, aset);
+    }
+}
+
+fn rule_matches(value: &str, rules: &HashSet<String>) -> bool {
+    let Some(n) = normalize_rule_value(value) else {
+        return false;
+    };
+    if rules.contains(&n) {
+        return true;
+    }
+    rules.iter().any(|r| n.ends_with(&format!(".{}", r)) || n.contains(r))
+}
+
+fn classify_local_distraction(app_name: &str, domain: Option<&str>) -> Option<String> {
+    let app = app_name.to_lowercase();
+    if app.contains("flowlocked") || app.contains("focustogether") {
+        return None;
+    }
+    let Ok((distracting, allowed)) = distraction_rules().lock().map(|g| (g.0.clone(), g.1.clone())) else {
+        return None;
+    };
+    if let Some(d) = domain {
+        if default_distracting_entries().iter().any(|k| d.contains(k)) {
+            return normalize_rule_value(d);
+        }
+        if distracting_keywords().iter().any(|k| d.contains(k)) {
+            return normalize_rule_value(d);
+        }
+        if rule_matches(d, &allowed) {
+            return None;
+        }
+        if rule_matches(d, &distracting) {
+            return normalize_rule_value(d);
+        }
+        if let Some(key) = normalize_rule_value(d) {
+            if let Ok(cache) = ai_classifications().lock() {
+                if let Some(v) = cache.get(&key) {
+                    return if *v { Some(key) } else { None };
+                }
+            }
+            enqueue_ai_classification(key);
+        }
+        return None;
+    }
+    let app_norm = normalize_app_name(&app).unwrap_or(app.clone());
+    if default_distracting_entries()
+        .iter()
+        .any(|k| app_norm.contains(k))
+    {
+        return Some(app_norm);
+    }
+    if distracting_keywords().iter().any(|k| app_norm.contains(k)) {
+        return Some(app_norm);
+    }
+    if rule_matches(&app_norm, &allowed) {
+        return None;
+    }
+    if rule_matches(&app_norm, &distracting) {
+        return Some(app_norm.clone());
+    }
+    if let Ok(cache) = ai_classifications().lock() {
+        if let Some(v) = cache.get(&app_norm) {
+            return if *v { Some(app_norm.clone()) } else { None };
+        }
+    }
+    enqueue_ai_classification(app_norm);
+    None
 }
 
 /// Default API host (production). Override with `BACKEND_URL` or persisted `backend_url` if needed.
@@ -327,12 +561,140 @@ fn get_running_app_names() -> Vec<String> {
     apps
 }
 
+#[cfg(target_os = "windows")]
+fn process_name_by_pid(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    use sysinfo::{ProcessesToUpdate, System};
+    let mut system = System::new_all();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    for process in system.processes().values() {
+        if process.pid().as_u32() != pid {
+            continue;
+        }
+        let raw_name = process.name().to_string_lossy().trim().to_string();
+        if !raw_name.is_empty() {
+            return Some(raw_name);
+        }
+    }
+    None
+}
+
+fn sanitize_foreground_snapshot(app_name: String, title: String, pid: u32) -> Option<(String, String, u32)> {
+    #[cfg(target_os = "windows")]
+    let mut app = app_name.trim().to_string();
+    #[cfg(not(target_os = "windows"))]
+    let app = app_name.trim().to_string();
+    let t = title.trim().to_string();
+
+    // Windows can briefly report empty app name for secure/system overlays (UAC, shell dialogs).
+    // Fallback to process-table lookup by PID so classification/reporting still has a stable identifier.
+    #[cfg(target_os = "windows")]
+    {
+        if app.is_empty() {
+            app = process_name_by_pid(pid).unwrap_or_else(|| "windows-system".to_string());
+        }
+    }
+
+    if app.is_empty() {
+        return None;
+    }
+
+    Some((app, t, pid))
+}
+
+/// Resolve browser domain for a specific foreground snapshot (app/pid/title).
+/// Returns None if focus changed before/after URL read to avoid cross-window flicker.
+fn resolve_focused_browser_domain(app_name: &str, title: &str, pid: u32) -> Option<String> {
+    if !is_browser(app_name) {
+        return None;
+    }
+    // Snapshot must still be focused when we begin.
+    if let Some((_, _, curr_pid)) = get_foreground_info() {
+        if curr_pid != pid {
+            return None;
+        }
+    } else {
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    let url_read_timeout = std::time::Duration::from_millis(250);
+    #[cfg(not(target_os = "macos"))]
+    let url_read_timeout = std::time::Duration::from_millis(250);
+    let domain = browser_url::get_active_browser_domain_nonblocking(
+        pid,
+        url_read_timeout,
+        Some(app_name),
+    )
+    .or_else(|| browser_url::infer_site_from_window_title(title));
+    // Snapshot must still match when we finish.
+    if let Some((_, _, curr_pid)) = get_foreground_info() {
+        if curr_pid != pid {
+            return None;
+        }
+    } else {
+        return None;
+    }
+    domain
+}
+
+fn browser_internal_domain_marker(app_name: &str) -> &'static str {
+    let lower = app_name.to_lowercase();
+    if lower.contains("chrome")
+        || lower.contains("chromium")
+        || lower.contains("arc")
+        || lower.contains("opera")
+        || lower.contains("vivaldi")
+        || lower.contains("edge")
+        || lower.contains("brave")
+    {
+        "chrome-internal"
+    } else if lower.contains("safari") {
+        "safari-internal"
+    } else if lower.contains("firefox") {
+        "firefox-internal"
+    } else {
+        "browser-internal"
+    }
+}
+
+/// Browser reports must always send a non-empty domain value.
+/// If we cannot resolve a real host (new tab, settings, restricted URL, permission issue),
+/// send an explicit internal marker so server can treat it as non-website context.
+fn resolve_browser_domain_for_reporting(app_name: &str, title: &str, pid: u32) -> Option<String> {
+    if !is_browser(app_name) {
+        return None;
+    }
+    match resolve_focused_browser_domain(app_name, title, pid) {
+        Some(domain) => Some(domain),
+        None => {
+            let marker = browser_internal_domain_marker(app_name).to_string();
+            println!(
+                "[Browser URL] Using fallback domain marker for {}: {}",
+                app_name, marker
+            );
+            Some(marker)
+        }
+    }
+}
+
 /// Report current desktop state to server; server remains source of truth.
 fn check_apps_with_server(
     user_id: &str,
     foreground_app: &str,
     domain: Option<&str>,
 ) -> Option<DesktopAppsResponse> {
+    if APPS_REPORT_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        println!(
+            "[Desktop Apps] ⏭️ Skipping report (in-flight): userId={}, foregroundApp={}",
+            user_id, foreground_app
+        );
+        return None;
+    }
     println!("[Desktop] Sending app report for userId={}", user_id);
     println!("[Desktop Apps] 📤 Checking app with server: userId={}, foregroundApp={}", user_id, foreground_app);
     
@@ -349,21 +711,22 @@ fn check_apps_with_server(
         "source": "desktopNative"
     });
     
-    // Use blocking HTTP request (we're in a thread)
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build() {
-            Ok(c) => c,
-            Err(e) => {
-                println!("[Detection] Failed to create HTTP client: {}", e);
-                return None;
-            }
-        };
-    
-    match client.post(&endpoint)
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send() {
+    let result = (|| {
+        // Use blocking HTTP request (we're in a thread)
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build() {
+                Ok(c) => c,
+                Err(e) => {
+                    println!("[Detection] Failed to create HTTP client: {}", e);
+                    return None;
+                }
+            };
+        
+        match client.post(&endpoint)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send() {
             Ok(response) => {
                 match response.json::<DesktopAppsResponse>() {
                     Ok(data) => {
@@ -391,43 +754,21 @@ fn check_apps_with_server(
                 None
             }
         }
+    })();
+    APPS_REPORT_IN_FLIGHT.store(false, Ordering::SeqCst);
+    result
 }
 
-/// When `/api/desktop/poll` returns `requestImmediateAppReport`, send foreground state immediately
-/// instead of waiting for the detection loop's periodic heartbeat (faster distraction clearance).
 fn run_immediate_desktop_apps_report(user_id: &str) {
-    println!(
-        "[Desktop] Immediate app report (requestImmediateAppReport) for userId={}",
-        user_id
-    );
     let Some((app_name, title, pid)) = get_foreground_info() else {
-        println!("[Desktop] Immediate app report skipped: no foreground window");
         return;
     };
-    let is_fg_browser = is_browser(&app_name);
-    #[cfg(target_os = "macos")]
-    let url_read_timeout = std::time::Duration::from_millis(900);
-    #[cfg(not(target_os = "macos"))]
-    let url_read_timeout = std::time::Duration::from_millis(250);
-
-    let domain = if is_fg_browser {
-        match browser_url::get_active_browser_domain_nonblocking(
-            pid,
-            url_read_timeout,
-            Some(app_name.as_str()),
-        ) {
-            Some(d) => Some(d),
-            None => browser_url::infer_site_from_window_title(&title),
-        }
+    let reporting_domain = if is_browser(&app_name) {
+        resolve_browser_domain_for_reporting(&app_name, &title, pid)
     } else {
         None
     };
-    println!(
-        "[Desktop] Immediate report foreground: process={} domain={:?} (foregroundApp=process name)",
-        app_name,
-        domain.as_deref()
-    );
-    let _ = check_apps_with_server(user_id, &app_name, domain.as_deref());
+    let _ = check_apps_with_server(user_id, &app_name, reporting_domain.as_deref());
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -630,7 +971,7 @@ fn stop_heartbeat_loop() {
     }
 }
 
-/// Start the heartbeat ping loop - runs every 10 seconds. Reads current userId from
+/// Start the heartbeat ping loop - runs every 30 seconds. Reads current userId from
 /// global each ping so a deep-link switch is reflected immediately.
 fn start_heartbeat_loop() {
     // Stop any existing heartbeat loop first
@@ -658,7 +999,7 @@ fn start_heartbeat_loop() {
                     }
                 });
             }
-            for _ in 0..10 {
+            for _ in 0..30 {
                 if !HEARTBEAT_RUNNING.load(Ordering::SeqCst) {
                     println!("[Heartbeat] 🛑 Heartbeat loop stopped");
                     return;
@@ -1213,7 +1554,6 @@ struct SessionResponse {
     #[serde(rename = "joinedAt")]
     joined_at: Option<String>,
     active: Option<bool>,
-    /// Server asks for an immediate POST /api/desktop/apps (e.g. while distraction is active).
     #[serde(default, rename = "requestImmediateAppReport")]
     request_immediate_app_report: bool,
     #[serde(default, rename = "noteTakingMode")]
@@ -1225,6 +1565,8 @@ struct SessionResponse {
     pending_alerts: Option<Vec<PendingAlert>>,
     #[serde(rename = "distractingApps", default)]
     distracting_apps: Vec<String>,
+    #[serde(rename = "blockedApps", default)]
+    blocked_apps: Vec<String>,
     #[serde(rename = "allowedApps", default)]
     allowed_apps: Vec<String>,
 }
@@ -1299,28 +1641,10 @@ fn get_foreground_info() -> Option<(String, String, u32)> {
             let app_name = window.app_name;
             let title = window.title;
             let pid = window.process_id as u32;
-            Some((app_name, title, pid))
+            sanitize_foreground_snapshot(app_name, title, pid)
         }
         Err(_) => None,
     }
-}
-
-/// True when the focused app is a Chromium browser (extension can report the active tab).
-/// Server `currentDistraction` must only apply while this is true — otherwise a stale tab
-/// from an old browser session re-triggers the warning when switching from e.g. Chess → Chrome.
-fn foreground_is_chromium_browser() -> bool {
-    get_foreground_info()
-        .map(|(app_name, _, _)| {
-            let app_lower = app_name.to_lowercase();
-            app_lower.contains("chrome")
-                || app_lower.contains("chromium")
-                || app_lower.contains("arc")
-                || app_lower.contains("opera")
-                || app_lower.contains("vivaldi")
-                || app_lower.contains("edge")
-                || app_lower.contains("brave")
-        })
-        .unwrap_or(false)
 }
 
 fn is_browser(app_name: &str) -> bool {
@@ -1335,45 +1659,74 @@ fn get_detection_session() -> &'static Mutex<Option<(String, String)>> {
     DETECTION_SESSION.get_or_init(|| Mutex::new(None))
 }
 
-/// Send focus state to backend
-fn send_focus_state(user_id: &str, session_id: &str, state: &str) {
-    println!("[Focus State] 📡 Sending state update: userId={}, sessionId={}, state={}", user_id, session_id, state);
-    
+fn post_distraction_state_blocking(user_id: &str, distracted: bool, domain: Option<&str>) -> bool {
+    if distracted && domain.is_none() {
+        println!("[DistractionState] Skipped distracted=true without domain");
+        return false;
+    }
     let backend_url = backend_base_url();
-    let endpoint = format!("{}/api/activity/update", backend_url);
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    
-    let user_id = user_id.to_string();
-    let session_id = session_id.to_string();
-    let state = state.to_string();
-    
-    tauri::async_runtime::spawn(async move {
-        let client = match tauri::api::http::ClientBuilder::new().build() {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        
-        let body = serde_json::json!({
-            "userId": user_id,
-            "sessionId": session_id,
-            "status": state,
-            "timestamp": timestamp,
-        });
-        
-        let request = match tauri::api::http::HttpRequestBuilder::new("POST", &endpoint) {
-            Ok(r) => r,
-            Err(_) => return,
-        };
-        
-        let request = match request.header("Content-Type", "application/json") {
-            Ok(r) => r,
-            Err(_) => return,
-        };
-        
-        let request = request.body(tauri::api::http::Body::Json(body));
-        
-        let _ = client.send(request).await;
+    let endpoint = format!("{}/api/desktop/distraction-state", backend_url);
+    let mut body = serde_json::json!({
+        "userId": user_id,
+        "distracted": distracted
     });
+    if distracted {
+        if let Some(d) = domain {
+            body["domain"] = serde_json::Value::String(d.to_string());
+        }
+    }
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            println!("[DistractionState] Failed to create client: {}", e);
+            return false;
+        }
+    };
+    for attempt in 1..=3 {
+        let res = client
+            .post(&endpoint)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send();
+        match res {
+            Ok(r) if r.status().is_success() => {
+                println!(
+                    "[DistractionState] ✅ sent distracted={} attempt={}",
+                    distracted, attempt
+                );
+                return true;
+            }
+            Ok(r) => {
+                println!(
+                    "[DistractionState] HTTP {} (attempt {}/3)",
+                    r.status(),
+                    attempt
+                );
+            }
+            Err(e) => println!(
+                "[DistractionState] request failed: {} (attempt {}/3)",
+                e, attempt
+            ),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    false
+}
+
+fn send_distraction_state(user_id: &str, distracted: bool, domain: Option<&str>) -> bool {
+    // Prevent duplicate transitions.
+    let already = DISTRACTION_REPORTED.load(Ordering::SeqCst);
+    if distracted == already {
+        return true;
+    }
+    let ok = post_distraction_state_blocking(user_id, distracted, domain);
+    if ok {
+        DISTRACTION_REPORTED.store(distracted, Ordering::SeqCst);
+    }
+    ok
 }
 
 /// Show distraction warning popup (orange)
@@ -1477,8 +1830,6 @@ fn dismiss_distraction_warning(app_handle: &tauri::AppHandle) {
         let _ = window.close();
         println!("[Detection] Distraction warning dismissed");
     }
-    // Clear browser distraction flag when dismissing
-    BROWSER_DISTRACTION_ACTIVE.store(false, Ordering::SeqCst);
 }
 
 /// Start distraction detection for a session
@@ -1530,9 +1881,11 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         *session = Some((user_id.clone(), session_id.clone()));
         println!("[Detection] ✅ Stored session info in DETECTION_SESSION");
     }
-    
-    // Clear any stale browser distraction state
-    BROWSER_DISTRACTION_ACTIVE.store(false, Ordering::SeqCst);
+
+    // If we previously failed to send a clear, retry once at session start.
+    if DISTRACTION_REPORTED.load(Ordering::SeqCst) {
+        let _ = send_distraction_state(&user_id, false, None);
+    }
     
     DETECTION_RUNNING.store(true, Ordering::SeqCst);
     
@@ -1548,84 +1901,53 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         let mut warning_shown_at: Option<std::time::Instant> = None;
         let mut is_marked_distracted = false;
         let mut last_sent_state: Option<&str> = None;
-        let mut warning_from_browser = false; // Track if current warning is from browser vs local app
         let mut last_server_report: Option<std::time::Instant> = None;
-        let mut last_server_result: Option<bool> = None;
         let mut last_reported_app: String = String::new();
-        /// Last domain we sent for `foregroundApp` when the foreground was a browser (tab changes do not change app name).
+        // Last domain we sent for `foregroundApp` when the foreground was a browser (tab changes do not change app name).
         let mut last_reported_domain: Option<String> = None;
-        
-        /// Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
+        let mut active_distraction_key: Option<String> = None;
+        // Website-only: ignore brief raw classification flips (tab switch, address bar read delay).
+        let mut browser_debounce_committed: bool = false;
+        let mut browser_debounce_pending_raw: Option<bool> = None;
+        let mut browser_debounce_since: Option<std::time::Instant> = None;
+
+        // Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
         const WARNING_DURATION_SECS: u64 = 10;
-        /// Re-report on a timer when nothing else changed (browser tab switches use domain comparison instead).
-        /// Keep ≤ server disconnect window; aligns with poll-driven `requestImmediateAppReport` for fast clearance.
+        /// Optional apps-report heartbeat for server-side UI/debug views; local rules drive distraction state.
         const SERVER_REPORT_HEARTBEAT_SECS: u64 = 10;
+        /// Stabilize distracting vs clear for browsers only (native apps stay instant).
+        const BROWSER_DISTRACTION_DEBOUNCE_MS: u64 = 280;
         
         while DETECTION_RUNNING.load(Ordering::SeqCst) {
-            // Poll quickly while distracted or a warning is up so popups dismiss soon after switching apps/tabs.
-            let mut sleep_ms: u64 = 1000;
+            // Keep app/site transitions snappy: 250ms baseline, 200ms while warning/distracted.
+            let mut sleep_ms: u64 = 250;
             // Get session info
             let session_info = {
                 get_detection_session().lock().ok().and_then(|s| s.clone())
             };
             
-            if let Some((user_id, session_id)) = session_info {
-                // Check browser distraction flag (updated by polling)
-                let browser_distraction_reported = BROWSER_DISTRACTION_ACTIVE.load(Ordering::SeqCst);
-                
+            if let Some((user_id, _session_id)) = session_info {
                 // Get foreground info and classify
                 if let Some((app_name, title, pid)) = get_foreground_info() {
                     // Check if foreground is our own app (the warning popup itself)
                     let app_lower = app_name.to_lowercase();
                     let is_our_app = app_lower.contains("flowlocked");
                     
-                    // Check if foreground is Chrome (browser extension only runs in Chrome)
-                    // Only show browser distraction warning when Chrome is the active app
-                    let is_chrome = app_lower.contains("chrome")
-                        || app_lower.contains("chromium")
-                        || app_lower.contains("arc") // Arc is Chromium-based and supports Chrome extensions
-                        || app_lower.contains("opera")
-                        || app_lower.contains("vivaldi")
-                        || app_lower.contains("edge")
-                        || app_lower.contains("brave");
-
-                    // Browser distraction only counts when Chrome is in foreground
-                    let is_browser_distracting = browser_distraction_reported && is_chrome;
-                    
-                    let is_fg_browser = is_browser(&app_name);
-                    // macOS osascript/AX can exceed short timeouts; browsers are "neutral" on the server without a hostname.
-                    #[cfg(target_os = "macos")]
-                    let url_read_timeout = std::time::Duration::from_millis(900);
-                    #[cfg(not(target_os = "macos"))]
-                    let url_read_timeout = std::time::Duration::from_millis(250);
-
-                    // Resolve URL/domain every loop for browsers so tab-only changes re-report without waiting for heartbeat.
-                    let domain = if is_fg_browser {
-                        match browser_url::get_active_browser_domain_nonblocking(
-                            pid,
-                            url_read_timeout,
-                            Some(app_name.as_str()),
-                        )
-                        {
-                            Some(d) => Some(d),
-                            None => {
-                                let inferred =
-                                    browser_url::infer_site_from_window_title(&title);
-                                if inferred.is_some() {
-                                    log!(
-                                        "[Desktop Apps] using title-based site hint (address bar unread); title_len={}",
-                                        title.len()
-                                    );
-                                }
-                                inferred
-                            }
-                        }
+                    // Resolve actual focused browser domain for local distraction matching.
+                    let local_domain = resolve_focused_browser_domain(&app_name, &title, pid);
+                    // Reporting domain may use internal marker fallback if URL is unreadable.
+                    let reporting_domain = if is_browser(&app_name) {
+                        resolve_browser_domain_for_reporting(&app_name, &title, pid)
                     } else {
                         None
                     };
+                    let local_distraction_key =
+                        classify_local_distraction(&app_name, local_domain.as_deref());
+                    let is_browser_distracting =
+                        local_distraction_key.is_some() && local_domain.is_some();
 
                     let foreground_identity_changed = last_reported_app != app_name
-                        || (is_fg_browser && last_reported_domain != domain);
+                        || (is_browser(&app_name) && last_reported_domain != local_domain);
 
                     // Report on app switch, browser tab/site change, or periodic heartbeat.
                     let should_report_server = match last_server_report {
@@ -1639,63 +1961,73 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     if should_report_server {
                         last_server_report = Some(std::time::Instant::now());
                         last_reported_app = app_name.clone();
-                        last_reported_domain = if is_fg_browser {
-                            domain.clone()
+                        last_reported_domain = if is_browser(&app_name) {
+                            local_domain.clone()
                         } else {
                             None
                         };
                         log!(
-                            "[Desktop Apps] foreground report: process={} pid={} domain={:?} (API foregroundApp=process)",
+                            "[Desktop Apps] foreground report: process={} pid={} local_domain={:?} report_domain={:?}",
                             app_name,
                             pid,
-                            domain.as_deref()
+                            local_domain.as_deref(),
+                            reporting_domain.as_deref()
                         );
 
                         if let Some(ref current_user) = get_current_user_id() {
-                            if let Some(server_data) = check_apps_with_server(
-                                current_user,
-                                &app_name,
-                                domain.as_deref(),
-                            ) {
-                                last_server_result = Some(server_data.is_foreground_blocked);
-                            }
+                            let uid = current_user.clone();
+                            let app_for_report = app_name.clone();
+                            let domain_for_report = reporting_domain.clone();
+                            // Non-blocking: local distraction decisions should never wait on network.
+                            std::thread::spawn(move || {
+                                let _ = check_apps_with_server(
+                                    &uid,
+                                    &app_for_report,
+                                    domain_for_report.as_deref(),
+                                );
+                            });
                         }
                     }
 
-                    // Server remains source of truth; keep last known answer if report fails.
-                    let is_server_blocked = last_server_result.unwrap_or(false);
+                    // Desktop is source of truth now: local classification from cached poll rules.
+                    let is_server_blocked = local_distraction_key.is_some();
                     
                     // Determine if currently distracting
-                    // Special case: if warning was from a LOCAL app (not browser) and user switched 
+                    // Special case: if warning was from a LOCAL app (not browser) and user switched
                     // to a non-blocked app, dismiss even if browser has stale distraction data
-                    let is_distracting_now = if warning_shown_at.is_some() && !warning_from_browser && !is_server_blocked {
-                        // Warning was from local app, and current app is not server-blocked
-                        // Dismiss the warning - user switched away from the distracting app
-                        false
+                    let raw_distracting = is_server_blocked || is_browser_distracting;
+                    let in_browser = is_browser(&app_name);
+                    let is_distracting_now = if in_browser {
+                        match browser_debounce_pending_raw {
+                            None => {
+                                if raw_distracting != browser_debounce_committed {
+                                    browser_debounce_pending_raw = Some(raw_distracting);
+                                    browser_debounce_since = Some(std::time::Instant::now());
+                                }
+                            }
+                            Some(pending) => {
+                                if raw_distracting != pending {
+                                    browser_debounce_pending_raw = Some(raw_distracting);
+                                    browser_debounce_since = Some(std::time::Instant::now());
+                                } else if browser_debounce_since.is_some_and(|t| {
+                                    t.elapsed().as_millis() as u64 >= BROWSER_DISTRACTION_DEBOUNCE_MS
+                                }) {
+                                    browser_debounce_committed = pending;
+                                    browser_debounce_pending_raw = None;
+                                    browser_debounce_since = None;
+                                }
+                            }
+                        }
+                        browser_debounce_committed
                     } else {
-                        is_server_blocked || is_browser_distracting
+                        browser_debounce_committed = false;
+                        browser_debounce_pending_raw = None;
+                        browser_debounce_since = None;
+                        raw_distracting
                     };
-                    
+
                     // If our app is in foreground, handle timer but also check if distraction cleared
                     if is_our_app {
-                        // Only auto-dismiss if the warning was from a BROWSER distraction that's now cleared
-                        // For LOCAL app distractions, don't dismiss - wait for user to actually switch away
-                        if warning_from_browser && !browser_distraction_reported && warning_shown_at.is_some() && !is_marked_distracted {
-                            // Browser distraction cleared (user closed tab or navigated away) - dismiss the warning
-                            println!("[Detection] ✅ Browser distraction cleared while viewing popup - dismissing");
-                            dismiss_distraction_warning(&app_handle);
-                            warning_shown_at = None;
-                            warning_from_browser = false;
-                            
-                            if last_sent_state != Some("active") {
-                                send_focus_state(&user_id, &session_id, "active");
-                                println!("[Detection] Back to active");
-                                last_sent_state = Some("active");
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(200));
-                            continue;
-                        }
-                        
                         // Still check if warning timer expired
                         if let Some(start_time) = warning_shown_at {
                             if start_time.elapsed().as_secs() >= WARNING_DURATION_SECS && !is_marked_distracted {
@@ -1703,12 +2035,6 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 is_marked_distracted = true;
                                 println!("[Detection] ⏰ 10 seconds passed - transitioning to distracted");
                                 update_distraction_warning_to_distracted(&app_handle);
-                                
-                                if last_sent_state != Some("distracted") {
-                                    send_focus_state(&user_id, &session_id, "distracted");
-                                    println!("[Detection] Marked as distracted after 10s warning");
-                                    last_sent_state = Some("distracted");
-                                }
                             }
                         }
                         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -1728,11 +2054,11 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                     .show();
                             }
                             warning_shown_at = Some(std::time::Instant::now());
-                            warning_from_browser = is_browser_distracting; // Track source of distraction
+                            active_distraction_key = local_distraction_key.clone();
                             if is_browser_distracting {
-                                println!("[Detection] Warning triggered by browser extension");
+                                println!("[Detection] Warning triggered by local browser domain match");
                             } else {
-                                println!("[Detection] ⚠️ Warning triggered - server identified '{}' as distracting", app_name);
+                                println!("[Detection] ⚠️ Warning triggered by local rules for '{}'", app_name);
                             }
                         } else if let Some(start_time) = warning_shown_at {
                             // Warning already shown - check if distraction warning duration (10s) passed
@@ -1741,12 +2067,18 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 is_marked_distracted = true;
                                 println!("[Detection] ⏰ 10 seconds passed - transitioning to distracted");
                                 update_distraction_warning_to_distracted(&app_handle);
-                                
-                                if last_sent_state != Some("distracted") {
-                                    send_focus_state(&user_id, &session_id, "distracted");
-                                    println!("[Detection] Marked as distracted after 10s warning");
-                                    last_sent_state = Some("distracted");
-                                }
+                            }
+                        }
+                        if is_marked_distracted && last_sent_state != Some("distracted") {
+                            if send_distraction_state(
+                                &user_id,
+                                true,
+                                active_distraction_key.as_deref(),
+                            ) {
+                                println!("[Detection] Marked as distracted after 10s warning");
+                                last_sent_state = Some("distracted");
+                            } else {
+                                println!("[Detection] ⚠️ Failed to report distracted; will retry");
                             }
                         }
                     } else {
@@ -1756,34 +2088,36 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                             dismiss_distraction_warning(&app_handle);
                             warning_shown_at = None;
                             is_marked_distracted = false;
-                            warning_from_browser = false; // Reset tracking
+                            active_distraction_key = None;
                             
-                            if last_sent_state != Some("active") {
-                                send_focus_state(&user_id, &session_id, "active");
-                                println!("[Detection] Back to active");
+                            if last_sent_state == Some("distracted") {
+                                if send_distraction_state(&user_id, false, None) {
+                                    println!("[Detection] Back to active");
+                                    last_sent_state = Some("active");
+                                } else {
+                                    println!("[Detection] ⚠️ Failed to clear distracted; will retry");
+                                }
+                            }
+                        } else if DISTRACTION_REPORTED.load(Ordering::SeqCst) {
+                            if send_distraction_state(&user_id, false, None) {
                                 last_sent_state = Some("active");
                             }
-                        } else if last_sent_state.is_none() {
-                            // Initial state - send active
-                            send_focus_state(&user_id, &session_id, "active");
-                            last_sent_state = Some("active");
                         }
                     }
 
-                    // Faster polling while server says foreground is blocked or a warning/distracted state is active.
+                    // Faster polling while warning/distracted state is active.
                     sleep_ms = if warning_shown_at.is_some()
                         || is_marked_distracted
-                        || last_server_result.unwrap_or(false)
                     {
                         200
                     } else {
-                        1000
+                        250
                     };
                 } else {
                     sleep_ms = if warning_shown_at.is_some() || is_marked_distracted {
                         200
                     } else {
-                        1000
+                        250
                     };
                 }
             }
@@ -1818,6 +2152,13 @@ fn stop_detection(app_handle: &tauri::AppHandle) {
             "[Detection] 🛑 stop_detection called while running (userId={}, sessionId={})",
             uid, sid
         );
+        if DISTRACTION_REPORTED.load(Ordering::SeqCst) {
+            if send_distraction_state(&uid, false, None) {
+                println!("[Detection] Cleared distracted state on stop_detection");
+            } else {
+                println!("[Detection] ⚠️ Failed clearing distracted state on stop_detection");
+            }
+        }
     } else {
         println!("[Detection] 🛑 stop_detection called while running (no prior session stored)");
     }
@@ -1866,9 +2207,6 @@ fn dismiss_all_notifications(app_handle: &tauri::AppHandle) {
         let _ = window.close();
         println!("[Cleanup] Closed startup-notification window");
     }
-    
-    // Clear browser distraction flag
-    BROWSER_DISTRACTION_ACTIVE.store(false, Ordering::SeqCst);
     
     println!("[Cleanup] All notification windows dismissed");
 }
@@ -1931,33 +2269,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
         log!("[POLL DEBUG] pendingAlerts in raw JSON: {}", 
             raw.get("pendingAlerts").map(|v| serde_json::to_string(v).unwrap_or_default()).unwrap_or_else(|| "MISSING".to_string()));
         
-        // IMPORTANT: Keep /api/activity/session as a single consumer to avoid racing and
-        // accidentally consuming one-shot pending alerts from a second polling loop.
-        let browser_distraction = raw.get("currentDistraction");
-        let cd_value = browser_distraction.filter(|v| !v.is_null());
-        let has_current_distraction_obj = cd_value.map(|v| v.is_object()).unwrap_or(false);
-        let cd_domain = cd_value
-            .and_then(|d| d.get("domain"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_lowercase());
-
-        // Server `currentDistraction` is driven by the extension + cleared when the desktop
-        // reports a native foreground app (see POST /api/desktop/apps source=desktopNative).
-        let browser_active_now =
-            has_current_distraction_obj && foreground_is_chromium_browser();
-        let browser_was_active = BROWSER_DISTRACTION_ACTIVE.swap(browser_active_now, Ordering::SeqCst);
-        if browser_active_now {
-            let domain = cd_domain
-                .as_deref()
-                .unwrap_or("a distracting site");
-            if !browser_was_active {
-                log!("[POLL DEBUG] 🌐 currentDistraction became ACTIVE (domain={})", domain);
-            } else {
-                log!("[POLL DEBUG] 🌐 currentDistraction still ACTIVE (domain={})", domain);
-            }
-        } else if browser_was_active {
-            log!("[POLL DEBUG] 🌐 currentDistraction cleared");
-        }
+        // Cache latest distraction rules from poll. Detection loop uses these locally as source of truth.
         
         let session_response: SessionResponse = serde_json::from_value(raw.clone()).map_err(|e| {
             // When parse fails, inspect pendingAlerts specifically to debug desktop/server mismatch
@@ -1972,16 +2284,22 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
         })?;
         
         let alert_count = session_response.pending_alerts.as_ref().map(|a| a.len()).unwrap_or(0);
+        update_distraction_rules_from_poll(
+            &session_response.distracting_apps,
+            &session_response.allowed_apps,
+            &session_response.blocked_apps,
+        );
         log!("[POLL DEBUG] Parsed OK — sessionId={:?} pendingAlerts count={} distractingApps count={}",
                  session_response.session_id,
                  alert_count,
                  session_response.distracting_apps.len());
         log!(
-            "[POLL DEBUG] Parsed extra: active={:?} kicked={} joinedAt={:?} allowedApps count={} requestImmediateAppReport={}",
+            "[POLL DEBUG] Parsed extra: active={:?} kicked={} joinedAt={:?} allowedApps count={} blockedApps count={} requestImmediateAppReport={}",
             session_response.active,
             session_response.kicked,
             session_response.joined_at,
             session_response.allowed_apps.len(),
+            session_response.blocked_apps.len(),
             session_response.request_immediate_app_report
         );
 
@@ -2010,17 +2328,16 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
             session_response.note_taking_mode
         );
 
-        if session_response.request_immediate_app_report {
-            log!(
-                "[POLL DEBUG] requestImmediateAppReport=true — immediate POST /api/desktop/apps for userId={}",
-                userId
-            );
+        if session_response.request_immediate_app_report
+            && session_response.session_id.is_some()
+            && session_response.active.unwrap_or(true)
+        {
             let uid = userId.clone();
             std::thread::spawn(move || {
                 run_immediate_desktop_apps_report(&uid);
             });
         }
-        
+
         // Process pending alerts
         if let Some(ref alerts) = session_response.pending_alerts {
             if !alerts.is_empty() {
@@ -2275,10 +2592,15 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
         let error_msg = format!("Backend returned error status: {}", status_code);
         log!("[POLL DEBUG] ❌ HTTP error: {}", error_msg);
         NOTE_TAKING_MODE.store(false, Ordering::SeqCst);
-        stop_detection(&app);
+        log!(
+            "[POLL DEBUG] Keeping local detection running with cached rules despite poll HTTP error"
+        );
         log!("[POLL DEBUG] ═══ Poll #{} complete in {}ms (error) ═══", poll_num, poll_start.elapsed().as_millis());
         Ok(ActiveSessionPollResult {
-            session_id: None,
+            session_id: get_detection_session()
+                .lock()
+                .ok()
+                .and_then(|s| s.as_ref().map(|(_, sid)| sid.clone())),
             note_taking_mode: false,
         })
     }
@@ -2423,12 +2745,14 @@ fn main() {
     
     tauri::Builder::default()
         .system_tray(system_tray)
-        .on_system_tray_event(|_app, event| {
+        .on_system_tray_event(|app, event| {
             match event {
                 tauri::SystemTrayEvent::MenuItemClick { id, .. } => {
                     match id.as_str() {
                         "quit" => {
                             println!("[Tray] Quit clicked — notifying server then exiting");
+                            stop_heartbeat_loop();
+                            stop_detection(app);
                             if let Some(uid) = get_current_user_id() {
                                 send_desktop_disconnect_blocking(&uid);
                             }

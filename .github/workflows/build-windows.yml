@@ -50,7 +50,8 @@ jobs:
       - name: Build Tauri (Windows)
         env:
           CI: "true"
-        run: npm run tauri build
+        # Must match local bundles: sync-tray-icon + `tauri build` (see package.json `tauri:build`).
+        run: npm run tauri:build
 
       - name: List bundle output (debug)
         if: always()

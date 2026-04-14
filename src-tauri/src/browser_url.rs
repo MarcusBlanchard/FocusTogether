@@ -301,8 +301,36 @@ mod windows {
     use uiautomation::patterns::UIValuePattern;
     use uiautomation::types::{Handle, TreeScope, UIProperty};
     use uiautomation::variants::Variant;
-    use uiautomation::UIAutomation;
+    use uiautomation::{UIElement, UIAutomation};
     use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+
+    fn read_edit_value(
+        automation: &UIAutomation,
+        root: &UIElement,
+        property: UIProperty,
+        needle: &str,
+    ) -> Option<String> {
+        let type_cond = automation
+            .create_property_condition(
+                UIProperty::ControlType,
+                Variant::from(ControlType::Edit as i32),
+                None,
+            )
+            .ok()?;
+        let prop_cond = automation
+            .create_property_condition(property, Variant::from(needle), None)
+            .ok()?;
+        let and_cond = automation.create_and_condition(type_cond, prop_cond).ok()?;
+        let found = root.find_first(TreeScope::Subtree, &and_cond).ok()?;
+        let pattern = found.get_pattern::<UIValuePattern>().ok()?;
+        let value = pattern.get_value().ok()?;
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
 
     pub(super) fn get_active_browser_url(pid: u32) -> Option<String> {
         let automation = match UIAutomation::new() {
@@ -334,38 +362,28 @@ mod windows {
             }
         };
 
-        let names = ["Address and search bar", "Search or enter address"];
-        for name in names {
-            let type_cond = match automation.create_property_condition(
-                UIProperty::ControlType,
-                Variant::from(ControlType::Edit as i32),
-                None,
-            ) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let name_cond = match automation.create_property_condition(
-                UIProperty::Name,
-                Variant::from(name),
-                None,
-            ) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let and_cond = match automation.create_and_condition(type_cond, name_cond) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            if let Ok(found) = root.find_first(TreeScope::Subtree, &and_cond) {
-                if let Ok(pattern) = found.get_pattern::<UIValuePattern>() {
-                    if let Ok(value) = pattern.get_value() {
-                        let trimmed = value.trim().to_string();
-                        if !trimmed.is_empty() {
-                            return Some(trimmed);
-                        }
-                    }
-                }
+        let name_candidates = [
+            "Address and search bar",
+            "Search or enter address",
+            "Address bar",
+            "Address field",
+        ];
+        for candidate in name_candidates {
+            if let Some(url) = read_edit_value(&automation, &root, UIProperty::Name, candidate) {
+                return Some(url);
+            }
+        }
+        let automation_id_candidates = [
+            "address and search bar",
+            "search-or-enter-address",
+            "urlbar-input",
+            "addressEditBox",
+        ];
+        for candidate in automation_id_candidates {
+            if let Some(url) =
+                read_edit_value(&automation, &root, UIProperty::AutomationId, candidate)
+            {
+                return Some(url);
             }
         }
 
