@@ -1906,18 +1906,12 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         // Last domain we sent for `foregroundApp` when the foreground was a browser (tab changes do not change app name).
         let mut last_reported_domain: Option<String> = None;
         let mut active_distraction_key: Option<String> = None;
-        // Website-only: ignore brief raw classification flips (tab switch, address bar read delay).
-        let mut browser_debounce_committed: bool = false;
-        let mut browser_debounce_pending_raw: Option<bool> = None;
-        let mut browser_debounce_since: Option<std::time::Instant> = None;
 
         // Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
         const WARNING_DURATION_SECS: u64 = 10;
-        /// Optional apps-report heartbeat for server-side UI/debug views; local rules drive distraction state.
+        // Optional apps-report heartbeat for server-side UI/debug views; local rules drive distraction state.
         const SERVER_REPORT_HEARTBEAT_SECS: u64 = 10;
-        /// Stabilize distracting vs clear for browsers only (native apps stay instant).
-        const BROWSER_DISTRACTION_DEBOUNCE_MS: u64 = 280;
-        
+
         while DETECTION_RUNNING.load(Ordering::SeqCst) {
             // Keep app/site transitions snappy: 250ms baseline, 200ms while warning/distracted.
             let mut sleep_ms: u64 = 250;
@@ -1995,36 +1989,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     // Determine if currently distracting
                     // Special case: if warning was from a LOCAL app (not browser) and user switched
                     // to a non-blocked app, dismiss even if browser has stale distraction data
-                    let raw_distracting = is_server_blocked || is_browser_distracting;
-                    let in_browser = is_browser(&app_name);
-                    let is_distracting_now = if in_browser {
-                        match browser_debounce_pending_raw {
-                            None => {
-                                if raw_distracting != browser_debounce_committed {
-                                    browser_debounce_pending_raw = Some(raw_distracting);
-                                    browser_debounce_since = Some(std::time::Instant::now());
-                                }
-                            }
-                            Some(pending) => {
-                                if raw_distracting != pending {
-                                    browser_debounce_pending_raw = Some(raw_distracting);
-                                    browser_debounce_since = Some(std::time::Instant::now());
-                                } else if browser_debounce_since.is_some_and(|t| {
-                                    t.elapsed().as_millis() as u64 >= BROWSER_DISTRACTION_DEBOUNCE_MS
-                                }) {
-                                    browser_debounce_committed = pending;
-                                    browser_debounce_pending_raw = None;
-                                    browser_debounce_since = None;
-                                }
-                            }
-                        }
-                        browser_debounce_committed
-                    } else {
-                        browser_debounce_committed = false;
-                        browser_debounce_pending_raw = None;
-                        browser_debounce_since = None;
-                        raw_distracting
-                    };
+                    let is_distracting_now = is_server_blocked || is_browser_distracting;
 
                     // If our app is in foreground, handle timer but also check if distraction cleared
                     if is_our_app {
