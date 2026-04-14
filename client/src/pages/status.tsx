@@ -6,7 +6,7 @@ import { Activity, Clock, AlertCircle, AlertTriangle } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 export default function Status() {
-  const { idleSeconds, phase, isTauriAvailable } = useIdleMonitoring();
+  const { idleSeconds, phase, isTauriAvailable, noteTakingMode } = useIdleMonitoring();
   const [lastActiveTime] = useState(() => new Date());
 
   // Update last active time when transitioning to active
@@ -21,7 +21,7 @@ export default function Status() {
       <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="max-w-md w-full">
           <CardHeader className="text-center">
-            <CardTitle className="text-2xl">FocusTogether Enforcer</CardTitle>
+            <CardTitle className="text-2xl">Flowlocked Enforcer</CardTitle>
             <CardDescription>Monitoring activity in background</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -42,7 +42,7 @@ export default function Status() {
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
       <Card className="max-w-md w-full">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">FocusTogether Enforcer</CardTitle>
+          <CardTitle className="text-2xl">Flowlocked Enforcer</CardTitle>
           <CardDescription>Monitoring activity in background</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -76,6 +76,12 @@ export default function Status() {
               )}
             </Badge>
           </div>
+
+          {noteTakingMode && (
+            <p className="text-center text-sm text-muted-foreground">
+              Note-taking mode: idle warning is paused by the session.
+            </p>
+          )}
 
           {/* Idle Seconds Counter */}
           <div className="text-center space-y-2">

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Flowlocked needs accessibility access to see which websites are open so it can detect distractions during focus sessions.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLName</key>
+            <string>com.focustogether.app</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>flowlocked</string>
+                <string>focustogether</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

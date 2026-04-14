@@ -1,0 +1,73 @@
+# Produces the Windows installer (MSI + NSIS) on a real Windows runner.
+# Tauri cannot reliably bundle Windows from macOS (generate_context / plist tooling is macOS-oriented when cross-compiling).
+
+name: Build Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - activity-refactor
+    paths:
+      - "src-tauri/**"
+      - "client/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - ".github/workflows/build-windows.yml"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # Tauri bundle.targets "all" on Windows builds MSI (WiX) + NSIS; runners often lack WiX v3.
+      - name: Install WiX Toolset v3 and NSIS
+        shell: pwsh
+        run: |
+          choco install wixtoolset nsis -y --no-progress
+          $wixBin = (Resolve-Path "C:\Program Files (x86)\WiX Toolset*\bin" -ErrorAction SilentlyContinue | Select-Object -First 1).Path
+          if ($wixBin) { Add-Content $env:GITHUB_PATH $wixBin }
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Tauri (Windows)
+        env:
+          CI: "true"
+        # Must match local bundles: sync-tray-icon + `tauri build` (see package.json `tauri:build`).
+        run: npm run tauri:build
+
+      - name: List bundle output (debug)
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path src-tauri/target/release/bundle) {
+            Get-ChildItem -Recurse src-tauri/target/release/bundle | ForEach-Object { $_.FullName }
+          } else {
+            Write-Host "No bundle directory"
+          }
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: flowlocked-windows
+          if-no-files-found: warn
+          path: |
+            src-tauri/target/release/bundle/msi/*
+            src-tauri/target/release/bundle/nsis/*

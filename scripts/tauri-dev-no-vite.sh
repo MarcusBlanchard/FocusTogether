@@ -13,7 +13,9 @@ fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(config, null, 2));
 "
 
 # Run Tauri
-cd "$(dirname "$0")/.." && npm run tauri dev
+cd "$(dirname "$0")/.."
+node scripts/sync-tray-icon.cjs
+npm run tauri -- dev
 
 # Restore original config
 mv src-tauri/tauri.conf.json.backup src-tauri/tauri.conf.json

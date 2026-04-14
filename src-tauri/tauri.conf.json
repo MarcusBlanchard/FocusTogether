@@ -7,10 +7,11 @@
     "withGlobalTauri": true
   },
   "package": {
-    "productName": "FocusTogether",
+    "productName": "Flowlocked",
     "version": "0.1.0"
   },
   "tauri": {
+    "macOSPrivateApi": true,
     "allowlist": {
       "all": false,
       "shell": {
@@ -24,6 +25,9 @@
       },
       "notification": {
         "all": true
+      },
+      "window": {
+        "close": true
       }
     },
     "bundle": {
@@ -36,6 +40,40 @@
         "icons/128x128@2x.png",
         "icons/icon.icns",
         "icons/icon.ico"
+      ],
+      "macOS": {
+        "entitlements": null,
+        "exceptionDomain": null,
+        "frameworks": [],
+        "providerShortName": null,
+        "signingIdentity": null
+      },
+      "externalBin": [],
+      "longDescription": "",
+      "shortDescription": "",
+      "deb": {
+        "depends": []
+      },
+      "windows": {
+        "certificateThumbprint": null,
+        "digestAlgorithm": "sha256",
+        "timestampUrl": "",
+        "wix": {
+          "license": "windows/installer-license.rtf"
+        },
+        "nsis": {
+          "license": "windows/installer-license.rtf"
+        }
+      }
+    },
+    "cli": {
+      "description": "Flowlocked Desktop App",
+      "args": [
+        {
+          "name": "url",
+          "index": 1,
+          "takesValue": true
+        }
       ]
     },
     "security": {
@@ -46,12 +84,15 @@
         "label": "main",
         "fullscreen": false,
         "resizable": true,
-        "title": "FocusTogether",
+        "title": "Flowlocked",
         "width": 1200,
         "height": 800,
         "visible": false
       }
-    ]
+    ],
+    "systemTray": {
+      "iconPath": "icons/tray-icon.png",
+      "iconAsTemplate": false
+    }
   }
 }
-

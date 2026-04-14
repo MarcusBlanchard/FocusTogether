@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, UserPlus, Play, Trash2, Loader2 } from "lucide-react";
 import { NotificationBell } from "@/components/notification-bell";
+import { FriendsStatsNav } from "@/components/friends-stats-nav";
 import { useToast } from "@/hooks/use-toast";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import type { User } from "@shared/schema";
@@ -139,6 +140,7 @@ export default function Friends() {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
+        <FriendsStatsNav className="mb-6" />
         <div className="flex items-center justify-between mb-6">
           <p className="text-muted-foreground">
             {friends?.length || 0} friend{friends?.length !== 1 ? 's' : ''}

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flowlocked Active</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(145deg, #d1fae5 0%, #6ee7b7 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      padding: 0;
+      margin: 0;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    
+    .card {
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 20px;
+      padding: 28px 32px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+      width: 90%;
+      max-width: 320px;
+      text-align: center;
+      animation: popIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    
+    @keyframes popIn {
+      from {
+        opacity: 0;
+        transform: scale(0.9) translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+      }
+    }
+    
+    .icon-wrapper {
+      width: 64px;
+      height: 64px;
+      border-radius: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 18px;
+      background: linear-gradient(145deg, #d1fae5, #a7f3d0);
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);
+    }
+    
+    .icon-wrapper svg {
+      width: 32px;
+      height: 32px;
+      stroke: #059669;
+    }
+    
+    .title {
+      font-size: 19px;
+      font-weight: 700;
+      color: #1f2937;
+      margin-bottom: 6px;
+      letter-spacing: -0.3px;
+    }
+    
+    .subtitle {
+      font-size: 13px;
+      color: #6b7280;
+      margin-bottom: 18px;
+      font-weight: 450;
+    }
+    
+    .status {
+      padding: 10px 16px;
+      background: linear-gradient(145deg, #ecfdf5, #d1fae5);
+      border-radius: 12px;
+      font-size: 13px;
+      color: #047857;
+      font-weight: 600;
+    }
+    
+    .status.not-linked {
+      background: linear-gradient(145deg, #fefce8, #fef9c3);
+      color: #a16207;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon-wrapper">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    </div>
+    <div class="title">Flowlocked Active (94)</div>
+    <div class="subtitle">Desktop enforcer running in background</div>
+    <div class="status" id="status">Connecting...</div>
+  </div>
+  
+  <script>
+    if (window.__TAURI__) {
+      const { listen } = window.__TAURI__.event;
+      
+      listen('startup-status', (event) => {
+        const statusEl = document.getElementById('status');
+        const data = event.payload;
+        
+        if (data.linked) {
+          statusEl.textContent = `Account ${data.userId} linked`;
+          statusEl.classList.remove('not-linked');
+        } else {
+          statusEl.textContent = 'Not linked — connect via web app';
+          statusEl.classList.add('not-linked');
+        }
+      });
+    }
+    
+    setTimeout(() => {
+      const statusEl = document.getElementById('status');
+      if (statusEl.textContent === 'Connecting...') {
+        statusEl.textContent = 'Running in background';
+      }
+    }, 2000);
+  </script>
+</body>
+</html>

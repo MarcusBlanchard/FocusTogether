@@ -49,9 +49,32 @@ class SessionManager {
   private roomSessions: Map<string, RoomSession> = new Map(); // Multi-participant rooms
   private pendingInvites: Map<string, PendingInvite> = new Map();
   private eventCallback: EventCallback | null = null;
+  
+  // Desktop app activity tracking: userId -> { sessionId, joinedAt }
+  // This is the source of truth for "is user in an active session" for desktop polling
+  private activeDesktopSessions: Map<string, { sessionId: string; joinedAt: Date }> = new Map();
+  
+  /**
+   * Latest browser-tab distraction from the Chrome extension (domain only).
+   * Cleared when the desktop app reports a native foreground app (user left the browser)
+   * so Chess→Chrome doesn't reuse a stale tab from before Chess.
+   */
+  private userBrowserDistraction: Map<string, { domain: string }> = new Map();
+
+  // Pending alerts for desktop app notifications: userId -> alerts[]
+  private pendingAlerts: Map<string, Array<{
+    type: 'participant-activity';
+    alertingUserId: string;
+    alertingUsername: string | null;
+    alertingFirstName: string | null;
+    status: 'idle' | 'distracted' | 'active';
+    sessionId: string;
+    timestamp: string;
+  }>> = new Map();
 
   private readonly HEARTBEAT_TIMEOUT = 30000; // 30 seconds
   private readonly SESSION_GRACE_PERIOD = 5; // 5 minutes grace period for late joiners
+  private readonly SESSION_END_GRACE_PERIOD = 10; // 10 minutes grace period after scheduled end time
   private cleanupInterval: NodeJS.Timeout | null = null;
   private sessionWatchdogInterval: NodeJS.Timeout | null = null;
 
@@ -771,6 +794,9 @@ class SessionManager {
           session.sessionType = undefined;
         }
 
+        // Clear pending alerts for this participant
+        this.pendingAlerts.delete(participantId);
+
         // Notify other participants
         if (participantId !== initiatorId) {
           this.emit(participantId, {
@@ -781,7 +807,7 @@ class SessionManager {
       }
 
       this.roomSessions.delete(sessionId);
-      console.log(`[SessionManager] Room session ${sessionId} ended`);
+      console.log(`[SessionManager] Room session ${sessionId} ended (pending alerts cleared)`);
       return;
     }
 
@@ -822,8 +848,12 @@ class SessionManager {
       session2.sessionType = undefined;
     }
 
+    // Clear pending alerts for both users to prevent stale notifications
+    this.pendingAlerts.delete(match.user1Id);
+    this.pendingAlerts.delete(match.user2Id);
+
     this.activeMatches.delete(sessionId);
-    console.log(`[SessionManager] Session ${sessionId} ended`);
+    console.log(`[SessionManager] Session ${sessionId} ended (pending alerts cleared)`);
   }
 
   // Leave a room (for multi-participant sessions)
@@ -842,6 +872,9 @@ class SessionManager {
       session.sessionId = undefined;
       session.sessionType = undefined;
     }
+
+    // Clear pending alerts for the leaving user
+    this.pendingAlerts.delete(userId);
 
     const user = await storage.getUser(userId);
 
@@ -892,8 +925,12 @@ class SessionManager {
       }
     }
 
+    // Clear pending alerts for this user
+    this.pendingAlerts.delete(userId);
+    this.userBrowserDistraction.delete(userId);
+
     this.userSessions.delete(userId);
-    console.log(`[SessionManager] User ${userId} disconnected`);
+    console.log(`[SessionManager] User ${userId} disconnected (pending alerts cleared)`);
   }
 
   // Get the partner's ID for a user's current session
@@ -1248,6 +1285,129 @@ class SessionManager {
     } catch (error) {
       console.error('[SessionManager] Error notifying friend removal:', error);
     }
+  }
+
+  // ============================================
+  // Desktop Activity Session Tracking (for polling)
+  // ============================================
+
+  // Called when user joins a focus session (from web app)
+  setUserActiveSession(userId: string, sessionId: string) {
+    this.activeDesktopSessions.set(userId, {
+      sessionId,
+      joinedAt: new Date(),
+    });
+    console.log(`[SessionManager] User ${userId} joined session ${sessionId} (desktop tracking)`);
+  }
+
+  // Called when user leaves a focus session (from web app)
+  clearUserActiveSession(userId: string) {
+    const session = this.activeDesktopSessions.get(userId);
+    if (session) {
+      console.log(`[SessionManager] User ${userId} left session ${session.sessionId} (desktop tracking)`);
+      this.activeDesktopSessions.delete(userId);
+      // Clear any pending alerts to prevent stale notifications in future sessions
+      this.pendingAlerts.delete(userId);
+      console.log(`[SessionManager] Cleared pending alerts for user ${userId}`);
+    }
+  }
+
+  // Called by desktop app to check if user is in an active session
+  getUserActiveSession(userId: string): { sessionId: string; joinedAt: Date } | null {
+    return this.activeDesktopSessions.get(userId) || null;
+  }
+
+  /** Extension: set/clear distracting domain for session polling. */
+  reportBrowserForegroundDomain(userId: string, domain: string, isDistracting: boolean): void {
+    const d = domain.trim().toLowerCase();
+    if (!d || !isDistracting) {
+      this.userBrowserDistraction.delete(userId);
+      return;
+    }
+    this.userBrowserDistraction.set(userId, { domain: d });
+  }
+
+  /** Desktop: user focused a native app — drop stale browser tab distraction. */
+  clearBrowserForegroundDistraction(userId: string): void {
+    this.userBrowserDistraction.delete(userId);
+  }
+
+  getCurrentBrowserDistraction(userId: string): { domain: string } | null {
+    return this.userBrowserDistraction.get(userId) ?? null;
+  }
+
+  // Check if a user is in any active session (for validation)
+  isUserInActiveSession(userId: string): boolean {
+    return this.activeDesktopSessions.has(userId);
+  }
+  
+  // Queue an alert for a user's desktop app to receive
+  queueAlertForUser(
+    userId: string, 
+    alert: {
+      type: 'participant-activity';
+      alertingUserId: string;
+      alertingUsername: string | null;
+      alertingFirstName: string | null;
+      status: 'idle' | 'distracted' | 'active';
+      sessionId: string;
+      timestamp: string;
+    }
+  ) {
+    // Only queue idle/distracted alerts, not "active" (returning to focus)
+    if (alert.status === 'active') return;
+
+    const alerts = this.pendingAlerts.get(userId) || [];
+    // Deduplicate: keep only one alert per (alertingUserId, status) so repeated
+    // activity updates (e.g. web + desktop) don't queue multiple blue notifications
+    const filtered = alerts.filter(
+      (a) => !(a.alertingUserId === alert.alertingUserId && a.status === alert.status)
+    );
+    filtered.push(alert);
+    const capped = filtered.length > 10 ? filtered.slice(-10) : filtered;
+    this.pendingAlerts.set(userId, capped);
+    console.log(`[SessionManager] Queued ${alert.status} alert for user ${userId} from ${alert.alertingUserId} (session: ${alert.sessionId})`);
+  }
+  
+  // Get and clear pending alerts for a user (called when desktop app polls)
+  getPendingAlerts(userId: string): Array<{
+    type: 'participant-activity';
+    alertingUserId: string;
+    alertingUsername: string | null;
+    alertingFirstName: string | null;
+    status: 'idle' | 'distracted' | 'active';
+    sessionId: string;
+    timestamp: string;
+  }> {
+    const alerts = this.pendingAlerts.get(userId) || [];
+    
+    // Log before clearing
+    if (alerts.length > 0) {
+      console.log(`[SessionManager] getPendingAlerts for ${userId}: ${alerts.length} raw alerts`);
+    }
+    
+    this.pendingAlerts.delete(userId); // Clear after retrieval
+    
+    // Filter to only return alerts for the user's CURRENT session
+    // This prevents stale alerts from previous sessions
+    const currentSession = this.activeDesktopSessions.get(userId);
+    if (!currentSession) {
+      // User not in a session - don't return any alerts
+      if (alerts.length > 0) {
+        console.log(`[SessionManager] ⚠️ User ${userId} has ${alerts.length} alerts but NO active session in activeDesktopSessions - dropping alerts!`);
+      }
+      return [];
+    }
+    
+    const filtered = alerts.filter(alert => alert.sessionId === currentSession.sessionId);
+    
+    if (alerts.length > 0) {
+      console.log(`[SessionManager] User ${userId} session: ${currentSession.sessionId}`);
+      console.log(`[SessionManager] Alerts session IDs: ${alerts.map(a => a.sessionId).join(', ')}`);
+      console.log(`[SessionManager] After filter: ${filtered.length} alerts (dropped ${alerts.length - filtered.length})`);
+    }
+    
+    return filtered;
   }
 
   // Destroy the manager (for cleanup)

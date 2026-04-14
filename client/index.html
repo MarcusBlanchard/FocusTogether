@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-    <title>FocusTogether</title>
+    <title>Flowlocked</title>
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,10 +12,14 @@
   <body>
     <div id="root"></div>
     <script>
+      // Inject USER_ID from environment for multi-user testing
+      // Usage: USER_ID=44923348 npm run tauri:dev
+      window.__USER_ID__ = typeof __USER_ID__ !== 'undefined' ? __USER_ID__ : null;
       console.log("[HTML] Script tag executing");
       console.log("[HTML] Document ready state:", document.readyState);
       console.log("[HTML] Window location:", window.location.href);
       console.log("[HTML] Root element exists:", !!document.getElementById("root"));
+      console.log("[HTML] USER_ID:", window.__USER_ID__);
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>

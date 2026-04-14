@@ -1,10 +1,14 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
+import { listen } from '@tauri-apps/api/event';
 
-const WARNING_THRESHOLD_SECONDS = 10; // Private warning at 10s (testing)
-const DISTRACTED_THRESHOLD_SECONDS = 15; // Distracted status at 15s (notifies everyone) (testing)
+// Yellow idle warning from 60s–90s (30s countdown in the popup), then red + POST idle for partners at 90s
+const WARNING_THRESHOLD_SECONDS = 60;
+const DISTRACTED_THRESHOLD_SECONDS = 90;
 const POLL_INTERVAL_MS = 250; // Update every 250ms for faster response
-const SESSION_POLL_INTERVAL_MS = 5000; // Poll session status every 5 seconds
+// How often we refresh session + browser distraction from the server. Lower = faster clear
+// when switching Chrome from YouTube → neutral tab (extension posts quickly; desktop must poll).
+const SESSION_POLL_INTERVAL_MS = 3000;
 
 export type IdlePhase = 'active' | 'warning' | 'idle';
 
@@ -12,6 +16,18 @@ export interface IdleState {
   idleSeconds: number;
   phase: IdlePhase;
   isTauriAvailable: boolean;
+  /** When true, server note-taking mode is active — yellow idle pop-up must stay hidden. */
+  noteTakingMode: boolean;
+}
+
+/** Desktop poll (`get_active_session` → GET /api/desktop/poll). */
+interface ActiveSessionPollResult {
+  sessionId: string | null;
+  noteTakingMode: boolean;
+}
+
+interface SendActivityUpdateResult {
+  noteTakingMode: boolean;
 }
 
 /**
@@ -62,50 +78,9 @@ async function showDesktopNotification(title: string, body: string): Promise<Not
     return null;
   }
   
-  // In regular browser: Use browser Notification API (can be closed programmatically)
-  if (typeof Notification !== 'undefined') {
-    try {
-      let permission = Notification.permission;
-      console.log('[IdleMonitor] Current notification permission:', permission);
-      
-      if (permission === 'default') {
-        console.log('[IdleMonitor] Requesting notification permission...');
-        permission = await Notification.requestPermission();
-        console.log('[IdleMonitor] Permission result:', permission);
-      }
-      
-      if (permission === 'granted') {
-        console.log('[IdleMonitor] Creating browser notification...');
-        const notification = new Notification(title, {
-          body,
-          tag: 'focustogether-warning',
-          silent: false,
-          icon: '/favicon.ico',
-        });
-        
-        notification.onshow = () => {
-          console.log('[IdleMonitor] ✅ Browser notification shown');
-        };
-        
-        notification.onerror = (error) => {
-          console.error('[IdleMonitor] Browser notification error:', error);
-        };
-        
-        notification.onclose = () => {
-          console.log('[IdleMonitor] Browser notification closed');
-        };
-        
-        console.log('[IdleMonitor] Browser notification created, returning for programmatic close');
-        return notification; // Return so we can close it later
-      } else {
-        console.warn('[IdleMonitor] Browser notification permission denied:', permission);
-      }
-    } catch (error) {
-      console.error('[IdleMonitor] Browser notification failed:', error);
-    }
-  } else {
-    console.log('[IdleMonitor] Browser Notification API not available');
-  }
+  // In regular browser: Don't show desktop notifications - the web UI will handle it
+  console.log('[IdleMonitor] 🌐 Running in browser mode - desktop notifications disabled');
+  console.log('[IdleMonitor] ℹ️  Activity state changes will be shown in the web UI only');
   
   return null;
 }
@@ -120,21 +95,84 @@ export function useIdleMonitoring() {
     idleSeconds: 0,
     phase: 'active',
     isTauriAvailable: false,
+    noteTakingMode: false,
   });
   
   // Track if warning has been shown for current idle period
   const warningShownRef = useRef(false);
   // Track if distracted status has been sent to backend
   const distractedSentRef = useRef(false);
+  /// Prevents parallel POSTs; cleared on success or after each attempt (retry next tick if needed)
+  const idleSendInFlightRef = useRef(false);
+  /// Last countdown seconds pushed to the yellow window (avoid redundant invokes)
+  const lastIdleCountdownRef = useRef(-1);
+  /// Whether the idle notification UI has already flipped to red for this idle cycle
+  const idleUiMarkedRef = useRef(false);
   // Track the notification object so we can close it when user becomes active
   const notificationRef = useRef<Notification | null>(null);
   // Track current active sessionId (null means no active session)
   const sessionIdRef = useRef<string | null>(null);
+  /// Server flag from poll / activity-update: suppress yellow idle pop-up when true
+  const noteTakingModeRef = useRef(false);
   
-  // TODO: Later integrate with useAuth() to get user.id instead of hardcoding
-  // For now, allow override via VITE_USER_ID env var for testing multiple users
-  // Example: VITE_USER_ID=44923348 npm run tauri:dev (for User 2)
-  const MOCK_USER_ID = import.meta.env.VITE_USER_ID || "50145776";
+  // Get userId from config file (set via deep link from web app)
+  // Starts empty - user must connect via web app to set userId
+  const [MOCK_USER_ID, setMockUserId] = useState("");
+  const [isListenerOnly, setIsListenerOnly] = useState(false);
+  
+  // Load userId and listener mode from Tauri command on mount
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        // Check if Tauri is available
+        if (typeof window !== 'undefined' && (window as any).__TAURI__) {
+          const userId = await invoke<string | null>('get_user_id');
+          const listenerMode = await invoke<boolean>('is_listener_only');
+          
+          if (userId) {
+            console.log('[IdleMonitor] ✅ Got userId from Tauri:', userId);
+            setMockUserId(userId);
+          } else {
+            console.log('[IdleMonitor] ⚠️ No user linked - please connect via web app');
+            // Keep MOCK_USER_ID empty to disable monitoring until linked
+            setMockUserId("");
+          }
+          console.log('[IdleMonitor] ✅ Listener-only mode:', listenerMode);
+          setIsListenerOnly(listenerMode);
+        } else {
+          console.log('[IdleMonitor] Using default userId (not in Tauri):', MOCK_USER_ID);
+        }
+      } catch (error) {
+        console.error('[IdleMonitor] Error loading config from Tauri:', error);
+        // Don't set a default - require user to link via web app
+        setMockUserId("");
+      }
+    };
+    loadConfig();
+  }, []);
+
+  // When backend switches user (e.g. deep link), refetch userId so get_active_session and detection use the new user
+  useEffect(() => {
+    if (typeof window === 'undefined' || (window as any).__TAURI__ === undefined) {
+      return;
+    }
+    const unlisten = listen('userId-changed', async () => {
+      try {
+        const userId = await invoke<string | null>('get_user_id');
+        setMockUserId(userId ?? '');
+        if (userId) {
+          console.log('[IdleMonitor] userId-changed: now using', userId);
+        } else {
+          console.log('[IdleMonitor] userId-changed: no user linked');
+        }
+      } catch (error) {
+        console.error('[IdleMonitor] Error refetching userId after userId-changed:', error);
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   const checkTauriAvailable = useCallback(() => {
     try {
@@ -168,15 +206,32 @@ export function useIdleMonitoring() {
     if (!isTauriAvailable) {
       return;
     }
+    
+    // Skip polling if no user is linked
+    if (!MOCK_USER_ID) {
+      return;
+    }
 
     try {
-      const sessionId = await invoke<string | null>('get_active_session', {
+      const result = await invoke<ActiveSessionPollResult>('get_active_session', {
         userId: MOCK_USER_ID,
       });
-      
+
+      const sessionId = result.sessionId;
       const prevSessionId = sessionIdRef.current;
+      const prevNoteTaking = noteTakingModeRef.current;
       sessionIdRef.current = sessionId;
-      
+      noteTakingModeRef.current = result.noteTakingMode;
+
+      if (result.noteTakingMode && !prevNoteTaking) {
+        console.log('[IdleMonitor] noteTakingMode=true — suppressing idle warning UI');
+        invoke('dismiss_notification').catch(() => {});
+        notificationRef.current = null;
+        warningShownRef.current = false;
+        lastIdleCountdownRef.current = -1;
+        idleUiMarkedRef.current = false;
+      }
+
       // Log session changes for debugging
       if (prevSessionId !== sessionId) {
         if (sessionId === null) {
@@ -190,7 +245,7 @@ export function useIdleMonitoring() {
       // On error, assume no session (graceful degradation)
       sessionIdRef.current = null;
     }
-  }, [checkTauriAvailable]);
+  }, [checkTauriAvailable, MOCK_USER_ID]); // Re-create callback when MOCK_USER_ID changes
 
   const checkIdleStatus = useCallback(async () => {
     const isTauriAvailable = checkTauriAvailable();
@@ -200,19 +255,159 @@ export function useIdleMonitoring() {
         idleSeconds: 0,
         phase: 'active',
         isTauriAvailable: false,
+        noteTakingMode: false,
       });
       return;
+    }
+    
+    // Skip idle monitoring entirely if in listener-only mode
+    if (isListenerOnly) {
+      console.log(`[IdleMonitor] 🎧 Listener-only mode - skipping idle monitoring`);
+      return;
+    }
+    
+    // Skip if no user is linked
+    if (!MOCK_USER_ID) {
+      console.log(`[IdleMonitor] ⚠️ No user linked - skipping idle monitoring`);
+      return;
+    }
+    
+    // Log userId being used for monitoring
+    if (MOCK_USER_ID) {
+      // Only log once when monitoring starts
+      const logKey = `monitoring_${MOCK_USER_ID}`;
+      if (!(window as any)[logKey]) {
+        console.log(`[IdleMonitor] 🎯 Monitoring activity for userId: ${MOCK_USER_ID}`);
+        (window as any)[logKey] = true;
+      }
     }
 
     try {
       const idleSeconds = await invoke<number>('get_idle_seconds');
-      
+
+      const suppressIdleUi = noteTakingModeRef.current;
+
       // Determine current phase
       let newPhase: IdlePhase = 'active';
       if (idleSeconds >= DISTRACTED_THRESHOLD_SECONDS) {
         newPhase = 'idle'; // Use 'idle' phase for distracted state
       } else if (idleSeconds >= WARNING_THRESHOLD_SECONDS) {
         newPhase = 'warning';
+      }
+
+      const displayPhase: IdlePhase = suppressIdleUi ? 'active' : newPhase;
+
+      // Countdown on yellow window (same idea as orange distraction warning)
+      if (
+        !suppressIdleUi &&
+        isTauriAvailable &&
+        !isListenerOnly &&
+        MOCK_USER_ID &&
+        sessionIdRef.current !== null &&
+        idleSeconds >= WARNING_THRESHOLD_SECONDS &&
+        idleSeconds < DISTRACTED_THRESHOLD_SECONDS
+      ) {
+        const remaining = DISTRACTED_THRESHOLD_SECONDS - idleSeconds;
+        if (remaining !== lastIdleCountdownRef.current) {
+          lastIdleCountdownRef.current = remaining;
+          invoke('update_notification_idle_countdown', { secondsRemaining: remaining }).catch(() => {});
+        }
+      } else if (idleSeconds < WARNING_THRESHOLD_SECONDS) {
+        lastIdleCountdownRef.current = -1;
+      }
+
+      // At threshold: hide countdown "1" (integer idle can flicker 89–90; don't gate red on that)
+      if (
+        !suppressIdleUi &&
+        isTauriAvailable &&
+        !isListenerOnly &&
+        MOCK_USER_ID &&
+        idleSeconds >= DISTRACTED_THRESHOLD_SECONDS &&
+        lastIdleCountdownRef.current !== 0
+      ) {
+        lastIdleCountdownRef.current = 0;
+        invoke('update_notification_idle_countdown', { secondsRemaining: 0 }).catch(() => {});
+      }
+
+      // Flip UI to red immediately at 0, independent of network timing.
+      if (
+        !suppressIdleUi &&
+        isTauriAvailable &&
+        !isListenerOnly &&
+        MOCK_USER_ID &&
+        idleSeconds >= DISTRACTED_THRESHOLD_SECONDS &&
+        !idleUiMarkedRef.current
+      ) {
+        idleUiMarkedRef.current = true;
+        invoke('update_notification_to_idle_marked').catch((error) => {
+          console.error('[IdleMonitor] Failed to update idle notification UI:', error);
+          idleUiMarkedRef.current = false;
+        });
+      } else if (idleSeconds < DISTRACTED_THRESHOLD_SECONDS) {
+        idleUiMarkedRef.current = false;
+      }
+
+      // POST idle to server + red UI once threshold reached (session id fetched here — not only the 2s poll ref)
+      if (
+        idleSeconds >= DISTRACTED_THRESHOLD_SECONDS &&
+        !distractedSentRef.current &&
+        !isListenerOnly &&
+        MOCK_USER_ID &&
+        !idleSendInFlightRef.current
+      ) {
+        idleSendInFlightRef.current = true;
+        (async () => {
+          try {
+            const poll = await invoke<ActiveSessionPollResult>('get_active_session', {
+              userId: MOCK_USER_ID,
+            });
+            const sessionId = poll.sessionId;
+            if (!sessionId) {
+              console.warn('[IdleMonitor] No active session — cannot mark idle for others');
+              return;
+            }
+            noteTakingModeRef.current = poll.noteTakingMode;
+            const idleRes = await invoke<SendActivityUpdateResult>('send_activity_update', {
+              userId: MOCK_USER_ID,
+              sessionId,
+              status: 'idle',
+            });
+            if (idleRes.noteTakingMode) {
+              noteTakingModeRef.current = true;
+              invoke('dismiss_notification').catch(() => {});
+              notificationRef.current = null;
+              warningShownRef.current = false;
+              lastIdleCountdownRef.current = -1;
+              idleUiMarkedRef.current = false;
+            }
+            distractedSentRef.current = true;
+            // Only revert if user is clearly active again (not 89 vs 90 floor from get_idle_seconds)
+            const idleAfter = await invoke<number>('get_idle_seconds');
+            if (idleAfter < WARNING_THRESHOLD_SECONDS) {
+              const activeRes = await invoke<SendActivityUpdateResult>('send_activity_update', {
+                userId: MOCK_USER_ID,
+                sessionId,
+                status: 'active',
+              });
+              if (activeRes.noteTakingMode) {
+                noteTakingModeRef.current = true;
+                invoke('dismiss_notification').catch(() => {});
+                notificationRef.current = null;
+                warningShownRef.current = false;
+                lastIdleCountdownRef.current = -1;
+                idleUiMarkedRef.current = false;
+              }
+              distractedSentRef.current = false;
+              idleUiMarkedRef.current = false;
+              return;
+            }
+            console.log('[IdleMonitor] ✅ Marked idle and updated notification');
+          } catch (error) {
+            console.error('[IdleMonitor] ❌ Idle mark failed:', error);
+          } finally {
+            idleSendInFlightRef.current = false;
+          }
+        })();
       }
 
       setState(prev => {
@@ -222,6 +417,9 @@ export function useIdleMonitoring() {
         if (newPhase === 'active' && prevPhase !== 'active') {
           warningShownRef.current = false;
           distractedSentRef.current = false;
+          idleSendInFlightRef.current = false;
+          lastIdleCountdownRef.current = -1;
+          idleUiMarkedRef.current = false;
           // Close any open notification immediately when user becomes active
           if (notificationRef.current) {
             const notification = notificationRef.current;
@@ -246,16 +444,24 @@ export function useIdleMonitoring() {
           }
           console.log(`[IdleMonitor] State changed: ${prevPhase} -> Active (${idleSeconds}s)`);
           
-          // Send "active" status to backend when user becomes active again
-          if (sessionIdRef.current !== null) {
+          // Send "active" status to backend when user becomes active again (unless listener-only)
+          if (sessionIdRef.current !== null && !isListenerOnly) {
             (async () => {
               try {
                 console.log('[IdleMonitor] Sending active status to backend...');
-                await invoke('send_activity_update', {
+                const activeRes = await invoke<SendActivityUpdateResult>('send_activity_update', {
                   userId: MOCK_USER_ID,
-                  sessionId: sessionIdRef.current,
+                  sessionId: sessionIdRef.current as string,
                   status: 'active',
                 });
+                if (activeRes.noteTakingMode) {
+                  noteTakingModeRef.current = true;
+                  invoke('dismiss_notification').catch(() => {});
+                  notificationRef.current = null;
+                  warningShownRef.current = false;
+                  lastIdleCountdownRef.current = -1;
+                  idleUiMarkedRef.current = false;
+                }
                 console.log('[IdleMonitor] ✅ active status sent to backend successfully');
               } catch (error) {
                 console.error('[IdleMonitor] ❌ Failed to send active status to backend:', error);
@@ -264,60 +470,42 @@ export function useIdleMonitoring() {
           }
         }
         
-        // Transition to warning phase (10s) - trigger local notification and sound ONLY
+        // Yellow at ≥60s idle; red + backend at ≥90s (30s of yellow only)
         // No backend update at this stage - only local warning
-        if (newPhase === 'warning' && prevPhase !== 'warning' && !warningShownRef.current && sessionIdRef.current !== null) {
+        // Only in `warning` phase (60–89s); at 90s phase is `idle` — red path below, no new yellow
+        if (
+          newPhase === 'warning' &&
+          !suppressIdleUi &&
+          !warningShownRef.current &&
+          sessionIdRef.current !== null
+        ) {
           warningShownRef.current = true;
-          console.log(`[IdleMonitor] State changed: ${prevPhase} -> Warning (${idleSeconds}s)`);
+          console.log(`[IdleMonitor] Showing warning notification (phase: ${newPhase}, idle: ${idleSeconds}s)`);
           
           // Show notification (visible even when tabbed out, will auto-close on activity)
           showDesktopNotification(
-            'FocusTogether Warning',
-            "You're about to be marked as distracted. Move your mouse or type."
+            'Idle Warning',
+            "You're about to be marked as idle. Move your mouse or type."
           ).then(notification => {
             if (notification) {
               notificationRef.current = notification;
             }
           });
           
-          // Play sound
-          playWarningSound();
-          
-          // No backend call at 10s - only local warning
-        }
-        
-        // Transition to idle phase (15s) - send "idle" status to backend ONCE
-        // Only enforce if there's an active session
-        if (idleSeconds >= DISTRACTED_THRESHOLD_SECONDS && !distractedSentRef.current && sessionIdRef.current !== null) {
-          distractedSentRef.current = true;
-          console.log(`[IdleMonitor] IDLE TRIGGERED: ${prevPhase} -> Idle (${idleSeconds}s)`);
-          
-          // Send "idle" status to backend (Replit endpoint)
-          (async () => {
-            try {
-              console.log('[IdleMonitor] Sending idle status to backend...');
-              await invoke('send_activity_update', {
-                userId: MOCK_USER_ID,
-                sessionId: sessionIdRef.current,
-                status: 'idle',
-              });
-              console.log('[IdleMonitor] ✅ idle status sent to backend successfully');
-            } catch (error) {
-              console.error('[IdleMonitor] ❌ Failed to send idle status to backend:', error);
-            }
-          })();
+          // Sound is now played by Rust after window is shown (for sync)
         }
         
         return {
           idleSeconds,
-          phase: newPhase,
+          phase: displayPhase,
           isTauriAvailable: true,
+          noteTakingMode: noteTakingModeRef.current,
         };
       });
     } catch (error) {
       console.error('[IdleMonitor] Error checking idle status:', error);
     }
-  }, [checkTauriAvailable]);
+  }, [checkTauriAvailable, isListenerOnly, MOCK_USER_ID]);
 
   useEffect(() => {
     // Request notification permission on mount (for browser API fallback)
