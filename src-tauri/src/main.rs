@@ -121,7 +121,7 @@ static CONFIG: OnceLock<Mutex<AppConfig>> = OnceLock::new();
 // Distraction detection state
 static DETECTION_RUNNING: AtomicBool = AtomicBool::new(false);
 static DETECTION_SESSION: OnceLock<Mutex<Option<(String, String)>>> = OnceLock::new();
-static DISTRACTION_RULES: OnceLock<Mutex<(HashSet<String>, HashSet<String>)>> = OnceLock::new();
+static DISTRACTION_RULES: OnceLock<Mutex<LocalDistractionRules>> = OnceLock::new();
 static AI_CLASSIFICATIONS: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
 
 /// Server-driven: when true, desktop must not show the yellow idle warning UI (see GET /api/desktop/poll).
@@ -133,6 +133,7 @@ static HEARTBEAT_RUNNING: AtomicBool = AtomicBool::new(false);
 static APPS_REPORT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 // True only after server acked distracted=true; cleared only after server acked distracted=false.
 static DISTRACTION_REPORTED: AtomicBool = AtomicBool::new(false);
+static LAST_APPS_FOREGROUND_DECISION: OnceLock<Mutex<Option<ForegroundServerDecision>>> = OnceLock::new();
 
 // Session poll counter for Cursor/device console logging (correlate with server logs)
 static SESSION_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -147,12 +148,34 @@ fn session_ending_shown() -> &'static Mutex<HashSet<String>> {
     SESSION_ENDING_SHOWN.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn distraction_rules() -> &'static Mutex<(HashSet<String>, HashSet<String>)> {
-    DISTRACTION_RULES.get_or_init(|| Mutex::new((HashSet::new(), HashSet::new())))
+#[derive(Debug, Clone, Default)]
+struct LocalDistractionRules {
+    distracting: HashSet<String>,
+    allowed: HashSet<String>,
+    classroom_allowed: HashSet<String>,
+    classroom_blocked: HashSet<String>,
+    own_app_domains: HashSet<String>,
+    whitelist_apps: HashSet<String>,
+    whitelist_mode: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ForegroundServerDecision {
+    foreground_key: String,
+    is_foreground_blocked: bool,
+    own_app_domains: HashSet<String>,
+}
+
+fn distraction_rules() -> &'static Mutex<LocalDistractionRules> {
+    DISTRACTION_RULES.get_or_init(|| Mutex::new(LocalDistractionRules::default()))
 }
 
 fn ai_classifications() -> &'static Mutex<HashMap<String, bool>> {
     AI_CLASSIFICATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn latest_foreground_server_decision() -> &'static Mutex<Option<ForegroundServerDecision>> {
+    LAST_APPS_FOREGROUND_DECISION.get_or_init(|| Mutex::new(None))
 }
 
 fn normalize_rule_value(v: &str) -> Option<String> {
@@ -170,6 +193,10 @@ fn normalize_app_name(v: &str) -> Option<String> {
         n = n.trim_end_matches(".app").trim().to_string();
     }
     normalize_rule_value(&n)
+}
+
+fn normalized_foreground_key(v: &str) -> String {
+    normalize_rule_value(v).unwrap_or_else(|| v.trim().to_lowercase())
 }
 
 fn default_distracting_entries() -> &'static [&'static str] {
@@ -333,7 +360,16 @@ fn server_classify_target_with_detail(user_id: &str, target: &str) -> (Option<bo
     }
 }
 
-fn update_distraction_rules_from_poll(distracting: &[String], allowed: &[String], blocked: &[String]) {
+fn update_distraction_rules_from_poll(
+    distracting: &[String],
+    allowed: &[String],
+    blocked: &[String],
+    classroom_allowed: &[String],
+    classroom_blocked: &[String],
+    own_app_domains: &[String],
+    whitelist_apps: &[String],
+    whitelist_mode: bool,
+) {
     let mut dset = HashSet::new();
     for v in distracting.iter().chain(blocked.iter()) {
         if let Some(n) = normalize_rule_value(v) {
@@ -346,8 +382,40 @@ fn update_distraction_rules_from_poll(distracting: &[String], allowed: &[String]
             aset.insert(n);
         }
     }
+    let mut classroom_allowed_set = HashSet::new();
+    for v in classroom_allowed {
+        if let Some(n) = normalize_rule_value(v) {
+            classroom_allowed_set.insert(n);
+        }
+    }
+    let mut classroom_blocked_set = HashSet::new();
+    for v in classroom_blocked {
+        if let Some(n) = normalize_rule_value(v) {
+            classroom_blocked_set.insert(n);
+        }
+    }
+    let mut own_domains_set = HashSet::new();
+    for v in own_app_domains {
+        if let Some(n) = normalize_rule_value(v) {
+            own_domains_set.insert(n);
+        }
+    }
+    let mut whitelist_set = HashSet::new();
+    for v in whitelist_apps {
+        if let Some(n) = normalize_rule_value(v) {
+            whitelist_set.insert(n);
+        }
+    }
     if let Ok(mut g) = distraction_rules().lock() {
-        *g = (dset, aset);
+        *g = LocalDistractionRules {
+            distracting: dset,
+            allowed: aset,
+            classroom_allowed: classroom_allowed_set,
+            classroom_blocked: classroom_blocked_set,
+            own_app_domains: own_domains_set,
+            whitelist_apps: whitelist_set,
+            whitelist_mode,
+        };
     }
 }
 
@@ -359,6 +427,14 @@ fn rule_matches(value: &str, rules: &HashSet<String>) -> bool {
         return true;
     }
     rules.iter().any(|r| n.ends_with(&format!(".{}", r)) || n.contains(r))
+}
+
+fn contains_any_rule_token(value: &str, rules: &HashSet<String>) -> bool {
+    let lower = value.trim().to_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+    rules.iter().any(|r| lower.contains(r))
 }
 
 fn cache_false_on_classify_failure(cache_key: &str, detail: &str) {
@@ -382,23 +458,39 @@ fn classify_local_distraction(
     if is_browser(app_name) && domain.is_none() {
         return None;
     }
-    let Ok((distracting, allowed)) = distraction_rules().lock().map(|g| (g.0.clone(), g.1.clone())) else {
+    let Ok(rules) = distraction_rules().lock().map(|g| g.clone()) else {
         return None;
     };
     if let Some(d) = domain {
-        if default_distracting_entries().iter().any(|k| d.contains(k)) {
-            return normalize_rule_value(d);
-        }
-        if distracting_keywords().iter().any(|k| d.contains(k)) {
-            return normalize_rule_value(d);
-        }
-        if rule_matches(d, &allowed) {
+        let normalized = normalize_rule_value(d);
+        if contains_any_rule_token(d, &rules.own_app_domains) {
             return None;
         }
-        if rule_matches(d, &distracting) {
-            return normalize_rule_value(d);
+        if rule_matches(d, &rules.classroom_allowed) {
+            return None;
         }
-        if let Some(key) = normalize_rule_value(d) {
+        if rule_matches(d, &rules.classroom_blocked) {
+            return normalized;
+        }
+        if rules.whitelist_mode {
+            if rule_matches(d, &rules.whitelist_apps) {
+                return None;
+            }
+            return normalized;
+        }
+        if rule_matches(d, &rules.allowed) {
+            return None;
+        }
+        if rule_matches(d, &rules.distracting) {
+            return normalized;
+        }
+        if default_distracting_entries().iter().any(|k| d.contains(k)) {
+            return normalized;
+        }
+        if distracting_keywords().iter().any(|k| d.contains(k)) {
+            return normalized;
+        }
+        if let Some(key) = normalized {
             if let Ok(cache) = ai_classifications().lock() {
                 if let Some(v) = cache.get(&key) {
                     return if *v { Some(key) } else { None };
@@ -430,19 +522,34 @@ fn classify_local_distraction(
         return None;
     }
     let app_norm = normalize_app_name(&app).unwrap_or(app.clone());
+    if contains_any_rule_token(&app_norm, &rules.own_app_domains) {
+        return None;
+    }
+    if rule_matches(&app_norm, &rules.classroom_allowed) {
+        return None;
+    }
+    if rule_matches(&app_norm, &rules.classroom_blocked) {
+        return Some(app_norm.clone());
+    }
+    if rules.whitelist_mode {
+        if rule_matches(&app_norm, &rules.whitelist_apps) {
+            return None;
+        }
+        return Some(app_norm);
+    }
+    if rule_matches(&app_norm, &rules.allowed) {
+        return None;
+    }
+    if rule_matches(&app_norm, &rules.distracting) {
+        return Some(app_norm.clone());
+    }
     if default_distracting_entries()
         .iter()
         .any(|k| app_norm.contains(k))
     {
-        return Some(app_norm);
+        return Some(app_norm.clone());
     }
     if distracting_keywords().iter().any(|k| app_norm.contains(k)) {
-        return Some(app_norm);
-    }
-    if rule_matches(&app_norm, &allowed) {
-        return None;
-    }
-    if rule_matches(&app_norm, &distracting) {
         return Some(app_norm.clone());
     }
     if let Ok(cache) = ai_classifications().lock() {
@@ -645,6 +752,8 @@ struct DesktopAppsResponse {
     allowed_apps: Vec<String>,
     #[serde(rename = "blockedApps", default)]
     blocked_apps: Vec<String>,
+    #[serde(rename = "ownAppDomains", default)]
+    own_app_domains: Vec<String>,
 }
 
 /// Build a unique list of currently running app/process names.
@@ -766,6 +875,46 @@ fn resolve_foreground_browser_target(app_name: &str, title: &str, pid: u32) -> O
     browser_title_target::target_from_window_title(title)
 }
 
+fn foreground_app_for_server_report(app_name: &str, foreground_target: Option<&str>) -> String {
+    if is_browser(app_name) {
+        foreground_target
+            .unwrap_or(app_name)
+            .to_string()
+    } else {
+        app_name.to_string()
+    }
+}
+
+fn cache_foreground_server_decision(
+    foreground_app: &str,
+    is_foreground_blocked: bool,
+    own_app_domains: &[String],
+) {
+    let mut own_set = HashSet::new();
+    for v in own_app_domains {
+        if let Some(n) = normalize_rule_value(v) {
+            own_set.insert(n);
+        }
+    }
+    if let Ok(mut slot) = latest_foreground_server_decision().lock() {
+        *slot = Some(ForegroundServerDecision {
+            foreground_key: normalized_foreground_key(foreground_app),
+            is_foreground_blocked,
+            own_app_domains: own_set,
+        });
+    }
+}
+
+fn get_cached_foreground_server_decision(
+    foreground_app: &str,
+) -> Option<ForegroundServerDecision> {
+    let key = normalized_foreground_key(foreground_app);
+    let Ok(slot) = latest_foreground_server_decision().lock() else {
+        return None;
+    };
+    slot.clone().filter(|d| d.foreground_key == key)
+}
+
 /// Report current desktop state to server; server remains source of truth.
 fn check_apps_with_server(
     user_id: &str,
@@ -828,10 +977,16 @@ fn check_apps_with_server(
                 match response.json::<DesktopAppsResponse>() {
                     Ok(data) => {
                         if data.success {
+                            cache_foreground_server_decision(
+                                foreground_app,
+                                data.is_foreground_blocked,
+                                &data.own_app_domains,
+                            );
                             println!(
-                                "[Detection] Server response - isForegroundBlocked: {}, blockedRunning: {:?}, currentDistractionPresent: {}",
+                                "[Detection] Server response - isForegroundBlocked: {}, blockedRunning: {:?}, ownAppDomains: {}, currentDistractionPresent: {}",
                                 data.is_foreground_blocked,
                                 data.blocked_running,
+                                data.own_app_domains.len(),
                                 data.current_distraction.is_some()
                             );
                             Some(data)
@@ -861,14 +1016,7 @@ fn run_immediate_desktop_apps_report(user_id: &str) {
         return;
     };
     let effective_target = resolve_foreground_browser_target(&app_name, &title, pid);
-    let foreground_app = if is_browser(&app_name) {
-        effective_target
-            .as_deref()
-            .unwrap_or(app_name.as_str())
-            .to_string()
-    } else {
-        app_name.clone()
-    };
+    let foreground_app = foreground_app_for_server_report(&app_name, effective_target.as_deref());
     let foreground_process = if is_browser(&app_name) {
         Some(app_name.as_str())
     } else {
@@ -1734,6 +1882,16 @@ struct SessionResponse {
     blocked_apps: Vec<String>,
     #[serde(rename = "allowedApps", default)]
     allowed_apps: Vec<String>,
+    #[serde(rename = "classroomAllowedApps", default)]
+    classroom_allowed_apps: Vec<String>,
+    #[serde(rename = "classroomBlockedApps", default)]
+    classroom_blocked_apps: Vec<String>,
+    #[serde(rename = "ownAppDomains", default)]
+    own_app_domains: Vec<String>,
+    #[serde(rename = "whitelistApps", default)]
+    whitelist_apps: Vec<String>,
+    #[serde(rename = "whitelistMode", default)]
+    whitelist_mode: bool,
 }
 
 /// Returned to the webview from `get_active_session` (desktop poll).
@@ -2091,7 +2249,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     
                     let effective_target =
                         resolve_foreground_browser_target(&app_name, &title, pid);
-                    let local_distraction_key = classify_local_distraction(
+                    let mut local_distraction_key = classify_local_distraction(
                         &app_name,
                         effective_target.as_deref(),
                         Some(user_id.as_str()),
@@ -2101,6 +2259,22 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     // and URL read both feed `effective_target`.
                     let is_browser_distracting =
                         is_browser(&app_name) && local_distraction_key.is_some();
+                    let foreground_app_for_server =
+                        foreground_app_for_server_report(&app_name, effective_target.as_deref());
+                    let cached_server = get_cached_foreground_server_decision(&foreground_app_for_server);
+                    let server_own_domain_match = cached_server
+                        .as_ref()
+                        .map(|d| contains_any_rule_token(&foreground_app_for_server, &d.own_app_domains))
+                        .unwrap_or(false);
+                    if server_own_domain_match {
+                        local_distraction_key = None;
+                    }
+                    let server_report_blocked = cached_server
+                        .as_ref()
+                        .map(|d| d.is_foreground_blocked)
+                        .unwrap_or(false);
+                    let server_blocked_after_own_guard =
+                        server_report_blocked && !server_own_domain_match;
 
                     let foreground_identity_changed = last_reported_app != app_name
                         || (is_browser(&app_name) && last_reported_target != effective_target);
@@ -2132,13 +2306,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         if let Some(ref current_user) = get_current_user_id() {
                             let uid = current_user.clone();
                             let proc_name = app_name.clone();
-                            let fg_app = if is_browser(&app_name) {
-                                effective_target
-                                    .clone()
-                                    .unwrap_or_else(|| proc_name.clone())
-                            } else {
-                                proc_name.clone()
-                            };
+                            let fg_app =
+                                foreground_app_for_server_report(&app_name, effective_target.as_deref());
                             let fg_proc = if is_browser(&app_name) {
                                 Some(proc_name)
                             } else {
@@ -2152,13 +2321,13 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         }
                     }
 
-                    // Desktop is source of truth now: local classification from cached poll rules.
                     let is_server_blocked = local_distraction_key.is_some();
                     
                     // Determine if currently distracting
                     // Special case: if warning was from a LOCAL app (not browser) and user switched
                     // to a non-blocked app, dismiss even if browser has stale distraction data
-                    let is_distracting_now = is_server_blocked || is_browser_distracting;
+                    let is_distracting_now =
+                        !server_own_domain_match && (is_server_blocked || is_browser_distracting || server_blocked_after_own_guard);
 
                     // If our app is in foreground, handle timer but also check if distraction cleared
                     if is_our_app {
@@ -2180,7 +2349,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         if warning_shown_at.is_none() && !is_marked_distracted {
                             // First detection - show warning
                             show_distraction_warning(&app_handle);
-                            if !is_browser_distracting {
+                            if !is_browser_distracting && !server_blocked_after_own_guard {
                                 let app_id = app_handle.config().tauri.bundle.identifier.clone();
                                 let _ = tauri::api::notification::Notification::new(&app_id)
                                     .title("Stay focused!")
@@ -2188,9 +2357,14 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                     .show();
                             }
                             warning_shown_at = Some(std::time::Instant::now());
-                            active_distraction_key = local_distraction_key.clone();
+                            active_distraction_key = local_distraction_key
+                                .clone()
+                                .or_else(|| normalize_rule_value(&foreground_app_for_server))
+                                .or_else(|| Some(foreground_app_for_server.to_lowercase()));
                             if is_browser_distracting {
                                 println!("[Detection] Warning triggered by local browser domain match");
+                            } else if server_blocked_after_own_guard {
+                                println!("[Detection] Warning triggered by server isForegroundBlocked for '{}'", foreground_app_for_server);
                             } else {
                                 println!("[Detection] ⚠️ Warning triggered by local rules for '{}'", app_name);
                             }
@@ -2422,18 +2596,28 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
             &session_response.distracting_apps,
             &session_response.allowed_apps,
             &session_response.blocked_apps,
+            &session_response.classroom_allowed_apps,
+            &session_response.classroom_blocked_apps,
+            &session_response.own_app_domains,
+            &session_response.whitelist_apps,
+            session_response.whitelist_mode,
         );
         log!("[POLL DEBUG] Parsed OK — sessionId={:?} pendingAlerts count={} distractingApps count={}",
                  session_response.session_id,
                  alert_count,
                  session_response.distracting_apps.len());
         log!(
-            "[POLL DEBUG] Parsed extra: active={:?} kicked={} joinedAt={:?} allowedApps count={} blockedApps count={} requestImmediateAppReport={}",
+            "[POLL DEBUG] Parsed extra: active={:?} kicked={} joinedAt={:?} allowedApps count={} blockedApps count={} classroomAllowedApps count={} classroomBlockedApps count={} ownAppDomains count={} whitelistMode={} whitelistApps count={} requestImmediateAppReport={}",
             session_response.active,
             session_response.kicked,
             session_response.joined_at,
             session_response.allowed_apps.len(),
             session_response.blocked_apps.len(),
+            session_response.classroom_allowed_apps.len(),
+            session_response.classroom_blocked_apps.len(),
+            session_response.own_app_domains.len(),
+            session_response.whitelist_mode,
+            session_response.whitelist_apps.len(),
             session_response.request_immediate_app_report
         );
 
