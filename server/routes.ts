@@ -1921,18 +1921,55 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
   // IMPORTANT: This must NOT broadcast session activity or queue partner alerts. The Tauri app shows
   // a local 10s warning first; only POST /api/activity/update with status "distracted" should
   // notify other participants (after the client timer completes).
+  app.post('/api/desktop/classify-target', async (req, res) => {
+    try {
+      const { userId, target, isBrowser } = req.body as {
+        userId?: string;
+        target?: string;
+        isBrowser?: boolean;
+      };
+
+      const normalizedTarget =
+        target != null && String(target).trim() !== '' ? String(target).trim() : '';
+      if (!userId || !normalizedTarget) {
+        return res.status(400).json({
+          success: false,
+          message: 'userId and target are required',
+        });
+      }
+
+      const { isAppDistractingForUser } = await import('./app-categorizer');
+      const browserHint =
+        typeof isBrowser === 'boolean' ? isBrowser : undefined;
+      const distracting = await isAppDistractingForUser(
+        normalizedTarget,
+        String(userId),
+        { isBrowser: browserHint },
+      );
+      return res.json({ success: true, distracting });
+    } catch (error: any) {
+      console.error('Error in POST /api/desktop/classify-target:', error);
+      return res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to classify target',
+      });
+    }
+  });
+
   app.post('/api/desktop/apps', async (req, res) => {
     try {
-      const { userId, apps, foregroundApp, domain, source, foregroundProcess } = req.body as {
+      const { userId, apps, foregroundApp, domain, source, foregroundProcess, extensionId } = req.body as {
         userId?: string;
         apps?: string[];
         foregroundApp?: string;
-        /** Chrome extension sends `domain`; desktop sends `foregroundApp` */
+        /** Website-capable extension sends `domain`; desktop/ext-only sources send `foregroundApp` */
         domain?: string;
-        /** `browserExtension` | `desktopNative` — disambiguates tab domain vs native app name */
+        /** `browserExtension` | `browserExtensionExtension` | `desktopNative` */
         source?: string;
         /** Desktop: OS browser bundle name (e.g. Google Chrome) while `foregroundApp` is classify target */
         foregroundProcess?: string;
+        /** Optional extension id when source is browserExtensionExtension */
+        extensionId?: string;
       };
 
       const effectiveForeground =
@@ -1969,9 +2006,15 @@ export async function registerRoutes(app: Express, server: Server): Promise<void
       // when the foreground is a browser (e.g. Chess → Chrome would clear YouTube otherwise).
       const fromExtension =
         source === 'browserExtension' ||
+        source === 'browserExtensionExtension' ||
         (source !== 'desktopNative' &&
           isLikelyBrowserExtensionHostname(String(effectiveForeground)));
       if (fromExtension) {
+        if (source === 'browserExtensionExtension' && extensionId) {
+          console.log(
+            `[Desktop Apps] browserExtensionExtension report extensionId=${String(extensionId)} foregroundApp=${String(effectiveForeground)}`
+          );
+        }
         sessionManager.reportBrowserForegroundDomain(
           String(userId),
           String(effectiveForeground),

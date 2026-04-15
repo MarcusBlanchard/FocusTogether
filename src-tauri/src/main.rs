@@ -22,9 +22,16 @@ mod browser_title_target;
 static LOG_FILE: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
 
 static LAST_CLASSIFY_AT: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+static LAST_BROWSER_TITLE_BY_PID: OnceLock<Mutex<HashMap<u32, (String, std::time::Instant)>>> =
+    OnceLock::new();
+const BROWSER_TITLE_CACHE_TTL: std::time::Duration = std::time::Duration::from_millis(1500);
 
 fn last_classify_at_lock() -> &'static Mutex<Option<std::time::Instant>> {
     LAST_CLASSIFY_AT.get_or_init(|| Mutex::new(None))
+}
+
+fn browser_title_cache_lock() -> &'static Mutex<HashMap<u32, (String, std::time::Instant)>> {
+    LAST_BROWSER_TITLE_BY_PID.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Windows: Chrome address-bar autocomplete mutates the window title before navigation; debounce
@@ -277,6 +284,7 @@ fn default_distracting_entries() -> &'static [&'static str] {
         "twitch",
         "steam",
         "chess",
+        "2048",
         "deviantart",
         "deviantart.com",
     ]
@@ -521,6 +529,17 @@ fn contains_any_rule_token(value: &str, rules: &HashSet<String>) -> bool {
     rules.iter().any(|r| lower.contains(r))
 }
 
+fn looks_like_hostname_target(value: &str) -> bool {
+    let t = value.trim().to_lowercase();
+    if t.is_empty() || t.contains(' ') || !t.contains('.') {
+        return false;
+    }
+    if t.ends_with(".app") {
+        return false;
+    }
+    t == "localhost" || t.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+}
+
 fn cache_false_on_classify_failure(cache_key: &str, detail: &str) {
     if detail.contains("rate limited") {
         return;
@@ -581,7 +600,11 @@ fn classify_local_distraction(
                 }
             }
             if let Some(uid) = user_id {
-                let (opt, detail) = server_classify_target_with_detail(uid, &key, Some(true));
+                // Browser titles from extension pages are often not hostnames ("boxel rebound").
+                // Route hostnames through website classification; everything else through app path.
+                let is_browser_target = looks_like_hostname_target(&key);
+                let (opt, detail) =
+                    server_classify_target_with_detail(uid, &key, Some(is_browser_target));
                 match opt {
                     Some(true) => {
                         println!("[Server Classifier] {} => distracting ({})", key, detail);
@@ -838,6 +861,8 @@ struct DesktopAppsResponse {
     blocked_apps: Vec<String>,
     #[serde(rename = "ownAppDomains", default)]
     own_app_domains: Vec<String>,
+    #[serde(default, rename = "needsTabInfo")]
+    needs_tab_info: bool,
 }
 
 /// Build a unique list of currently running app/process names.
@@ -1001,11 +1026,58 @@ fn effective_foreground_browser_target(app_name: &str, title: &str, pid: u32) ->
     }
 }
 
-fn foreground_app_for_server_report(app_name: &str, foreground_target: Option<&str>) -> String {
+fn resolved_browser_window_title(app_name: &str, window_title: &str, pid: u32) -> String {
+    if !is_browser(app_name) {
+        return window_title.trim().to_string();
+    }
+    let mut title = window_title.trim().to_string();
+    let browser_name = app_name.trim();
+    let title_is_generic = title.is_empty() || title.eq_ignore_ascii_case(browser_name);
+    if title_is_generic {
+        if let Some(recovered_title) = browser_url::get_active_browser_window_title_nonblocking(
+            pid,
+            std::time::Duration::from_millis(180),
+            Some(app_name),
+        ) {
+            let recovered_trimmed = recovered_title.trim();
+            if !recovered_trimmed.is_empty() {
+                title = recovered_trimmed.to_string();
+                log!(
+                    "[Desktop Apps] Recovered browser title via accessibility/automation: process={} title={:?}",
+                    app_name,
+                    title
+                );
+                if let Ok(mut cache) = browser_title_cache_lock().lock() {
+                    cache.insert(pid, (title.clone(), std::time::Instant::now()));
+                }
+            }
+        }
+        if title.is_empty() || title.eq_ignore_ascii_case(browser_name) {
+            if let Ok(mut cache) = browser_title_cache_lock().lock() {
+                if let Some((cached_title, at)) = cache.get(&pid).cloned() {
+                    if at.elapsed() <= BROWSER_TITLE_CACHE_TTL {
+                        return cached_title;
+                    }
+                }
+                cache.remove(&pid);
+            }
+        }
+    } else if let Ok(mut cache) = browser_title_cache_lock().lock() {
+        cache.insert(pid, (title.clone(), std::time::Instant::now()));
+    }
+    title
+}
+
+/// `foregroundApp` for POST `/api/desktop/apps`: stripped OS window title for browsers; app name for native.
+fn foreground_app_for_desktop_apps_api(app_name: &str, window_title: &str, pid: u32) -> String {
     if is_browser(app_name) {
-        foreground_target
-            .unwrap_or(app_name)
-            .to_string()
+        let resolved_title = resolved_browser_window_title(app_name, window_title, pid);
+        let s = browser_title_target::stripped_tab_title_for_desktop_apps(&resolved_title);
+        if s.is_empty() {
+            app_name.to_string()
+        } else {
+            s
+        }
     } else {
         app_name.to_string()
     }
@@ -1103,16 +1175,22 @@ fn check_apps_with_server(
                 match response.json::<DesktopAppsResponse>() {
                     Ok(data) => {
                         if data.success {
+                            if data.needs_tab_info {
+                                println!(
+                                    "[Desktop Apps] needsTabInfo=true from server (foregroundApp may look like raw browser name); verify stripped tab title and foregroundProcess"
+                                );
+                            }
                             cache_foreground_server_decision(
                                 foreground_app,
                                 data.is_foreground_blocked,
                                 &data.own_app_domains,
                             );
                             println!(
-                                "[Detection] Server response - isForegroundBlocked: {}, blockedRunning: {:?}, ownAppDomains: {}, currentDistractionPresent: {}",
+                                "[Detection] Server response - isForegroundBlocked: {}, blockedRunning: {:?}, ownAppDomains: {}, needsTabInfo: {}, currentDistractionPresent: {}",
                                 data.is_foreground_blocked,
                                 data.blocked_running,
                                 data.own_app_domains.len(),
+                                data.needs_tab_info,
                                 data.current_distraction.is_some()
                             );
                             Some(data)
@@ -1141,8 +1219,8 @@ fn run_immediate_desktop_apps_report(user_id: &str) {
     let Some((app_name, title, pid)) = get_foreground_info() else {
         return;
     };
-    let effective_target = effective_foreground_browser_target(&app_name, &title, pid);
-    let foreground_app = foreground_app_for_server_report(&app_name, effective_target.as_deref());
+    let resolved_title = resolved_browser_window_title(&app_name, &title, pid);
+    let foreground_app = foreground_app_for_desktop_apps_api(&app_name, &resolved_title, pid);
     let foreground_process = if is_browser(&app_name) {
         Some(app_name.as_str())
     } else {
@@ -2356,7 +2434,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         let mut last_sent_state: Option<&str> = None;
         let mut last_server_report: Option<std::time::Instant> = None;
         let mut last_reported_app: String = String::new();
-        // Last unified target (hostname or title) we reported for browsers (tab/title changes do not change app name).
+        // Last `foregroundApp` string we posted for browsers (stripped tab title; tab changes do not change app name).
         let mut last_reported_target: Option<String> = None;
         let mut active_distraction_key: Option<String> = None;
 
@@ -2380,37 +2458,33 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     let app_lower = app_name.to_lowercase();
                     let is_our_app = app_lower.contains("flowlocked");
                     
+                    let resolved_title = resolved_browser_window_title(&app_name, &title, pid);
+                    let desktop_apps_foreground =
+                        foreground_app_for_desktop_apps_api(&app_name, &resolved_title, pid);
                     let effective_target =
-                        effective_foreground_browser_target(&app_name, &title, pid);
+                        effective_foreground_browser_target(&app_name, &resolved_title, pid);
+                    let browser_fallback_target = if is_browser(&app_name)
+                        && effective_target.is_none()
+                        && !desktop_apps_foreground
+                            .trim()
+                            .eq_ignore_ascii_case(app_name.trim())
+                    {
+                        Some(desktop_apps_foreground.as_str())
+                    } else {
+                        None
+                    };
                     let mut local_distraction_key = classify_local_distraction(
                         &app_name,
-                        effective_target.as_deref(),
+                        effective_target.as_deref().or(browser_fallback_target),
                         Some(user_id.as_str()),
                     );
                     // Any match while foreground is a real browser counts as browser distraction (not the
                     // "You opened Google Chrome" notification path). Do not require URL bar read: title hints
                     // and URL read both feed `effective_target`.
-                    let is_browser_distracting =
-                        is_browser(&app_name) && local_distraction_key.is_some();
-                    let foreground_app_for_server =
-                        foreground_app_for_server_report(&app_name, effective_target.as_deref());
-                    let cached_server = get_cached_foreground_server_decision(&foreground_app_for_server);
-                    let server_own_domain_match = cached_server
-                        .as_ref()
-                        .map(|d| contains_any_rule_token(&foreground_app_for_server, &d.own_app_domains))
-                        .unwrap_or(false);
-                    if server_own_domain_match {
-                        local_distraction_key = None;
-                    }
-                    let server_report_blocked = cached_server
-                        .as_ref()
-                        .map(|d| d.is_foreground_blocked)
-                        .unwrap_or(false);
-                    let server_blocked_after_own_guard =
-                        server_report_blocked && !server_own_domain_match;
 
                     let foreground_identity_changed = last_reported_app != app_name
-                        || (is_browser(&app_name) && last_reported_target != effective_target);
+                        || (is_browser(&app_name)
+                            && last_reported_target.as_deref() != Some(desktop_apps_foreground.as_str()));
 
                     // Report on app switch, browser tab/site change, or periodic heartbeat.
                     let should_report_server = match last_server_report {
@@ -2425,28 +2499,28 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         last_server_report = Some(std::time::Instant::now());
                         last_reported_app = app_name.clone();
                         last_reported_target = if is_browser(&app_name) {
-                            effective_target.clone()
+                            Some(desktop_apps_foreground.clone())
                         } else {
                             None
                         };
                         log!(
-                            "[Desktop Apps] foreground report: process={} pid={} target={:?}",
+                            "[Desktop Apps] foreground report: process={} pid={} foregroundApp={:?} classify_target={:?}",
                             app_name,
                             pid,
+                            desktop_apps_foreground.as_str(),
                             effective_target.as_deref()
                         );
 
                         if let Some(ref current_user) = get_current_user_id() {
                             let uid = current_user.clone();
                             let proc_name = app_name.clone();
-                            let fg_app =
-                                foreground_app_for_server_report(&app_name, effective_target.as_deref());
+                            let fg_app = desktop_apps_foreground.clone();
                             let fg_proc = if is_browser(&app_name) {
                                 Some(proc_name)
                             } else {
                                 None
                             };
-                            // Non-blocking: local distraction decisions should never wait on network.
+                            // Non-blocking: keep detection loop responsive on app/tab switches.
                             std::thread::spawn(move || {
                                 let proc_ref = fg_proc.as_deref();
                                 let _ = check_apps_with_server(&uid, &fg_app, proc_ref);
@@ -2454,13 +2528,34 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         }
                     }
 
+                    let cached_server = get_cached_foreground_server_decision(&desktop_apps_foreground);
+                    let server_own_domain_match = cached_server
+                        .as_ref()
+                        .map(|d| contains_any_rule_token(&desktop_apps_foreground, &d.own_app_domains))
+                        .unwrap_or(false);
+                    if server_own_domain_match {
+                        local_distraction_key = None;
+                    }
+                    let server_report_blocked = cached_server
+                        .as_ref()
+                        .map(|d| d.is_foreground_blocked)
+                        .unwrap_or(false);
+                    let server_blocked_after_own_guard =
+                        server_report_blocked && !server_own_domain_match;
+
+                    let is_browser_distracting =
+                        is_browser(&app_name) && local_distraction_key.is_some();
+
                     let is_server_blocked = local_distraction_key.is_some();
                     
                     // Determine if currently distracting
                     // Special case: if warning was from a LOCAL app (not browser) and user switched
                     // to a non-blocked app, dismiss even if browser has stale distraction data
                     let is_distracting_now =
-                        !server_own_domain_match && (is_server_blocked || is_browser_distracting || server_blocked_after_own_guard);
+                        !server_own_domain_match
+                            && (is_server_blocked
+                                || is_browser_distracting
+                                || server_blocked_after_own_guard);
 
                     // If our app is in foreground, handle timer but also check if distraction cleared
                     if is_our_app {
@@ -2492,12 +2587,12 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                             warning_shown_at = Some(std::time::Instant::now());
                             active_distraction_key = local_distraction_key
                                 .clone()
-                                .or_else(|| normalize_rule_value(&foreground_app_for_server))
-                                .or_else(|| Some(foreground_app_for_server.to_lowercase()));
+                                .or_else(|| normalize_rule_value(&desktop_apps_foreground))
+                                .or_else(|| Some(desktop_apps_foreground.to_lowercase()));
                             if is_browser_distracting {
                                 println!("[Detection] Warning triggered by local browser domain match");
                             } else if server_blocked_after_own_guard {
-                                println!("[Detection] Warning triggered by server isForegroundBlocked for '{}'", foreground_app_for_server);
+                                println!("[Detection] Warning triggered by server isForegroundBlocked for '{}'", desktop_apps_foreground);
                             } else {
                                 println!("[Detection] ⚠️ Warning triggered by local rules for '{}'", app_name);
                             }
@@ -2578,7 +2673,6 @@ fn stop_detection(app_handle: &tauri::AppHandle) {
     if let Ok(mut guard) = session_ending_shown().lock() {
         guard.clear();
     }
-
     if !DETECTION_RUNNING.load(Ordering::SeqCst) {
         return;
     }

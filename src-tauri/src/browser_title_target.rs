@@ -36,6 +36,12 @@ pub fn is_browser_app(app_name: &str) -> bool {
     .any(|k| n.contains(k))
 }
 
+/// Tab title for `foregroundApp` on `/api/desktop/apps`: strip trailing ` - Browser` only.
+/// Server normalizes and classifies; do not extract domains here.
+pub fn stripped_tab_title_for_desktop_apps(title: &str) -> String {
+    strip_browser_title_suffix(title)
+}
+
 fn strip_browser_title_suffix(title: &str) -> String {
     let mut s = title.trim().to_string();
     let suffixes: &[&str] = &[

@@ -19,6 +19,20 @@ pub fn get_active_browser_url(pid: u32, browser_app_name: Option<&str>) -> Optio
     None
 }
 
+/// Returns the active browser tab/window title for the provided process id.
+pub(crate) fn get_active_browser_window_title(
+    pid: u32,
+    browser_app_name: Option<&str>,
+) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        return macos::get_active_browser_window_title(pid, browser_app_name.unwrap_or(""));
+    }
+
+    #[allow(unreachable_code)]
+    None
+}
+
 pub(crate) fn accessibility_available() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -47,6 +61,28 @@ pub(crate) fn get_active_browser_domain_nonblocking(
         Ok(v) => v,
         Err(_) => {
             println!("[Browser URL] Timed out reading URL via accessibility");
+            None
+        }
+    }
+}
+
+/// Non-blocking browser title helper for monitoring loop use.
+pub(crate) fn get_active_browser_window_title_nonblocking(
+    pid: u32,
+    timeout: Duration,
+    browser_app_name: Option<&str>,
+) -> Option<String> {
+    let hint = browser_app_name.map(|s| s.to_string());
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let title = get_active_browser_window_title(pid, hint.as_deref());
+        let _ = tx.send(title);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(v) => v,
+        Err(_) => {
+            println!("[Browser Title] Timed out reading browser window title");
             None
         }
     }
@@ -207,6 +243,32 @@ return ""
 "#
     }
 
+    /// Chromium-style active-tab title.
+    fn script_chromium_like_title(app_bundle_name: &str) -> String {
+        format!(
+            r#"
+tell application "{app_bundle_name}"
+    if (count of windows) > 0 then
+        return title of active tab of front window
+    end if
+end tell
+return ""
+"#,
+            app_bundle_name = app_bundle_name
+        )
+    }
+
+    fn script_safari_title() -> &'static str {
+        r#"
+tell application "Safari"
+    if (count of windows) > 0 then
+        return name of front document
+    end if
+end tell
+return ""
+"#
+    }
+
     /// Try each browser's native AppleScript — reads the real tab URL (incognito too). Uses
     /// Automation permission for that browser (System Settings → Privacy & Security → Automation).
     fn try_native_browser_url(app_name: &str) -> Option<String> {
@@ -258,6 +320,50 @@ System Settings → Privacy & Security → Automation to control this browser (o
         }
     }
 
+    fn try_native_browser_title(app_name: &str) -> Option<String> {
+        let l = app_name.to_lowercase();
+        let script: String = if l.contains("safari") && !l.contains("technology") {
+            script_safari_title().to_string()
+        } else if l.contains("chromium") {
+            script_chromium_like_title("Chromium")
+        } else if l.contains("google chrome") || l == "chrome" {
+            script_chromium_like_title("Google Chrome")
+        } else if l.contains("brave") {
+            script_chromium_like_title("Brave Browser")
+        } else if l.contains("microsoft edge") || l == "edge" {
+            script_chromium_like_title("Microsoft Edge")
+        } else if l.contains("vivaldi") {
+            script_chromium_like_title("Vivaldi")
+        } else if l.contains("opera") {
+            script_chromium_like_title("Opera")
+        } else if l.contains("arc") {
+            script_chromium_like_title("Arc")
+        } else if l.contains("chrome") {
+            script_chromium_like_title("Google Chrome")
+        } else {
+            return None;
+        };
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            if !err.trim().is_empty() {
+                println!("[Browser Title] AppleScript stderr: {}", err.trim());
+            }
+            return None;
+        }
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    }
+
     /// System Events UI tree — needs Accessibility for Flowlocked (not Automation).
     fn try_system_events_address_bar(pid: u32) -> Option<String> {
         let script = format!(
@@ -297,6 +403,173 @@ return ""
         }
     }
 
+    fn try_system_events_window_title(pid: u32) -> Option<String> {
+        let script = format!(
+            r#"
+tell application "System Events"
+    set targetProc to first application process whose unix id is {pid}
+    if (count of windows of targetProc) > 0 then
+        set t to name of front window of targetProc
+        if t is not missing value and t is not "" then return t
+    end if
+end tell
+return ""
+"#,
+            pid = pid
+        );
+
+        let output = Command::new("osascript").arg("-e").arg(script).output().ok()?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            if !err.trim().is_empty() {
+                println!("[Browser Title] System Events stderr: {}", err.trim());
+            }
+            return None;
+        }
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    }
+
+    fn try_system_events_window_titles(pid: u32) -> Vec<String> {
+        let script = format!(
+            r#"
+tell application "System Events"
+    set targetProc to first application process whose unix id is {pid}
+    set names to {{}}
+    repeat with w in windows of targetProc
+        try
+            set wn to name of w
+            if wn is not missing value and wn is not "" then set end of names to wn
+        end try
+    end repeat
+    set AppleScript's text item delimiters to linefeed
+    return names as text
+end tell
+return ""
+"#,
+            pid = pid
+        );
+
+        let output = match Command::new("osascript").arg("-e").arg(script).output() {
+            Ok(o) => o,
+            Err(_) => return Vec::new(),
+        };
+        if !output.status.success() {
+            return Vec::new();
+        }
+        let raw = String::from_utf8_lossy(&output.stdout).to_string();
+        raw.lines()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    fn is_likely_extension_popup_title(title: &str) -> bool {
+        let t = title.trim();
+        if t.is_empty() || t.len() > 64 {
+            return false;
+        }
+        let lower = t.to_lowercase();
+        if lower.contains("google chrome")
+            || lower.contains("flowlocked")
+            || lower.contains("focus & accountability")
+            || lower == "new tab"
+            || lower == "extensions"
+        {
+            return false;
+        }
+        if t.contains('/') || t.contains('.') || t.contains(" - ") || t.contains(" — ") {
+            return false;
+        }
+        true
+    }
+
+    fn is_unhelpful_browser_front_title(title: &str) -> bool {
+        let t = title.trim().to_lowercase();
+        t.is_empty()
+            || t == "google chrome"
+            || t.contains("flowlocked")
+            || t.contains("replit")
+            || t.contains("server/downloads/")
+    }
+
+    fn is_likely_popup_text_title(text: &str) -> bool {
+        let t = text.trim();
+        if t.len() < 4 || t.len() > 48 {
+            return false;
+        }
+        let lower = t.to_lowercase();
+        let generic = [
+            "audio",
+            "fullscreen",
+            "fast mode",
+            "play",
+            "notes",
+            "settings",
+        ];
+        if generic.contains(&lower.as_str()) {
+            return false;
+        }
+        if lower.contains("flowlocked")
+            || lower.contains("google chrome")
+            || lower.contains("tiny tycoon")
+            || lower.contains("available on google chrome")
+        {
+            return false;
+        }
+        if t.contains('/') || t.contains('.') || t.contains("://") || t.contains(" - ") {
+            return false;
+        }
+        // Prefer short title-like labels with letters (e.g. "Boxel Rebound").
+        t.chars().any(|c| c.is_ascii_alphabetic())
+    }
+
+    fn try_system_events_popup_text_title(pid: u32) -> Option<String> {
+        let script = format!(
+            r#"
+tell application "System Events"
+    set targetProc to first application process whose unix id is {pid}
+    set vals to {{}}
+    try
+        repeat with e in (entire contents of front window of targetProc)
+            try
+                if class of e is static text then
+                    set v to value of e
+                    if v is not missing value and v is not "" then set end of vals to (v as text)
+                end if
+            end try
+            if (count of vals) >= 40 then exit repeat
+        end repeat
+    end try
+    set AppleScript's text item delimiters to linefeed
+    return vals as text
+end tell
+return ""
+"#,
+            pid = pid
+        );
+        let output = Command::new("osascript").arg("-e").arg(script).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let raw = String::from_utf8_lossy(&output.stdout).to_string();
+        for line in raw.lines() {
+            let candidate = line.trim();
+            if is_likely_popup_text_title(candidate) {
+                println!(
+                    "[Browser Title] Using popup static-text title candidate: {:?}",
+                    candidate
+                );
+                return Some(candidate.to_string());
+            }
+        }
+        None
+    }
+
     pub(super) fn get_active_browser_url(pid: u32, app_name: &str) -> Option<String> {
         // 1) Native browser URL — best for Chrome/Safari; does not require Accessibility (needs Automation for that browser).
         if let Some(url) = try_native_browser_url(app_name) {
@@ -321,6 +594,40 @@ If YouTube still fails: also enable Automation for Flowlocked on your browser (C
 
         println!("[Browser URL] ⚠️ Could not read browser URL — enable Automation (browser) and/or Accessibility (Flowlocked)");
         None
+    }
+
+    pub(super) fn get_active_browser_window_title(pid: u32, app_name: &str) -> Option<String> {
+        // Prefer System Events for the true foreground window title. This captures extension
+        // popup/panel windows that browser-native "active tab" APIs can miss.
+        if is_accessibility_trusted() {
+            let front_title = try_system_events_window_title(pid);
+            let all_titles = try_system_events_window_titles(pid);
+            if let Some(ref front) = front_title {
+                if is_unhelpful_browser_front_title(front) {
+                    if let Some(popup_title) = try_system_events_popup_text_title(pid) {
+                        return Some(popup_title);
+                    }
+                }
+                for candidate in &all_titles {
+                    if candidate == front {
+                        continue;
+                    }
+                    if is_likely_extension_popup_title(candidate) {
+                        println!(
+                            "[Browser Title] Using likely extension popup title: {:?} (front={:?})",
+                            candidate, front
+                        );
+                        return Some(candidate.clone());
+                    }
+                }
+            }
+            if let Some(title) = front_title {
+                return Some(title);
+            }
+        }
+
+        // Fallback to browser-native active-tab title when System Events is unavailable.
+        try_native_browser_title(app_name)
     }
 }
 

@@ -9,7 +9,7 @@ let API_BASE =
 let userId = null;
 let currentSession = null;
 let isMonitoring = false;
-let lastReportedDomain = null;
+let lastReportedForeground = null;
 let reportInterval = null;
 
 // Initialize on install
@@ -209,7 +209,7 @@ function stopSessionPolling() {
   }
   isMonitoring = false;
   currentSession = null;
-  lastReportedDomain = null;
+  lastReportedForeground = null;
   updateIcon(false);
 }
 
@@ -241,7 +241,7 @@ async function checkSession() {
         console.log('[FocusTogether] Session ended, stopping monitoring');
         isMonitoring = false;
         currentSession = null;
-        lastReportedDomain = null;
+        lastReportedForeground = null;
         if (reportInterval) {
           clearInterval(reportInterval);
           reportInterval = null;
@@ -254,18 +254,35 @@ async function checkSession() {
   }
 }
 
-// Get domain from URL
-function getDomain(url) {
-  if (!url) return null;
+function getExtensionForegroundPayload(tab) {
+  if (!tab) return null;
+  const tabUrl = tab.url || tab.pendingUrl || '';
+  const title = (tab.title || '').trim();
+  if (!tabUrl.startsWith('chrome-extension://')) return null;
+
+  let extensionId = null;
   try {
-    const urlObj = new URL(url);
-    return urlObj.hostname.toLowerCase();
-  } catch {
-    return null;
-  }
+    extensionId = new URL(tabUrl).hostname || null;
+  } catch {}
+
+  const foregroundApp =
+    title.length > 0 && !/^new tab$/i.test(title)
+      ? title
+      : extensionId
+        ? `extension:${extensionId}`
+        : 'browser extension';
+
+  const key = extensionId
+    ? `extension:${extensionId}:${foregroundApp.toLowerCase()}`
+    : `extension-title:${foregroundApp.toLowerCase()}`;
+  return {
+    key,
+    foregroundApp,
+    extensionId,
+  };
 }
 
-// Start reporting current domain to server periodically
+// Start reporting current extension foreground to server periodically
 function startDomainReporting() {
   if (reportInterval) return;
   
@@ -273,33 +290,34 @@ function startDomainReporting() {
   reportInterval = setInterval(reportCurrentDomain, 2000); // Safety net if tab events are missed
 }
 
-// Report current domain to server
+// Report active extension context to server (never normal websites).
 async function reportCurrentDomain() {
   if (!isMonitoring || !currentSession || !userId) return;
   
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.url) return;
+    const payload = getExtensionForegroundPayload(tab);
+    if (!payload) {
+      return;
+    }
     
-    const domain = getDomain(tab.url);
-    if (!domain) return;
+    // Skip reporting if unchanged foreground target
+    if (payload.key === lastReportedForeground) return;
     
-    // Skip reporting if it's the same domain we just reported
-    if (domain === lastReportedDomain) return;
+    console.log('[FocusTogether] Reporting extension foreground to server:', payload);
+    lastReportedForeground = payload.key;
     
-    console.log('[FocusTogether] Reporting domain to server:', domain);
-    lastReportedDomain = domain;
-    
-    // Replit contract: source + domain (foregroundApp optional for older servers)
+    // Extension-only contract: never send website domains from this integration.
+    const body = {
+      userId: String(userId),
+      source: 'browserExtensionExtension',
+      foregroundApp: payload.foregroundApp,
+    };
+    if (payload.extensionId) body.extensionId = payload.extensionId;
     const response = await fetch(`${API_BASE}/api/desktop/apps`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: String(userId),
-        source: 'browserExtension',
-        domain: domain,
-        foregroundApp: domain,
-      })
+      body: JSON.stringify(body)
     });
     
     if (!response.ok) {
@@ -308,11 +326,11 @@ async function reportCurrentDomain() {
       const data = await response.json();
       console.log('[FocusTogether] Server response:', data);
       if (data.isForegroundBlocked) {
-        console.log('[FocusTogether] Distracting site detected, desktop app will show notification');
+        console.log('[FocusTogether] Distracting extension context detected');
       }
     }
   } catch (error) {
-    console.error('[FocusTogether] Error reporting domain:', error);
+    console.error('[FocusTogether] Error reporting extension foreground:', error);
   }
 }
 
@@ -358,7 +376,7 @@ function updateIcon(monitoring) {
 function scheduleDomainReportBurst() {
   if (!isMonitoring) return;
   const fire = () => {
-    lastReportedDomain = null;
+    lastReportedForeground = null;
     reportCurrentDomain();
   };
   // Tab switch races: active tab URL may not be final on first tick — stagger fires

@@ -46,7 +46,8 @@ const DEFAULT_CATEGORIES: Record<string, AppCategoryType> = {
   'pinterest': 'distracting',
   'linkedin': 'distracting',
   
-  // Distracting - Games
+  // Distracting - Games (bare tab titles e.g. Chrome extension "2048")
+  '2048': 'distracting',
   'steam': 'distracting',
   'epic games': 'distracting',
   'minecraft': 'distracting',
@@ -522,7 +523,16 @@ export async function removeUserAppRule(userId: string, appName: string): Promis
  */
 export async function isAppDistractingForUser(
   appName: string, 
-  userId?: string
+  userId?: string,
+  options?: {
+    /**
+     * Optional target-type hint from desktop classify endpoint.
+     * - true: treat as browser target (hostname expansion allowed)
+     * - false: treat as app/title target (no hostname expansion)
+     * - undefined: auto-detect (legacy behavior)
+     */
+    isBrowser?: boolean;
+  }
 ): Promise<boolean> {
   const normalized = normalizeAppName(appName);
 
@@ -556,8 +566,15 @@ export async function isAppDistractingForUser(
     }
   }
   
-  // Fall back to general category (try hostname-derived keys first so youtube.com → youtube)
-  const keysToClassify = looksLikeHostname(normalized)
+  // Fall back to general category.
+  // `isBrowser` hint avoids accidental hostname expansion for app-like titles containing dots.
+  const shouldTreatAsHostname =
+    options?.isBrowser === true
+      ? looksLikeHostname(normalized)
+      : options?.isBrowser === false
+        ? false
+        : looksLikeHostname(normalized);
+  const keysToClassify = shouldTreatAsHostname
     ? domainCategoryLookupKeys(normalized)
     : [normalized];
 
