@@ -27,6 +27,66 @@ fn last_classify_at_lock() -> &'static Mutex<Option<std::time::Instant>> {
     LAST_CLASSIFY_AT.get_or_init(|| Mutex::new(None))
 }
 
+/// Windows: Chrome address-bar autocomplete mutates the window title before navigation; debounce
+/// title-derived targets so the 10s countdown does not fire on transient suggestions.
+#[cfg(target_os = "windows")]
+const WINDOWS_TITLE_TARGET_DEBOUNCE: std::time::Duration =
+    std::time::Duration::from_millis(2500);
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Default)]
+struct WindowsTitleTargetDebounce {
+    pending: Option<String>,
+    since: Option<std::time::Instant>,
+    committed: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsTitleTargetDebounce {
+    fn reset(&mut self) {
+        self.pending = None;
+        self.since = None;
+        self.committed = None;
+    }
+
+    /// `title_derived` false = real URL from the browser chrome; apply immediately.
+    fn apply(&mut self, raw: Option<String>, title_derived: bool) -> Option<String> {
+        if !title_derived {
+            self.reset();
+            return raw;
+        }
+        let Some(s) = raw else {
+            self.reset();
+            return None;
+        };
+        let key = normalize_rule_value(&s).unwrap_or(s);
+        if self.committed.as_ref() == Some(&key) {
+            return Some(key);
+        }
+        if self.pending.as_ref() != Some(&key) {
+            self.pending = Some(key.clone());
+            self.since = Some(std::time::Instant::now());
+            return self.committed.clone();
+        }
+        if let Some(t0) = self.since {
+            if t0.elapsed() >= WINDOWS_TITLE_TARGET_DEBOUNCE {
+                self.committed = Some(key.clone());
+                return Some(key);
+            }
+        }
+        self.committed.clone()
+    }
+}
+
+#[cfg(target_os = "windows")]
+static WINDOWS_TITLE_TARGET_DEBOUNCE_STATE: OnceLock<Mutex<WindowsTitleTargetDebounce>> =
+    OnceLock::new();
+
+#[cfg(target_os = "windows")]
+fn windows_title_target_debounce_lock() -> &'static Mutex<WindowsTitleTargetDebounce> {
+    WINDOWS_TITLE_TARGET_DEBOUNCE_STATE.get_or_init(|| Mutex::new(WindowsTitleTargetDebounce::default()))
+}
+
 /// Keep log small so TextEdit/Preview can open it; rotate when over limit.
 const LIVE_LOG_MAX_BYTES: u64 = 512 * 1024;
 
@@ -826,53 +886,95 @@ fn sanitize_foreground_snapshot(app_name: String, title: String, pid: u32) -> Op
     Some((app, t, pid))
 }
 
+fn foreground_pid_still_matches(pid: u32) -> bool {
+    matches!(get_foreground_info(), Some((_, _, p)) if p == pid)
+}
+
 /// Resolve browser domain for a specific foreground snapshot (app/pid/title).
 /// Returns None if focus changed before/after URL read to avoid cross-window flicker.
-fn resolve_focused_browser_domain(app_name: &str, title: &str, pid: u32) -> Option<String> {
+/// Second tuple element: `false` = URL bar read, `true` = window-title heuristics (needs Windows
+/// debounce for address-bar autocomplete noise).
+fn resolve_focused_browser_domain_with_source(
+    app_name: &str,
+    title: &str,
+    pid: u32,
+) -> Option<(String, bool)> {
     if !is_browser(app_name) {
         return None;
     }
-    // Snapshot must still be focused when we begin.
-    if let Some((_, _, curr_pid)) = get_foreground_info() {
-        if curr_pid != pid {
-            return None;
-        }
-    } else {
+    if !foreground_pid_still_matches(pid) {
         return None;
     }
     #[cfg(target_os = "macos")]
     let url_read_timeout = std::time::Duration::from_millis(250);
     #[cfg(not(target_os = "macos"))]
     let url_read_timeout = std::time::Duration::from_millis(250);
-    let domain = browser_url::get_active_browser_domain_nonblocking(
+
+    if let Some(d) = browser_url::get_active_browser_domain_nonblocking(
         pid,
         url_read_timeout,
         Some(app_name),
-    )
-    .or_else(|| browser_url::infer_site_from_window_title(title))
-    .or_else(|| browser_url::host_hint_from_title(title));
-    // Snapshot must still match when we finish.
-    if let Some((_, _, curr_pid)) = get_foreground_info() {
-        if curr_pid != pid {
-            return None;
+    ) {
+        if foreground_pid_still_matches(pid) {
+            return Some((d, false));
         }
-    } else {
         return None;
     }
-    domain
+    if let Some(d) = browser_url::infer_site_from_window_title(title) {
+        if foreground_pid_still_matches(pid) {
+            return Some((d, true));
+        }
+        return None;
+    }
+    if let Some(d) = browser_url::host_hint_from_title(title) {
+        if foreground_pid_still_matches(pid) {
+            return Some((d, true));
+        }
+        return None;
+    }
+    None
 }
 
-/// Unified classify/report target: real URL-derived host when available, else title-derived target.
-fn resolve_foreground_browser_target(app_name: &str, title: &str, pid: u32) -> Option<String> {
+/// Raw foreground target plus whether it came only from title heuristics (not URL bar).
+fn resolve_foreground_browser_target_detailed(
+    app_name: &str,
+    title: &str,
+    pid: u32,
+) -> (Option<String>, bool) {
     if !is_browser(app_name) {
-        return None;
+        return (None, false);
     }
-    if let Some(d) = resolve_focused_browser_domain(app_name, title, pid) {
+    if let Some((d, from_title)) = resolve_focused_browser_domain_with_source(app_name, title, pid) {
         if !is_browser_internal_marker_target(&d) {
-            return Some(d);
+            return (Some(d), from_title);
         }
     }
-    browser_title_target::target_from_window_title(title)
+    let t = browser_title_target::target_from_window_title(title);
+    (t, true)
+}
+
+/// Foreground browser target for classification and `/api/desktop/apps`, with Windows-only
+/// debounce when the host is inferred from the window title (address-bar autocomplete).
+fn effective_foreground_browser_target(app_name: &str, title: &str, pid: u32) -> Option<String> {
+    let (raw, title_derived) = resolve_foreground_browser_target_detailed(app_name, title, pid);
+    #[cfg(target_os = "windows")]
+    {
+        if !is_browser(app_name) {
+            if let Ok(mut g) = windows_title_target_debounce_lock().lock() {
+                g.reset();
+            }
+            return None;
+        }
+        if let Ok(mut g) = windows_title_target_debounce_lock().lock() {
+            return g.apply(raw, title_derived);
+        }
+        return raw;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = title_derived;
+        raw
+    }
 }
 
 fn foreground_app_for_server_report(app_name: &str, foreground_target: Option<&str>) -> String {
@@ -1015,7 +1117,7 @@ fn run_immediate_desktop_apps_report(user_id: &str) {
     let Some((app_name, title, pid)) = get_foreground_info() else {
         return;
     };
-    let effective_target = resolve_foreground_browser_target(&app_name, &title, pid);
+    let effective_target = effective_foreground_browser_target(&app_name, &title, pid);
     let foreground_app = foreground_app_for_server_report(&app_name, effective_target.as_deref());
     let foreground_process = if is_browser(&app_name) {
         Some(app_name.as_str())
@@ -2248,7 +2350,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     let is_our_app = app_lower.contains("flowlocked");
                     
                     let effective_target =
-                        resolve_foreground_browser_target(&app_name, &title, pid);
+                        effective_foreground_browser_target(&app_name, &title, pid);
                     let mut local_distraction_key = classify_local_distraction(
                         &app_name,
                         effective_target.as_deref(),
