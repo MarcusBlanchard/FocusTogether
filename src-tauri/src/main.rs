@@ -216,7 +216,9 @@ struct LocalDistractionRules {
     classroom_blocked: HashSet<String>,
     own_app_domains: HashSet<String>,
     whitelist_apps: HashSet<String>,
-    whitelist_mode: bool,
+    whitelist_websites: HashSet<String>,
+    whitelist_mode_apps: bool,
+    whitelist_mode_websites: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -334,7 +336,12 @@ fn is_browser_internal_marker_target(target: &str) -> bool {
 }
 
 /// Server-side classify via `POST /api/desktop/classify-target` (OpenAI only on server). Blocking.
-fn server_classify_target_with_detail(user_id: &str, target: &str) -> (Option<bool>, String) {
+/// `is_browser`: `Some(true)` = website whitelist path; `Some(false)` = app whitelist path; `None` = server heuristic.
+fn server_classify_target_with_detail(
+    user_id: &str,
+    target: &str,
+    is_browser: Option<bool>,
+) -> (Option<bool>, String) {
     if is_browser_internal_marker_target(target) {
         return (
             Some(false),
@@ -361,7 +368,14 @@ fn server_classify_target_with_detail(user_id: &str, target: &str) -> (Option<bo
     };
     let base = backend_base_url().trim_end_matches('/').to_string();
     let url = format!("{}/api/desktop/classify-target", base);
-    let body = serde_json::json!({ "userId": user_id, "target": target });
+    let body = match is_browser {
+        Some(ib) => serde_json::json!({
+            "userId": user_id,
+            "target": target,
+            "isBrowser": ib,
+        }),
+        None => serde_json::json!({ "userId": user_id, "target": target }),
+    };
     {
         let mut last = last_classify_at_lock().lock().unwrap();
         *last = Some(std::time::Instant::now());
@@ -428,7 +442,9 @@ fn update_distraction_rules_from_poll(
     classroom_blocked: &[String],
     own_app_domains: &[String],
     whitelist_apps: &[String],
-    whitelist_mode: bool,
+    whitelist_websites: &[String],
+    whitelist_mode_apps: bool,
+    whitelist_mode_websites: bool,
 ) {
     let mut dset = HashSet::new();
     for v in distracting.iter().chain(blocked.iter()) {
@@ -460,10 +476,16 @@ fn update_distraction_rules_from_poll(
             own_domains_set.insert(n);
         }
     }
-    let mut whitelist_set = HashSet::new();
+    let mut whitelist_apps_set = HashSet::new();
     for v in whitelist_apps {
         if let Some(n) = normalize_rule_value(v) {
-            whitelist_set.insert(n);
+            whitelist_apps_set.insert(n);
+        }
+    }
+    let mut whitelist_websites_set = HashSet::new();
+    for v in whitelist_websites {
+        if let Some(n) = normalize_rule_value(v) {
+            whitelist_websites_set.insert(n);
         }
     }
     if let Ok(mut g) = distraction_rules().lock() {
@@ -473,8 +495,10 @@ fn update_distraction_rules_from_poll(
             classroom_allowed: classroom_allowed_set,
             classroom_blocked: classroom_blocked_set,
             own_app_domains: own_domains_set,
-            whitelist_apps: whitelist_set,
-            whitelist_mode,
+            whitelist_apps: whitelist_apps_set,
+            whitelist_websites: whitelist_websites_set,
+            whitelist_mode_apps,
+            whitelist_mode_websites,
         };
     }
 }
@@ -532,8 +556,8 @@ fn classify_local_distraction(
         if rule_matches(d, &rules.classroom_blocked) {
             return normalized;
         }
-        if rules.whitelist_mode {
-            if rule_matches(d, &rules.whitelist_apps) {
+        if rules.whitelist_mode_websites {
+            if rule_matches(d, &rules.whitelist_websites) {
                 return None;
             }
             return normalized;
@@ -557,7 +581,7 @@ fn classify_local_distraction(
                 }
             }
             if let Some(uid) = user_id {
-                let (opt, detail) = server_classify_target_with_detail(uid, &key);
+                let (opt, detail) = server_classify_target_with_detail(uid, &key, Some(true));
                 match opt {
                     Some(true) => {
                         println!("[Server Classifier] {} => distracting ({})", key, detail);
@@ -591,7 +615,7 @@ fn classify_local_distraction(
     if rule_matches(&app_norm, &rules.classroom_blocked) {
         return Some(app_norm.clone());
     }
-    if rules.whitelist_mode {
+    if rules.whitelist_mode_apps {
         if rule_matches(&app_norm, &rules.whitelist_apps) {
             return None;
         }
@@ -618,7 +642,7 @@ fn classify_local_distraction(
         }
     }
     if let Some(uid) = user_id {
-        let (opt, detail) = server_classify_target_with_detail(uid, &app_norm);
+        let (opt, detail) = server_classify_target_with_detail(uid, &app_norm, Some(false));
         match opt {
             Some(true) => {
                 println!("[Server Classifier] {} => distracting ({})", app_norm, detail);
@@ -1507,7 +1531,7 @@ fn debug_ai_classify(hostname: String) -> Result<String, String> {
                 .to_string(),
         );
     };
-    let (opt, detail) = server_classify_target_with_detail(&uid, &t);
+    let (opt, detail) = server_classify_target_with_detail(&uid, &t, None);
     Ok(format!(
         "backend={}\nuserId_linked=true\nclassification={:?} — distracting=true blocks, false=allow, None=error\n{}",
         backend_base_url(),
@@ -1992,7 +2016,14 @@ struct SessionResponse {
     own_app_domains: Vec<String>,
     #[serde(rename = "whitelistApps", default)]
     whitelist_apps: Vec<String>,
-    #[serde(rename = "whitelistMode", default)]
+    #[serde(rename = "whitelistWebsites", default)]
+    whitelist_websites: Vec<String>,
+    #[serde(default, rename = "whitelistModeApps")]
+    whitelist_mode_apps: bool,
+    #[serde(default, rename = "whitelistModeWebsites")]
+    whitelist_mode_websites: bool,
+    /// Legacy: true when either whitelist had entries. Do not use for classification.
+    #[serde(default, rename = "whitelistMode")]
     whitelist_mode: bool,
 }
 
@@ -2702,14 +2733,16 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
             &session_response.classroom_blocked_apps,
             &session_response.own_app_domains,
             &session_response.whitelist_apps,
-            session_response.whitelist_mode,
+            &session_response.whitelist_websites,
+            session_response.whitelist_mode_apps,
+            session_response.whitelist_mode_websites,
         );
         log!("[POLL DEBUG] Parsed OK — sessionId={:?} pendingAlerts count={} distractingApps count={}",
                  session_response.session_id,
                  alert_count,
                  session_response.distracting_apps.len());
         log!(
-            "[POLL DEBUG] Parsed extra: active={:?} kicked={} joinedAt={:?} allowedApps count={} blockedApps count={} classroomAllowedApps count={} classroomBlockedApps count={} ownAppDomains count={} whitelistMode={} whitelistApps count={} requestImmediateAppReport={}",
+            "[POLL DEBUG] Parsed extra: active={:?} kicked={} joinedAt={:?} allowedApps count={} blockedApps count={} classroomAllowedApps count={} classroomBlockedApps count={} ownAppDomains count={} whitelistModeApps={} whitelistModeWebsites={} whitelistApps count={} whitelistWebsites count={} requestImmediateAppReport={}",
             session_response.active,
             session_response.kicked,
             session_response.joined_at,
@@ -2718,8 +2751,10 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
             session_response.classroom_allowed_apps.len(),
             session_response.classroom_blocked_apps.len(),
             session_response.own_app_domains.len(),
-            session_response.whitelist_mode,
+            session_response.whitelist_mode_apps,
+            session_response.whitelist_mode_websites,
             session_response.whitelist_apps.len(),
+            session_response.whitelist_websites.len(),
             session_response.request_immediate_app_report
         );
 
