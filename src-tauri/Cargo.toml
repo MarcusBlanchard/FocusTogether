@@ -33,11 +33,16 @@ tauri-build = { version = "1.5", features = [] }
   objc = "0.2"
   accessibility = "0.1"
   core-foundation = "0.9"
+  core-graphics = "0.23"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 uiautomation = "0.3"
 windows = { version = "0.48", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 winreg = "0.50"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Pin to the same xcb generation as `active-win-pos-rs` (API-stable for our EWMH helpers).
+xcb = { version = "=1.2.1", features = ["randr"] }
 
 [features]
 # This feature is used for production builds or when `devPath` points to the filesystem

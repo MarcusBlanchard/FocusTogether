@@ -13,11 +13,11 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use active_win_pos_rs::get_active_window;
 use std::io::Write;
 
 mod browser_url;
 mod browser_title_target;
+mod window_monitor;
 
 static LOG_FILE: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
 
@@ -2170,7 +2170,7 @@ fn play_distracted_sound() {
 /// Get foreground app info. Returns (app_name, window_title, process_id).
 /// Data is used only for classification, then discarded.
 fn get_foreground_info() -> Option<(String, String, u32)> {
-    match get_active_window() {
+    match window_monitor::get_active_window_skip_pip_overlay() {
         Ok(window) => {
             let app_name = window.app_name;
             let title = window.title;
