@@ -9,12 +9,12 @@ use active_win_pos_rs::{ActiveWindow, WindowPosition};
 use cocoa::base::id;
 use core_foundation::base::{CFGetTypeID, TCFType, ToVoid};
 use core_foundation::boolean::CFBooleanGetTypeID;
-use core_foundation::dictionary::CFDictionaryGetTypeID;
+use core_foundation::dictionary::{CFDictionaryGetTypeID, CFDictionaryGetValue};
 use core_foundation::number::{
     CFBooleanGetValue, CFNumberGetType, CFNumberGetTypeID, CFNumberGetValue, CFNumberRef,
     CFNumberType,
 };
-use core_foundation::string::{CFString, CFStringGetTypeID};
+use core_foundation::string::{CFString, CFStringGetTypeID, CFStringRef};
 use core_graphics::geometry::CGRect;
 use core_graphics::window::{
     copy_window_info, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly,
@@ -154,6 +154,22 @@ fn read_dict(dict: CFDictionaryRef, key: &str) -> DictVal {
     DictVal::Unknown
 }
 
+fn read_window_name_exact(window_dict: CFDictionaryRef) -> String {
+    unsafe {
+        let key = CFString::new("kCGWindowName");
+        let value: *const c_void = CFDictionaryGetValue(
+            window_dict,
+            key.as_concrete_TypeRef() as *const _,
+        );
+        if value.is_null() {
+            String::new()
+        } else {
+            let cf_str: CFString = TCFType::wrap_under_get_rule(value as CFStringRef);
+            cf_str.to_string()
+        }
+    }
+}
+
 fn read_number_f64(dict: CFDictionaryRef, key: &str) -> Option<f64> {
     let cf_key: CFString = key.into();
     let mut value: *const c_void = std::ptr::null();
@@ -223,10 +239,7 @@ pub(super) fn get_visible_windows_for_report() -> Vec<VisibleWindowReport> {
             continue;
         }
 
-        let mut title = String::new();
-        if let DictVal::String(s) = read_dict(dic_ref, "kCGWindowName") {
-            title = s;
-        }
+        let title = read_window_name_exact(dic_ref);
         if is_flowlocked_pip_title(&title) {
             continue;
         }
@@ -276,7 +289,7 @@ pub(super) fn get_visible_windows_for_report() -> Vec<VisibleWindowReport> {
         filtered.sort_by_key(|w| w.0);
     }
 
-    filtered
+    let out: Vec<VisibleWindowReport> = filtered
         .into_iter()
         .enumerate()
         .map(|(z, (_orig, app, title, bounds, is_on_screen))| VisibleWindowReport {
@@ -287,7 +300,17 @@ pub(super) fn get_visible_windows_for_report() -> Vec<VisibleWindowReport> {
             is_on_screen,
             screen_id: None,
         })
-        .collect()
+        .collect();
+
+    for entry in out.iter().take(5) {
+        tracing::info!(
+            "[Windows] z={} app={} title={:?}",
+            entry.z_index,
+            entry.app,
+            entry.title
+        );
+    }
+    out
 }
 
 pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
