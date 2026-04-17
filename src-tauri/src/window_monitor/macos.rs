@@ -39,6 +39,7 @@ static LAST_DIAG_MS: AtomicU64 = AtomicU64::new(0);
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> u8;
+    fn CGPreflightScreenCaptureAccess() -> bool;
 }
 
 #[derive(Debug)]
@@ -151,10 +152,16 @@ fn read_dict(dict: CFDictionaryRef, key: &str) -> DictVal {
     DictVal::Unknown
 }
 
+fn screen_recording_granted() -> bool {
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
 pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     if FIRST_RUN.swap(false, Ordering::SeqCst) {
+        let granted = screen_recording_granted();
         println!(
-            "[window-monitor] build=136 skip-pip path active (title prefix + small-browser heuristic + size-based fallback)"
+            "[window-monitor] build=137 skip-pip path active; screen_recording_granted={}",
+            granted
         );
     }
 

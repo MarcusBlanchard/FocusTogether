@@ -182,6 +182,23 @@ fn force_show_window(app_handle: &tauri::AppHandle, window_label: String) {
 #[cfg(not(target_os = "macos"))]
 fn force_show_window(_app_handle: &tauri::AppHandle, _window_label: String) {}
 
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+
+#[cfg(target_os = "macos")]
+fn macos_screen_recording_granted() -> bool {
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+#[cfg(target_os = "macos")]
+fn request_macos_screen_recording_access() -> bool {
+    unsafe { CGRequestScreenCaptureAccess() }
+}
+
 // Global config storage
 static CONFIG: OnceLock<Mutex<AppConfig>> = OnceLock::new();
 
@@ -1040,7 +1057,13 @@ fn resolved_browser_window_title(app_name: &str, window_title: &str, pid: u32) -
             Some(app_name),
         ) {
             let recovered_trimmed = recovered_title.trim();
-            if !recovered_trimmed.is_empty() {
+            if window_monitor::is_flowlocked_pip_title(recovered_trimmed) {
+                log!(
+                    "[Desktop Apps] Dropped recovered PiP title via accessibility/automation: process={} title={:?}",
+                    app_name,
+                    recovered_trimmed
+                );
+            } else if !recovered_trimmed.is_empty() {
                 title = recovered_trimmed.to_string();
                 log!(
                     "[Desktop Apps] Recovered browser title via accessibility/automation: process={} title={:?}",
@@ -1070,7 +1093,7 @@ fn resolved_browser_window_title(app_name: &str, window_title: &str, pid: u32) -
 
 /// `foregroundApp` for POST `/api/desktop/apps`: stripped OS window title for browsers; app name for native.
 fn foreground_app_for_desktop_apps_api(app_name: &str, window_title: &str, pid: u32) -> String {
-    if is_browser(app_name) {
+    let mut out = if is_browser(app_name) {
         let resolved_title = resolved_browser_window_title(app_name, window_title, pid);
         let s = browser_title_target::stripped_tab_title_for_desktop_apps(&resolved_title);
         if s.is_empty() {
@@ -1080,7 +1103,12 @@ fn foreground_app_for_desktop_apps_api(app_name: &str, window_title: &str, pid: 
         }
     } else {
         app_name.to_string()
+    };
+    if window_monitor::is_flowlocked_pip_title(&out) {
+        log!("[Desktop Apps] dropped PiP title at API boundary");
+        out = app_name.to_string();
     }
+    out
 }
 
 fn cache_foreground_server_decision(
@@ -3482,6 +3510,19 @@ fn main() {
             // macOS: background utility — hides from Dock and Cmd+Tab
             #[cfg(target_os = "macos")]
             {
+                let screen_recording_granted = macos_screen_recording_granted();
+                println!(
+                    "[permissions] screen-recording granted={}",
+                    screen_recording_granted
+                );
+                if !screen_recording_granted {
+                    let _ = request_macos_screen_recording_access();
+                    let app_id = app.config().tauri.bundle.identifier.clone();
+                    let _ = tauri::api::notification::Notification::new(&app_id)
+                        .title("Screen Recording permission needed")
+                        .body("Flowlocked needs Screen Recording permission to read window titles so it can correctly skip the Picture-in-Picture overlay during distraction detection. Please enable it in System Settings → Privacy & Security → Screen Recording, then restart Flowlocked.")
+                        .show();
+                }
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 if !browser_url::accessibility_available() {
                     let _ = std::process::Command::new("osascript")

@@ -1,5 +1,6 @@
 use std::sync::mpsc;
 use std::time::Duration;
+use crate::window_monitor::is_flowlocked_pip_title;
 
 /// Returns the full active browser URL for the provided process id.
 /// On macOS, pass `browser_app_name` from the active window (e.g. "Google Chrome") so we can use each browser's AppleScript URL API.
@@ -75,7 +76,14 @@ pub(crate) fn get_active_browser_window_title_nonblocking(
     let hint = browser_app_name.map(|s| s.to_string());
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let title = get_active_browser_window_title(pid, hint.as_deref());
+        let title = get_active_browser_window_title(pid, hint.as_deref()).and_then(|t| {
+            if is_flowlocked_pip_title(&t) {
+                println!("[Browser Title] Dropped PiP title from nonblocking recovery path");
+                None
+            } else {
+                Some(t)
+            }
+        });
         let _ = tx.send(title);
     });
 
@@ -205,6 +213,7 @@ fn extract_domain(url: &str) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use crate::window_monitor::is_flowlocked_pip_title;
     use std::os::raw::c_void;
     use std::process::Command;
 
@@ -403,37 +412,6 @@ return ""
         }
     }
 
-    fn try_system_events_window_title(pid: u32) -> Option<String> {
-        let script = format!(
-            r#"
-tell application "System Events"
-    set targetProc to first application process whose unix id is {pid}
-    if (count of windows of targetProc) > 0 then
-        set t to name of front window of targetProc
-        if t is not missing value and t is not "" then return t
-    end if
-end tell
-return ""
-"#,
-            pid = pid
-        );
-
-        let output = Command::new("osascript").arg("-e").arg(script).output().ok()?;
-        if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr);
-            if !err.trim().is_empty() {
-                println!("[Browser Title] System Events stderr: {}", err.trim());
-            }
-            return None;
-        }
-        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
-    }
-
     fn try_system_events_window_titles(pid: u32) -> Vec<String> {
         let script = format!(
             r#"
@@ -600,15 +578,34 @@ If YouTube still fails: also enable Automation for Flowlocked on your browser (C
         // Prefer System Events for the true foreground window title. This captures extension
         // popup/panel windows that browser-native "active tab" APIs can miss.
         if is_accessibility_trusted() {
-            let front_title = try_system_events_window_title(pid);
+            // System Events returns windows front-to-back. Skip PiP overlays and choose the first
+            // non-PiP candidate; if every window is PiP, treat title recovery as unavailable.
             let all_titles = try_system_events_window_titles(pid);
+            let mut non_pip_titles: Vec<String> = Vec::new();
+            let mut saw_pip = false;
+            for candidate in all_titles {
+                if is_flowlocked_pip_title(&candidate) {
+                    saw_pip = true;
+                    continue;
+                }
+                non_pip_titles.push(candidate);
+            }
+            if non_pip_titles.is_empty() && saw_pip {
+                println!("[Browser Title] All AX/System Events window titles matched PiP; returning None");
+                return None;
+            }
+
+            let front_title = non_pip_titles.first().cloned();
             if let Some(ref front) = front_title {
                 if is_unhelpful_browser_front_title(front) {
                     if let Some(popup_title) = try_system_events_popup_text_title(pid) {
+                        if is_flowlocked_pip_title(&popup_title) {
+                            return None;
+                        }
                         return Some(popup_title);
                     }
                 }
-                for candidate in &all_titles {
+                for candidate in &non_pip_titles {
                     if candidate == front {
                         continue;
                     }
@@ -622,6 +619,9 @@ If YouTube still fails: also enable Automation for Flowlocked on your browser (C
                 }
             }
             if let Some(title) = front_title {
+                if is_flowlocked_pip_title(&title) {
+                    return None;
+                }
                 return Some(title);
             }
         }
