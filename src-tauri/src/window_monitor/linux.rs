@@ -3,7 +3,7 @@
 
 use super::{
     is_flowlocked_pip_title, is_known_browser_app_name, log_skipped_pip,
-    log_skipped_suspected_pip_heuristic, VisibleWindowReport,
+    log_skipped_suspected_pip_heuristic,
 };
 use active_win_pos_rs::{ActiveWindow, WindowPosition};
 use std::collections::HashSet;
@@ -204,9 +204,4 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     }
 
     active_win_pos_rs::get_active_window()
-}
-
-pub(super) fn get_visible_windows_for_report() -> Vec<VisibleWindowReport> {
-    // TODO(linux): Enumerate visible windows across X11/Wayland for occlusion-aware checks.
-    Vec::new()
 }

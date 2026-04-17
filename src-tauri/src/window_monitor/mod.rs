@@ -8,7 +8,6 @@
 //! server-driven own domains).
 
 use active_win_pos_rs::ActiveWindow;
-use serde::Serialize;
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -16,27 +15,6 @@ mod macos;
 mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
-
-#[derive(Debug, Clone, Serialize)]
-pub struct VisibleWindowBounds {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct VisibleWindowReport {
-    pub app: String,
-    pub title: String,
-    pub bounds: VisibleWindowBounds,
-    #[serde(rename = "zIndex")]
-    pub z_index: usize,
-    #[serde(rename = "isOnScreen")]
-    pub is_on_screen: bool,
-    #[serde(rename = "screenId", skip_serializing_if = "Option::is_none")]
-    pub screen_id: Option<i32>,
-}
 
 /// Returns the effective foreground window, skipping Flowlocked PiP when it sits above real content.
 pub fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
@@ -55,26 +33,6 @@ pub fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         active_win_pos_rs::get_active_window()
-    }
-}
-
-/// Returns visible top-level windows (front to back) for `/api/desktop/apps` occlusion checks.
-pub fn get_visible_windows_for_report() -> Vec<VisibleWindowReport> {
-    #[cfg(target_os = "macos")]
-    {
-        return macos::get_visible_windows_for_report();
-    }
-    #[cfg(target_os = "windows")]
-    {
-        return windows::get_visible_windows_for_report();
-    }
-    #[cfg(target_os = "linux")]
-    {
-        return linux::get_visible_windows_for_report();
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    {
-        Vec::new()
     }
 }
 

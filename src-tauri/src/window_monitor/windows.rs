@@ -3,7 +3,7 @@
 
 use super::{
     is_flowlocked_pip_title, is_known_browser_app_name, log_skipped_pip,
-    log_skipped_suspected_pip_heuristic, VisibleWindowBounds, VisibleWindowReport,
+    log_skipped_suspected_pip_heuristic,
 };
 use active_win_pos_rs::{ActiveWindow, WindowPosition};
 use std::collections::HashSet;
@@ -146,80 +146,4 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             process_path,
         });
     }
-}
-
-pub(super) fn get_visible_windows_for_report() -> Vec<VisibleWindowReport> {
-    let mut out: Vec<VisibleWindowReport> = Vec::new();
-    let mut hwnd = unsafe { GetForegroundWindow() };
-    let mut z_index: usize = 0;
-
-    while hwnd.0 != 0 {
-        let mut push_next = true;
-        let mut rect = RECT::default();
-        unsafe {
-            if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
-                push_next = false;
-            }
-            if push_next {
-                let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-                if ex & WS_EX_TOOLWINDOW != 0 || ex & WS_EX_NOACTIVATE != 0 {
-                    push_next = false;
-                }
-            }
-            if push_next && !GetWindowRect(hwnd, &mut rect).as_bool() {
-                push_next = false;
-            }
-        }
-
-        if push_next {
-            let title = window_text(hwnd);
-            if !is_flowlocked_pip_title(&title) {
-                let mut pid = 0u32;
-                unsafe {
-                    GetWindowThreadProcessId(hwnd, Some(&mut pid));
-                }
-                let (app_name, _path) = process_info(pid);
-                let p = rect_to_position(rect);
-                if p.width > 1.0 && p.height > 1.0 {
-                    out.push(VisibleWindowReport {
-                        app: if app_name.is_empty() {
-                            "windows-app".to_string()
-                        } else {
-                            app_name
-                        },
-                        title,
-                        bounds: VisibleWindowBounds {
-                            x: p.x,
-                            y: p.y,
-                            width: p.width,
-                            height: p.height,
-                        },
-                        z_index,
-                        is_on_screen: true,
-                        screen_id: None,
-                    });
-                }
-            }
-        }
-
-        z_index += 1;
-        unsafe {
-            hwnd = GetWindow(hwnd, GW_HWNDNEXT);
-        }
-        if z_index > 1024 {
-            break;
-        }
-    }
-
-    if out.len() > 50 {
-        out.sort_by(|a, b| {
-            let aa = a.bounds.width * a.bounds.height;
-            let bb = b.bounds.width * b.bounds.height;
-            bb.partial_cmp(&aa).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        out.truncate(50);
-        out.sort_by_key(|w| w.z_index);
-    }
-
-    out
 }

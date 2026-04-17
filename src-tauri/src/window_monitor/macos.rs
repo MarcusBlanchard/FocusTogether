@@ -3,7 +3,7 @@
 
 use super::{
     is_flowlocked_pip_title, is_known_browser_app_name, log_skipped_pip,
-    log_skipped_suspected_pip_heuristic, VisibleWindowBounds, VisibleWindowReport,
+    log_skipped_suspected_pip_heuristic,
 };
 use active_win_pos_rs::{ActiveWindow, WindowPosition};
 use cocoa::base::id;
@@ -50,8 +50,6 @@ enum DictVal {
     Rect(WindowPosition),
     Unknown,
 }
-
-const K_CF_NUMBER_FLOAT64: CFNumberType = 6;
 
 fn nsstring_to_string(ns: id) -> String {
     unsafe {
@@ -154,153 +152,8 @@ fn read_dict(dict: CFDictionaryRef, key: &str) -> DictVal {
     DictVal::Unknown
 }
 
-fn read_number_f64(dict: CFDictionaryRef, key: &str) -> Option<f64> {
-    let cf_key: CFString = key.into();
-    let mut value: *const c_void = std::ptr::null();
-    if unsafe { CFDictionaryGetValueIfPresent(dict, cf_key.to_void(), &mut value) } == 0 {
-        return None;
-    }
-    if unsafe { CFGetTypeID(value) } != unsafe { CFNumberGetTypeID() } {
-        return None;
-    }
-    let n = value as CFNumberRef;
-    let mut out = 0.0_f64;
-    if unsafe { CFNumberGetValue(n, K_CF_NUMBER_FLOAT64, (&mut out as *mut f64).cast()) } {
-        return Some(out);
-    }
-    match read_dict(dict, key) {
-        DictVal::Number(v) => Some(v as f64),
-        _ => None,
-    }
-}
-
-fn is_excluded_system_owner(owner: &str) -> bool {
-    let o = owner.trim().to_lowercase();
-    matches!(
-        o.as_str(),
-        "windowserver"
-            | "window server"
-            | "dock"
-            | "systemuiserver"
-            | "control center"
-            | "notification center"
-            | "textinputmenuagent"
-            | "spotlight"
-    )
-}
-
 fn screen_recording_granted() -> bool {
     unsafe { CGPreflightScreenCaptureAccess() }
-}
-
-pub(super) fn get_visible_windows_for_report() -> Vec<VisibleWindowReport> {
-    let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
-    let Some(arr) = copy_window_info(options, kCGNullWindowID) else {
-        return Vec::new();
-    };
-    let arr_ref = arr.as_concrete_TypeRef();
-    let n = unsafe { CFArrayGetCount(arr_ref) };
-    let mut filtered: Vec<(usize, String, String, VisibleWindowBounds, bool)> = Vec::new();
-
-    for i in 0..n {
-        let dic_ref = unsafe { CFArrayGetValueAtIndex(arr_ref, i) as CFDictionaryRef };
-        if dic_ref.is_null() {
-            continue;
-        }
-        let layer = match read_dict(dic_ref, "kCGWindowLayer") {
-            DictVal::Number(l) => l,
-            _ => 0,
-        };
-        if layer != 0 {
-            continue;
-        }
-
-        let on_screen = match read_dict(dic_ref, "kCGWindowIsOnscreen") {
-            DictVal::Bool(b) => b,
-            _ => true,
-        };
-        if !on_screen {
-            continue;
-        }
-
-        let mut title = String::new();
-        if let DictVal::String(s) = read_dict(dic_ref, "kCGWindowName") {
-            title = s;
-        }
-        if is_flowlocked_pip_title(&title) {
-            continue;
-        }
-
-        let app = match read_dict(dic_ref, "kCGWindowOwnerName") {
-            DictVal::String(s) if !s.trim().is_empty() => s,
-            _ => "unknown-app".to_string(),
-        };
-        if is_excluded_system_owner(&app) {
-            continue;
-        }
-
-        let alpha = read_number_f64(dic_ref, "kCGWindowAlpha").unwrap_or(1.0);
-        if alpha <= 0.0 {
-            continue;
-        }
-
-        let bounds = match read_dict(dic_ref, "kCGWindowBounds") {
-            DictVal::Rect(r) => r,
-            _ => continue,
-        };
-        if bounds.width < 60.0 || bounds.height < 60.0 {
-            continue;
-        }
-
-        filtered.push((
-            i as usize,
-            app,
-            title,
-            VisibleWindowBounds {
-                x: bounds.x,
-                y: bounds.y,
-                width: bounds.width,
-                height: bounds.height,
-            },
-            true,
-        ));
-    }
-
-    if filtered.len() > 50 {
-        filtered.sort_by(|a, b| {
-            let aa = a.3.width * a.3.height;
-            let bb = b.3.width * b.3.height;
-            bb.partial_cmp(&aa).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        filtered.truncate(50);
-        filtered.sort_by_key(|w| w.0);
-    }
-
-    let windows: Vec<VisibleWindowReport> = filtered
-        .into_iter()
-        .enumerate()
-        .map(|(z, (_orig, app, title, bounds, is_on_screen))| VisibleWindowReport {
-            app,
-            title,
-            bounds,
-            z_index: z,
-            is_on_screen,
-            screen_id: None,
-        })
-        .collect();
-
-    for (i, w) in windows.iter().take(5).enumerate() {
-        eprintln!("[WindowMonitor] z={} app={:?} title={:?}", i, w.app, w.title);
-    }
-    for entry in windows.iter().take(5) {
-        tracing::info!(
-            "[Windows] z={} app={} title={:?}",
-            entry.z_index,
-            entry.app,
-            entry.title
-        );
-    }
-    windows
 }
 
 pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
