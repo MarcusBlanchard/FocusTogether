@@ -1168,11 +1168,13 @@ fn check_apps_with_server(
     
     // Build the request body
     let running_apps = get_running_app_names();
+    let visible_windows = window_monitor::get_visible_windows_for_report();
     let mut body = serde_json::json!({
         "userId": user_id,
         "apps": running_apps,
         "foregroundApp": foreground_app,
-        "source": "desktopNative"
+        "source": "desktopNative",
+        "windows": visible_windows
     });
     if let Some(p) = foreground_process {
         if let Some(obj) = body.as_object_mut() {
@@ -1181,6 +1183,23 @@ fn check_apps_with_server(
                 serde_json::Value::String(p.to_string()),
             );
         }
+    }
+    if let Some(windows_val) = body.get("windows").and_then(|v| v.as_array()) {
+        let preview: Vec<String> = windows_val
+            .iter()
+            .take(3)
+            .map(|w| {
+                let app = w.get("app").and_then(|v| v.as_str()).unwrap_or("");
+                let title = w.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                let z = w.get("zIndex").and_then(|v| v.as_u64()).unwrap_or(0);
+                format!("z{}:{}:{:?}", z, app, title)
+            })
+            .collect();
+        log!(
+            "[Desktop Apps] windows payload count={} preview={:?}",
+            windows_val.len(),
+            preview
+        );
     }
     
     let result = (|| {

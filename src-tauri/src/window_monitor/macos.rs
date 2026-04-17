@@ -3,7 +3,7 @@
 
 use super::{
     is_flowlocked_pip_title, is_known_browser_app_name, log_skipped_pip,
-    log_skipped_suspected_pip_heuristic,
+    log_skipped_suspected_pip_heuristic, VisibleWindowBounds, VisibleWindowReport,
 };
 use active_win_pos_rs::{ActiveWindow, WindowPosition};
 use cocoa::base::id;
@@ -154,6 +154,80 @@ fn read_dict(dict: CFDictionaryRef, key: &str) -> DictVal {
 
 fn screen_recording_granted() -> bool {
     unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+pub(super) fn get_visible_windows_for_report() -> Vec<VisibleWindowReport> {
+    let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    let Some(arr) = copy_window_info(options, kCGNullWindowID) else {
+        return Vec::new();
+    };
+    let arr_ref = arr.as_concrete_TypeRef();
+    let n = unsafe { CFArrayGetCount(arr_ref) };
+    let mut out: Vec<VisibleWindowReport> = Vec::new();
+
+    for i in 0..n {
+        let dic_ref = unsafe { CFArrayGetValueAtIndex(arr_ref, i) as CFDictionaryRef };
+        if dic_ref.is_null() {
+            continue;
+        }
+        let layer = match read_dict(dic_ref, "kCGWindowLayer") {
+            DictVal::Number(l) => l,
+            _ => 0,
+        };
+        if layer != 0 {
+            continue;
+        }
+
+        let on_screen = match read_dict(dic_ref, "kCGWindowIsOnscreen") {
+            DictVal::Bool(b) => b,
+            _ => true,
+        };
+        let mut title = String::new();
+        if let DictVal::String(s) = read_dict(dic_ref, "kCGWindowName") {
+            title = s;
+        }
+        if is_flowlocked_pip_title(&title) {
+            continue;
+        }
+
+        let app = match read_dict(dic_ref, "kCGWindowOwnerName") {
+            DictVal::String(s) if !s.trim().is_empty() => s,
+            _ => "unknown-app".to_string(),
+        };
+        let bounds = match read_dict(dic_ref, "kCGWindowBounds") {
+            DictVal::Rect(r) => r,
+            _ => continue,
+        };
+        if bounds.width <= 1.0 || bounds.height <= 1.0 {
+            continue;
+        }
+
+        out.push(VisibleWindowReport {
+            app,
+            title,
+            bounds: VisibleWindowBounds {
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                height: bounds.height,
+            },
+            z_index: i as usize,
+            is_on_screen: on_screen,
+            screen_id: None,
+        });
+    }
+
+    if out.len() > 50 {
+        out.sort_by(|a, b| {
+            let aa = a.bounds.width * a.bounds.height;
+            let bb = b.bounds.width * b.bounds.height;
+            bb.partial_cmp(&aa).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        out.truncate(50);
+        out.sort_by_key(|w| w.z_index);
+    }
+
+    out
 }
 
 pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
