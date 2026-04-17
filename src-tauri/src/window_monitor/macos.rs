@@ -1,7 +1,10 @@
 //! macOS: walk `CGWindowListCopyWindowInfo` in front-to-back order for the frontmost app PID,
 //! skipping `Flowlocked PiP` and non–normal-layer windows where applicable.
 
-use super::{is_flowlocked_pip_title, log_skipped_pip};
+use super::{
+    is_flowlocked_pip_title, is_known_browser_app_name, log_skipped_pip,
+    log_skipped_suspected_pip_heuristic,
+};
 use active_win_pos_rs::{ActiveWindow, WindowPosition};
 use cocoa::base::id;
 use core_foundation::base::{CFGetTypeID, TCFType, ToVoid};
@@ -155,6 +158,8 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     let n = unsafe { CFArrayGetCount(arr_ref) };
 
     let mut skipped_pip = false;
+    // First normal-layer on-screen window for the frontmost PID (Z-order); Document PiP is usually here.
+    let mut top_qualifying_seen = false;
 
     for i in 0..n {
         let dic_ref =
@@ -192,6 +197,9 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             continue;
         }
 
+        let is_top_for_front_pid = !top_qualifying_seen;
+        top_qualifying_seen = true;
+
         let mut win_title = String::new();
         if let DictVal::String(s) = read_dict(dic_ref, "kCGWindowName") {
             win_title = s;
@@ -203,6 +211,18 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         }
 
         if is_flowlocked_pip_title(&win_title) {
+            skipped_pip = true;
+            continue;
+        }
+
+        // Race fallback: PiP may be on-screen before the web client sets `document.title`. The topmost
+        // normal browser window under ~800×600 is usually Document PiP, not the main browser surface.
+        if is_top_for_front_pid
+            && is_known_browser_app_name(&app_name)
+            && win_pos.width <= 800.0
+            && win_pos.height <= 600.0
+        {
+            log_skipped_suspected_pip_heuristic(win_pos.width, win_pos.height, &app_name);
             skipped_pip = true;
             continue;
         }

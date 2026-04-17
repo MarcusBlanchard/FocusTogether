@@ -1,8 +1,12 @@
 //! Linux (X11 / EWMH): walk `_NET_CLIENT_LIST_STACKING` top-down, skipping `Flowlocked PiP`.
 //! Falls back to `active_win_pos_rs` if EWMH is unavailable.
 
-use super::{is_flowlocked_pip_title, log_skipped_pip};
+use super::{
+    is_flowlocked_pip_title, is_known_browser_app_name, log_skipped_pip,
+    log_skipped_suspected_pip_heuristic,
+};
 use active_win_pos_rs::{ActiveWindow, WindowPosition};
+use std::collections::HashSet;
 use std::fs::read_link;
 use xcb::x;
 
@@ -130,20 +134,26 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     };
 
     let mut skipped_pip = false;
+    let mut pid_top_z: HashSet<u32> = HashSet::new();
 
     for wid in windows.iter().rev() {
+        let window_pid = get_window_pid(&conn, *wid).unwrap_or(0);
+        let position = match translated_position(&conn, *wid) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if position.width < 50.0 || position.height < 50.0 {
+            continue;
+        }
+
         let title = match get_window_title(&conn, *wid) {
             Ok(t) => t,
             Err(_) => continue,
         };
+
+        let is_top_for_pid = pid_top_z.insert(window_pid);
         if is_flowlocked_pip_title(&title) {
             skipped_pip = true;
-            continue;
-        }
-
-        let window_pid = get_window_pid(&conn, *wid).unwrap_or(0);
-        let position = translated_position(&conn, *wid).map_err(|_| ())?;
-        if position.width < 50.0 || position.height < 50.0 {
             continue;
         }
 
@@ -153,6 +163,17 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             .filter(|s| !s.is_empty())
             .collect();
         let process_name = parts.pop().unwrap_or("").to_owned();
+
+        // Race fallback: PiP may map to a client before WM_NAME / `_NET_WM_NAME` is updated.
+        if is_top_for_pid
+            && is_known_browser_app_name(&process_name)
+            && position.width <= 800.0
+            && position.height <= 600.0
+        {
+            log_skipped_suspected_pip_heuristic(position.width, position.height, &process_name);
+            skipped_pip = true;
+            continue;
+        }
 
         let process_path = read_link(format!("/proc/{}/exe", window_pid))
             .unwrap_or_default();

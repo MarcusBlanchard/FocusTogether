@@ -1,5 +1,6 @@
 //! Foreground window selection that skips the Flowlocked Document Picture-in-Picture overlay
-//! (`document.title` === "Flowlocked PiP") so distraction detection sees the real window underneath.
+//! (title prefix `Flowlocked PiP` / `FocusTogether PiP`, tolerant of browser suffixes) so distraction
+//! detection sees the real window underneath.
 //!
 //! Browser tabs whose titles contain "Flowlocked" or "FocusTogether" are **not** skipped here: after
 //! PiP is skipped, that window is often the correct "user is in Flowlocked" answer. Those strings
@@ -35,9 +36,65 @@ pub fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     }
 }
 
-/// Document PiP sets `document.title` to exactly this string (case-insensitive match).
+/// Document PiP uses a title starting with `Flowlocked PiP` or `FocusTogether PiP` (case-insensitive).
+/// Prefix match tolerates browser suffixes such as ` — Google Chrome` on docked PiP windows.
 pub(crate) fn is_flowlocked_pip_title(title: &str) -> bool {
-    title.trim().eq_ignore_ascii_case("flowlocked pip")
+    let t = title.trim().to_lowercase();
+    t.starts_with("flowlocked pip") || t.starts_with("focustogether pip")
+}
+
+/// Browsers whose small, topmost normal window may be Document PiP before `document.title` is set.
+pub(crate) fn is_known_browser_app_name(name: &str) -> bool {
+    let n = name.trim().to_lowercase();
+    if n.is_empty() {
+        return false;
+    }
+    let mut labels: Vec<&str> = vec![
+        "google chrome",
+        "microsoft edge",
+        "brave browser",
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "vivaldi",
+        "firefox",
+        "safari",
+        "opera",
+        "brave",
+        "arc",
+        "msedge",
+    ];
+    labels.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    for o in labels {
+        if n == o || n.starts_with(&format!("{o} ")) || n.starts_with(&format!("{o}-")) {
+            return true;
+        }
+    }
+    let base = n.rsplit(['/', '\\']).next().unwrap_or(&n);
+    let base = base.strip_suffix(".exe").unwrap_or(base);
+    matches!(
+        base,
+        "chrome"
+            | "chromium"
+            | "chromium-browser"
+            | "msedge"
+            | "brave"
+            | "opera"
+            | "vivaldi"
+            | "firefox"
+            | "safari"
+            | "arc"
+    ) || base.starts_with("google-chrome")
+}
+
+/// `w` / `h` are the window content size in pixels (same units as platform helpers).
+pub(crate) fn log_skipped_suspected_pip_heuristic(w: f64, h: f64, app: &str) {
+    println!(
+        "[window-monitor] skipped suspected-PiP overlay (browser+small+top): {}x{} app={}",
+        w as i64,
+        h as i64,
+        app
+    );
 }
 
 pub(crate) fn log_skipped_pip(underlying_title: &str, underlying_app: &str) {
@@ -54,8 +111,10 @@ mod tests {
     #[test]
     fn detects_pip_title_case_insensitive() {
         assert!(is_flowlocked_pip_title("Flowlocked PiP"));
-        assert!(is_flowlocked_pip_title("flowlocked pip"));
-        assert!(!is_flowlocked_pip_title("Flowlocked - Google Chrome"));
+        assert!(is_flowlocked_pip_title("flowlocked pip — Google Chrome"));
+        assert!(is_flowlocked_pip_title("FocusTogether PiP"));
+        assert!(!is_flowlocked_pip_title("Flowlocked - Reddit"));
+        assert!(!is_flowlocked_pip_title("Reddit - Google Chrome"));
         assert!(!is_flowlocked_pip_title("FocusTogether"));
     }
 }

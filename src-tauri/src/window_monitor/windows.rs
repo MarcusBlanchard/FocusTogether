@@ -1,8 +1,12 @@
 //! Windows: start at `GetForegroundWindow`, walk `GetWindow(..., GW_HWNDNEXT)` skipping PiP and
 //! tool-style chrome windows from the same process as the skipped PiP.
 
-use super::{is_flowlocked_pip_title, log_skipped_pip};
+use super::{
+    is_flowlocked_pip_title, is_known_browser_app_name, log_skipped_pip,
+    log_skipped_suspected_pip_heuristic,
+};
 use active_win_pos_rs::{ActiveWindow, WindowPosition};
+use std::collections::HashSet;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -52,6 +56,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
 
     let mut pip_owner_pid: Option<u32> = None;
     let mut skipped_pip = false;
+    let mut pid_top_z: HashSet<u32> = HashSet::new();
 
     loop {
         if hwnd.0 == 0 {
@@ -74,6 +79,8 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         unsafe {
             GetWindowThreadProcessId(hwnd, Some(&mut pid));
         }
+
+        let is_top_for_pid = pid_top_z.insert(pid);
 
         if is_flowlocked_pip_title(&title) {
             pip_owner_pid = Some(pid);
@@ -99,6 +106,21 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         }
 
         let (app_name, process_path) = process_info(pid);
+        let position = rect_to_position(rect);
+
+        // Race fallback: PiP can appear before `document.title` is set. Skip only the first visible
+        // window per PID in Z-order when it is a known browser and unusually small for a main window.
+        if is_top_for_pid
+            && is_known_browser_app_name(&app_name)
+            && position.width <= 800.0
+            && position.height <= 600.0
+        {
+            log_skipped_suspected_pip_heuristic(position.width, position.height, &app_name);
+            skipped_pip = true;
+            hwnd = unsafe { GetWindow(hwnd, GW_HWNDNEXT) };
+            continue;
+        }
+
         if skipped_pip {
             log_skipped_pip(
                 &title,
@@ -119,7 +141,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             window_id: format!("{:?}", hwnd),
             process_id: u64::from(pid),
             app_name,
-            position: rect_to_position(rect),
+            position,
             title,
             process_path,
         });
