@@ -1187,7 +1187,7 @@ fn check_apps_with_server(
     if let Some(windows_val) = body.get("windows").and_then(|v| v.as_array()) {
         let preview: Vec<String> = windows_val
             .iter()
-            .take(3)
+            .take(5)
             .map(|w| {
                 let app = w.get("app").and_then(|v| v.as_str()).unwrap_or("");
                 let title = w.get("title").and_then(|v| v.as_str()).unwrap_or("");
@@ -1195,6 +1195,12 @@ fn check_apps_with_server(
                 format!("z{}:{}:{:?}", z, app, title)
             })
             .collect();
+        tracing::debug!(
+            target: "desktop_apps",
+            windows_count = windows_val.len(),
+            preview = ?preview,
+            "desktop windows payload preview"
+        );
         log!(
             "[Desktop Apps] windows payload count={} preview={:?}",
             windows_val.len(),
