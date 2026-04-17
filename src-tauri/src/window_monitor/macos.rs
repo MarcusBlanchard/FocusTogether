@@ -27,11 +27,14 @@ use objc::{class, msg_send, sel, sel_impl};
 use std::borrow::Cow;
 use std::ffi::c_void;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[allow(non_upper_case_globals)]
 const K_CF_NUMBER_SINT32: CFNumberType = 3;
 #[allow(non_upper_case_globals)]
 const K_CF_NUMBER_SINT64: CFNumberType = 4;
+static FIRST_RUN: AtomicBool = AtomicBool::new(true);
+static LAST_DIAG_MS: AtomicU64 = AtomicU64::new(0);
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -149,6 +152,12 @@ fn read_dict(dict: CFDictionaryRef, key: &str) -> DictVal {
 }
 
 pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
+    if FIRST_RUN.swap(false, Ordering::SeqCst) {
+        println!(
+            "[window-monitor] build=136 skip-pip path active (title prefix + small-browser heuristic + size-based fallback)"
+        );
+    }
+
     let front_pid = unsafe { frontmost_pid().ok_or(())? };
     let process_path = unsafe { frontmost_app_bundle_path() };
 
@@ -210,6 +219,26 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             app_name = s;
         }
 
+        if is_top_for_front_pid && is_known_browser_app_name(&app_name) {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let last = LAST_DIAG_MS.load(Ordering::Relaxed);
+            if now_ms.saturating_sub(last) > 2000 {
+                LAST_DIAG_MS.store(now_ms, Ordering::Relaxed);
+                println!(
+                    "[window-monitor] top-window-for-front-pid pid={} app={:?} title={:?} size={}x{} layer={}",
+                    front_pid,
+                    app_name,
+                    win_title,
+                    win_pos.width as i64,
+                    win_pos.height as i64,
+                    layer
+                );
+            }
+        }
+
         if is_flowlocked_pip_title(&win_title) {
             skipped_pip = true;
             continue;
@@ -223,6 +252,27 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             && win_pos.height <= 600.0
         {
             log_skipped_suspected_pip_heuristic(win_pos.width, win_pos.height, &app_name);
+            skipped_pip = true;
+            continue;
+        }
+
+        let sharing_state = match read_dict(dic_ref, "kCGWindowSharingState") {
+            DictVal::Number(s) => s,
+            _ => -1,
+        };
+        let aspect_ok = win_pos.height > 0.0
+            && (win_pos.width / win_pos.height) >= 0.5
+            && (win_pos.width / win_pos.height) <= 2.5;
+        if is_top_for_front_pid
+            && is_known_browser_app_name(&app_name)
+            && sharing_state == 1
+            && win_pos.height <= 600.0
+            && aspect_ok
+        {
+            println!(
+                "[window-monitor] skipped PiP via shape fallback: app={} {}x{} sharing={}",
+                app_name, win_pos.width as i64, win_pos.height as i64, sharing_state
+            );
             skipped_pip = true;
             continue;
         }
