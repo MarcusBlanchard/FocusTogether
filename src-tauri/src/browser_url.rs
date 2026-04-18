@@ -169,8 +169,11 @@ pub(crate) fn host_hint_from_title(title: &str) -> Option<String> {
         }
         let cand = s.trim_start_matches("www.");
         if let Some(host) = extract_domain(&format!("https://{}", cand)) {
-            // Skip common non-site tokens
-            if host.ends_with(".js") || host.ends_with(".css") || host.ends_with(".png") {
+            // Skip page-title tokens that look like hosts but are really file
+            // names (README.md, Cargo.toml, main.rs, package.json, …). Without
+            // this, GitHub/GitLab/docs/npm titles intermittently classify as a
+            // bogus "site" and flicker the orange distraction popup.
+            if crate::browser_title_target::last_label_is_file_extension(&host) {
                 continue;
             }
             return Some(host);

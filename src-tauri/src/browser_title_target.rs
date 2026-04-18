@@ -107,11 +107,65 @@ fn should_skip_stripped(stripped: &str) -> bool {
 fn should_skip_host_token(host: &str) -> bool {
     let compact: String = host.chars().filter(|c| !c.is_whitespace()).collect();
     let lower = compact.to_lowercase();
-    lower.contains(".replit.dev")
+    if lower.contains(".replit.dev")
         || lower.contains(".repl.co")
         || lower.contains("localhost")
         || lower.contains("flowlocked")
         || lower.contains("focustogether")
+    {
+        return true;
+    }
+    if last_label_is_file_extension(&lower) {
+        return true;
+    }
+    false
+}
+/// Page titles on code-hosting / docs sites contain tokens like `README.md`,
+/// `Cargo.toml`, `main.rs`, `package.json`, `index.html` that the domain regex
+/// happily picks up because their extensions look like 2–6 letter TLDs.
+/// Treat any token whose final label is a known source/asset/document file
+/// extension as a filename rather than a hostname so we never feed it to the
+/// distraction classifier (which would then briefly flag pages on GitHub,
+/// GitLab, npm, docs sites, etc., causing the orange popup to flicker).
+pub fn last_label_is_file_extension(host: &str) -> bool {
+    let trimmed = host.trim().trim_end_matches('.').to_lowercase();
+    let Some(idx) = trimmed.rfind('.') else {
+        return false;
+    };
+    let ext = &trimmed[idx + 1..];
+    if ext.is_empty() {
+        return false;
+    }
+    matches!(
+        ext,
+        // Source code
+        "rs" | "go" | "py" | "rb" | "java" | "kt" | "kts" | "swift"
+        | "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx"
+        | "cs" | "fs" | "fsx" | "vb" | "scala" | "clj" | "cljs" | "ex" | "exs"
+        | "erl" | "hrl" | "elm" | "ml" | "mli" | "lua" | "pl" | "pm" | "php"
+        | "phtml" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "vue" | "svelte"
+        | "dart" | "r" | "jl" | "groovy" | "gradle" | "nim" | "zig" | "v" | "sol"
+        | "asm" | "s"
+        // Markup / config / data
+        | "md" | "mdx" | "rst" | "adoc" | "txt" | "rtf" | "tex"
+        | "html" | "htm" | "xhtml" | "xml" | "xsl" | "xslt" | "svg"
+        | "json" | "json5" | "jsonc" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf"
+        | "csv" | "tsv" | "env" | "lock" | "log" | "sum" | "mod" | "props"
+        | "css" | "scss" | "sass" | "less" | "styl"
+        // Shell / build
+        | "sh" | "bash" | "zsh" | "fish" | "bat" | "cmd" | "ps1"
+        | "make" | "mk" | "ninja" | "cmake" | "dockerfile"
+        // Documents / images / media / archives / binaries
+        | "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp"
+        | "png" | "jpg" | "jpeg" | "gif" | "bmp" | "ico" | "webp" | "tif" | "tiff" | "psd" | "ai"
+        | "mp3" | "wav" | "ogg" | "flac" | "m4a" | "aac" | "opus"
+        | "mp4" | "mkv" | "mov" | "avi" | "webm" | "wmv" | "flv" | "m4v"
+        | "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" | "tgz" | "tbz" | "txz"
+        | "iso" | "dmg" | "pkg" | "deb" | "rpm" | "msi" | "exe" | "app" | "apk" | "ipa"
+        | "bin" | "dll" | "so" | "dylib" | "o" | "a" | "lib" | "obj" | "class" | "jar" | "war"
+        | "db" | "sqlite" | "sqlite3" | "bak" | "tmp" | "swp"
+        | "ttf" | "otf" | "woff" | "woff2" | "eot"
+    )
 }
 
 /// Extract `foregroundApp` target from window title (after stripping browser suffix).
