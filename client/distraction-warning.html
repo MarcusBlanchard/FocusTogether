@@ -4,11 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Flowlocked - Distraction Warning</title>
+  <link rel="stylesheet" href="/notification-shared.css" />
   <script>
     window.__NOTIFICATION_PARTICLES__ = {
       color: '#fb923c',
-      alpha: 0.2,
-      particleCount: 48,
+      alpha: 0.42,
+      particleCount: 52,
       animationSpeed: 1,
     };
   </script>
@@ -34,15 +35,6 @@
 
     body.distracted {
       --ft-outline: #dc2626;
-    }
-    
-    .ft-notif-shell {
-      --ft-bg: linear-gradient(165deg, #fff7ed 0%, #ffedd5 45%, #fdba74 100%);
-      background: var(--ft-bg);
-    }
-
-    body.distracted .ft-notif-shell {
-      --ft-bg: linear-gradient(165deg, #fef2f2 0%, #fecaca 50%, #f87171 100%);
     }
     
     .card {
@@ -154,8 +146,7 @@
 <body>
   <div class="ft-notif-shell">
     <canvas id="particle-canvas" aria-hidden="true"></canvas>
-    <div class="ft-card-outline ft-card-wrap">
-      <div class="ft-card-inner card">
+    <div class="ft-card card ft-card-wrap">
         <div class="ft-brand">
           <img src="/flowlocked-logo.png" width="28" height="28" alt="" />
           <span class="ft-brand-name">Flowlocked</span>
@@ -170,7 +161,6 @@
         <div class="countdown" id="countdown">10</div>
         <div class="hint" id="hint">Close distracting app to dismiss</div>
         <div class="settings-hint">You can change what apps are distracting on your profile page.</div>
-      </div>
     </div>
   </div>
   
@@ -223,7 +213,7 @@
               if (isDistracted) {
                 document.body.classList.add('distracted');
                 if (particles && typeof particles.setColor === 'function') {
-                  particles.setColor('#f87171', 0.22);
+                  particles.setColor('#f87171', 0.44);
                 }
                 if (hintEl) hintEl.textContent = 'Session participants notified';
                 if (countdownEl) countdownEl.style.display = 'none';
@@ -233,7 +223,7 @@
               } else {
                 document.body.classList.remove('distracted');
                 if (particles && typeof particles.setColor === 'function') {
-                  particles.setColor('#fb923c', 0.2);
+                  particles.setColor('#fb923c', 0.42);
                 }
                 if (countdownEl) countdownEl.style.display = '';
                 startCountdown();
@@ -250,6 +240,6 @@
       }
     })().catch(() => {});
   </script>
-  <script type="module" src="/src/notification-particles.ts"></script>
+  <script src="/notification-particles.js" defer></script>
 </body>
 </html>
