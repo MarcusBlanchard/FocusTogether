@@ -1672,7 +1672,7 @@ async fn show_notification(app: tauri::AppHandle, title: String, body: String) -
         url
     )
     .title(&title)
-    .inner_size(380.0, 340.0)
+    .inner_size(480.0, 460.0)
     .resizable(false)
     .decorations(false)
     .always_on_top(true)
@@ -1840,7 +1840,7 @@ async fn show_participant_alert(app: tauri::AppHandle, title: String, body: Stri
         url
     )
     .title(&title)
-    .inner_size(300.0, 180.0)
+    .inner_size(420.0, 300.0)
     .resizable(false)
     .decorations(false)
     .always_on_top(true)
@@ -1946,8 +1946,7 @@ async fn show_session_ending_alert(app: tauri::AppHandle, title: String, body: S
     log!("[POPUP DEBUG] Building session-ending WindowBuilder for label={}", window_label);
     let build_result = tauri::WindowBuilder::new(&app, &window_label, url)
         .title(&title)
-        // Compact window: purple frame wraps white card with margin on all sides
-        .inner_size(320.0, 268.0)
+        .inner_size(420.0, 360.0)
         .transparent(true)
         .resizable(false)
         .decorations(false)
@@ -2307,7 +2306,7 @@ fn show_distraction_warning(app_handle: &tauri::AppHandle) {
         url
     )
     .title("Distraction Warning")
-    .inner_size(380.0, 370.0)
+    .inner_size(480.0, 480.0)
     .resizable(false)
     .decorations(false)
     .always_on_top(true)
@@ -3580,7 +3579,7 @@ fn main() {
                     url
                 )
                 .title("Flowlocked")
-                .inner_size(360.0, 260.0)
+                .inner_size(440.0, 360.0)
                 .resizable(false)
                 .decorations(false)
                 .always_on_top(true)

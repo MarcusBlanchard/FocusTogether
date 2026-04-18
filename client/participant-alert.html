@@ -77,13 +77,13 @@
     
     .timer-bg {
       fill: none;
-      stroke: #e5e7eb;
+      stroke: rgba(255, 255, 255, 0.25);
       stroke-width: 3;
     }
     
     .timer-progress {
       fill: none;
-      stroke: #2563eb;
+      stroke: #93c5fd;
       stroke-width: 3;
       stroke-linecap: round;
       stroke-dasharray: 75.4;
@@ -103,28 +103,28 @@
       align-items: center;
       justify-content: center;
       margin: 0 auto 10px;
-      background: linear-gradient(145deg, #dbeafe, #bfdbfe);
-      box-shadow: 0 3px 8px rgba(59, 130, 246, 0.25);
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
     }
     
     .icon-wrapper svg {
       width: 20px;
       height: 20px;
-      stroke: #2563eb;
+      stroke: #93c5fd;
+      filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.9));
     }
     
     .title {
       font-size: 14px;
       font-weight: 700;
-      color: #1f2937;
       margin-bottom: 4px;
       letter-spacing: -0.2px;
     }
     
     .message {
-      font-size: 12px;
-      color: #6b7280;
-      line-height: 1.4;
+      font-size: 13px;
+      line-height: 1.45;
       font-weight: 450;
     }
     
@@ -132,18 +132,20 @@
       display: inline-block;
       margin-top: 10px;
       padding: 4px 10px;
-      background: linear-gradient(145deg, #dbeafe, #bfdbfe);
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(147, 197, 253, 0.35);
       border-radius: 16px;
       font-size: 9px;
-      color: #1d4ed8;
+      color: #bfdbfe;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.5px;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
     }
 
     .ft-card-wrap {
-      width: 90%;
-      max-width: 300px;
+      width: 100%;
+      max-width: 400px;
     }
   </style>
 </head>

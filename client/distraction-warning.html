@@ -62,39 +62,39 @@
       align-items: center;
       justify-content: center;
       margin: 0 auto 14px;
-      background: linear-gradient(145deg, #ffedd5, #fdba74);
-      box-shadow: 0 4px 12px rgba(249, 115, 22, 0.3);
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
       transition: all 0.4s ease;
     }
     
     body.distracted .icon-wrapper {
-      background: linear-gradient(145deg, #fee2e2, #fecaca);
-      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+      background: rgba(248, 113, 113, 0.15);
+      border-color: rgba(248, 113, 113, 0.35);
     }
     
     .icon-wrapper svg {
       width: 28px;
       height: 28px;
-      stroke: #c2410c;
+      stroke: #fb923c;
       transition: stroke 0.4s ease;
+      filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.9));
     }
     
     body.distracted .icon-wrapper svg {
-      stroke: #dc2626;
+      stroke: #fca5a5;
     }
     
     .title {
       font-size: 17px;
       font-weight: 700;
-      color: #1f2937;
       margin-bottom: 8px;
       letter-spacing: -0.3px;
     }
     
     .message {
       font-size: 14px;
-      color: #6b7280;
-      line-height: 1.5;
+      line-height: 1.55;
       font-weight: 450;
     }
     
@@ -102,35 +102,39 @@
       margin-top: 16px;
       font-size: 32px;
       font-weight: 700;
-      color: #ea580c;
+      color: #fdba74;
       transition: color 0.4s ease;
     }
     
     body.distracted .countdown {
-      color: #dc2626;
+      color: #fca5a5;
     }
     
     .hint {
       margin-top: 12px;
       padding: 10px 14px;
-      background: rgba(249, 115, 22, 0.15);
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 10px;
       font-size: 12px;
-      color: #9a3412;
+      color: #e2e8f0;
       font-weight: 500;
       transition: all 0.4s ease;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
     }
     
     body.distracted .hint {
-      background: rgba(239, 68, 68, 0.12);
-      color: #991b1b;
+      background: rgba(127, 29, 29, 0.4);
+      border-color: rgba(252, 165, 165, 0.25);
+      color: #fecaca;
     }
     
     .settings-hint {
       margin-top: 10px;
       font-size: 11px;
-      color: #9ca3af;
+      color: #94a3b8;
       font-weight: 400;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
     }
     
     body.distracted .settings-hint {
@@ -138,8 +142,8 @@
     }
 
     .ft-card-wrap {
-      width: 90%;
-      max-width: 360px;
+      width: 100%;
+      max-width: 440px;
     }
   </style>
 </head>

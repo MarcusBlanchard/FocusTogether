@@ -1,24 +1,30 @@
-/* Tauri pop-up windows: black field + particle canvas + single card */
+/* Tauri pop-ups: black + particles; content is transparent (no white panel) */
 
 html,
 body {
   margin: 0;
   min-height: 100%;
+  height: 100%;
   background: #000000;
+  overflow: hidden;
 }
 
 .ft-notif-shell {
   position: relative;
   isolation: isolate;
-  min-height: 100vh;
-  min-height: 100dvh;
+  box-sizing: border-box;
+  height: 100%;
+  max-height: 100vh;
+  max-height: 100dvh;
   width: 100%;
   background: #000000;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px 18px;
-  overflow: hidden;
+  padding: 28px 22px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 #particle-canvas {
@@ -31,18 +37,17 @@ body {
   z-index: 1;
 }
 
-/* One card only: light panel + colored rim */
+/* Content sits on top of particles — fully transparent, no card chrome */
 .ft-card {
   position: relative;
   z-index: 2;
   width: 100%;
+  max-width: 100%;
   margin: 0 auto;
-  background: rgba(255, 255, 255, 0.97);
-  border-radius: 20px;
-  border: 2px solid var(--ft-outline, #64748b);
-  box-shadow:
-    0 0 48px rgba(0, 0, 0, 0.55),
-    0 0 28px color-mix(in srgb, var(--ft-outline, #64748b) 35%, transparent);
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
 }
 
 .ft-brand {
@@ -58,12 +63,39 @@ body {
   height: 28px;
   border-radius: 7px;
   flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.75));
 }
 
 .ft-brand-name {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: #334155;
+  color: #e2e8f0;
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 1),
+    0 0 24px rgba(0, 0, 0, 0.8);
+}
+
+/* Default readable text on dark + moving particles */
+.ft-notif-shell .title {
+  color: #f8fafc;
+  text-shadow:
+    0 2px 8px rgba(0, 0, 0, 1),
+    0 0 40px rgba(0, 0, 0, 0.65);
+}
+
+.ft-notif-shell .message,
+.ft-notif-shell .subtitle {
+  color: #cbd5e1;
+  text-shadow:
+    0 1px 6px rgba(0, 0, 0, 1),
+    0 0 20px rgba(0, 0, 0, 0.6);
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.ft-notif-shell .countdown {
+  text-shadow:
+    0 2px 10px rgba(0, 0, 0, 1),
+    0 0 32px rgba(0, 0, 0, 0.55);
 }
