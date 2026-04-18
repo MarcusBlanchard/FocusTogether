@@ -2572,6 +2572,15 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         // Last `foregroundApp` string we posted for browsers (stripped tab title; tab changes do not change app name).
         let mut last_reported_target: Option<String> = None;
         let mut active_distraction_key: Option<String> = None;
+        // Hysteresis: dynamic page titles (HTML5 games update document.title with frame
+        // counters, attempt numbers, "Loading…", etc.) make the server's per-title AI
+        // verdict flip across ticks even when the user hasn't navigated. The same can
+        // happen client-side when the URL-bar read times out. Require either a sustained
+        // run of non-distracting ticks or an actual change in the foreground identity
+        // before dismissing the orange warning, so transient flips don't cause flicker.
+        let mut consecutive_clear_ticks: u32 = 0;
+        let mut active_foreground_key: Option<String> = None;
+        const DISMISS_CLEAR_TICKS: u32 = 8; // ~1.6s at 200ms tick
 
         // Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
         const WARNING_DURATION_SECS: u64 = 10;
@@ -2715,9 +2724,22 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         std::thread::sleep(std::time::Duration::from_millis(200));
                         continue;
                     }
-                    
+
+                    // Stable identity for the currently-foregrounded thing. For browsers we
+                    // prefer the URL/host (effective_target), and only fall back to the title-
+                    // derived key when no URL is known. This is what we compare against
+                    // `active_foreground_key` to decide whether the user really navigated away.
+                    let current_foreground_key: String = effective_target
+                        .clone()
+                        .or_else(|| browser_fallback_target.map(|s| s.to_string()))
+                        .and_then(|s| normalize_rule_value(&s))
+                        .unwrap_or_else(|| {
+                            normalize_rule_value(&desktop_apps_foreground)
+                                .unwrap_or_else(|| desktop_apps_foreground.to_lowercase())
+                        });
                     if is_distracting_now {
-                        // User is on a distracting app (server-identified or browser)
+                        // Reset the clear-tick counter the moment we see distraction again.
+                        consecutive_clear_ticks = 0;
                         if warning_shown_at.is_none() && !is_marked_distracted {
                             // First detection - show warning
                             show_distraction_warning(&app_handle);
@@ -2733,6 +2755,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 .clone()
                                 .or_else(|| normalize_rule_value(&desktop_apps_foreground))
                                 .or_else(|| Some(desktop_apps_foreground.to_lowercase()));
+                            active_foreground_key = Some(current_foreground_key.clone());
                             if is_browser_distracting {
                                 println!("[Detection] Warning triggered by local browser domain match");
                             } else if server_blocked_after_own_guard {
@@ -2741,9 +2764,12 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 println!("[Detection] ⚠️ Warning triggered by local rules for '{}'", app_name);
                             }
                         } else if let Some(start_time) = warning_shown_at {
-                            // Warning already shown - check if distraction warning duration (10s) passed
+                            // Refresh the foreground key while still distracting on the same site,
+                            // so a brief flip-then-recover doesn't lose track of identity.
+                            if active_foreground_key.as_deref() != Some(current_foreground_key.as_str()) {
+                                active_foreground_key = Some(current_foreground_key.clone());
+                            }
                             if start_time.elapsed().as_secs() >= WARNING_DURATION_SECS && !is_marked_distracted {
-                                // Time's up - mark as distracted
                                 is_marked_distracted = true;
                                 println!("[Detection] ⏰ 10 seconds passed - transitioning to distracted");
                                 update_distraction_warning_to_distracted(&app_handle);
@@ -2762,20 +2788,53 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                             }
                         }
                     } else {
-                        // User is on a productive/neutral app
+                        // Not distracting on this tick. Decide whether this is a genuine
+                        // "user navigated away" or a transient classifier flip.
                         if warning_shown_at.is_some() || is_marked_distracted {
-                            // Was in warning/distracted state - dismiss and reset
-                            dismiss_distraction_warning(&app_handle);
-                            warning_shown_at = None;
-                            is_marked_distracted = false;
-                            active_distraction_key = None;
-                            
-                            if last_sent_state == Some("distracted") {
-                                if send_distraction_state(&user_id, false, None) {
-                                    println!("[Detection] Back to active");
-                                    last_sent_state = Some("active");
+                            let identity_changed = active_foreground_key
+                                .as_deref()
+                                .map(|prev| prev != current_foreground_key.as_str())
+                                .unwrap_or(true);
+                            if identity_changed {
+                                // Real navigation away from the distracting target → dismiss immediately.
+                                consecutive_clear_ticks = 0;
+                                dismiss_distraction_warning(&app_handle);
+                                warning_shown_at = None;
+                                is_marked_distracted = false;
+                                active_distraction_key = None;
+                                active_foreground_key = None;
+                                if last_sent_state == Some("distracted") {
+                                    if send_distraction_state(&user_id, false, None) {
+                                        println!("[Detection] Back to active (foreground changed)");
+                                        last_sent_state = Some("active");
+                                    } else {
+                                        println!("[Detection] ⚠️ Failed to clear distracted; will retry");
+                                    }
+                                }
+                            } else {
+                                // Same foreground, but classifier transiently flipped to "not distracting".
+                                // Hold the warning until we see a sustained run of clear ticks.
+                                consecutive_clear_ticks = consecutive_clear_ticks.saturating_add(1);
+                                if consecutive_clear_ticks >= DISMISS_CLEAR_TICKS {
+                                    consecutive_clear_ticks = 0;
+                                    dismiss_distraction_warning(&app_handle);
+                                    warning_shown_at = None;
+                                    is_marked_distracted = false;
+                                    active_distraction_key = None;
+                                    active_foreground_key = None;
+                                    if last_sent_state == Some("distracted") {
+                                        if send_distraction_state(&user_id, false, None) {
+                                            println!("[Detection] Back to active (sustained clear)");
+                                            last_sent_state = Some("active");
+                                        } else {
+                                            println!("[Detection] ⚠️ Failed to clear distracted; will retry");
+                                        }
+                                    }
                                 } else {
-                                    println!("[Detection] ⚠️ Failed to clear distracted; will retry");
+                                    println!(
+                                        "[Detection] Holding warning through transient clear ({}/{}) for key='{}'",
+                                        consecutive_clear_ticks, DISMISS_CLEAR_TICKS, current_foreground_key
+                                    );
                                 }
                             }
                         } else if DISTRACTION_REPORTED.load(Ordering::SeqCst) {
@@ -2784,7 +2843,6 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                             }
                         }
                     }
-
                     // Faster polling while warning/distracted state is active.
                     sleep_ms = if warning_shown_at.is_some()
                         || is_marked_distracted
