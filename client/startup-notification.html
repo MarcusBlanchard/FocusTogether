@@ -4,6 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Flowlocked Active</title>
+  <script>
+    window.__NOTIFICATION_PARTICLES__ = {
+      color: '#4ade80',
+      alpha: 0.2,
+      particleCount: 48,
+      animationSpeed: 1,
+    };
+  </script>
   <style>
     * {
       margin: 0;
@@ -18,24 +26,18 @@
     
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(145deg, #d1fae5 0%, #6ee7b7 100%);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      padding: 0;
-      margin: 0;
+      --ft-outline: #16a34a;
       -webkit-user-select: none;
       user-select: none;
     }
+
+    .ft-notif-shell {
+      --ft-bg: linear-gradient(165deg, #ecfdf5 0%, #d1fae5 40%, #6ee7b7 100%);
+      background: var(--ft-bg);
+    }
     
     .card {
-      background: rgba(255, 255, 255, 0.95);
-      border-radius: 20px;
-      padding: 28px 32px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
-      width: 90%;
-      max-width: 320px;
+      padding: 24px 26px 22px;
       text-align: center;
       animation: popIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
@@ -52,20 +54,20 @@
     }
     
     .icon-wrapper {
-      width: 64px;
-      height: 64px;
+      width: 56px;
+      height: 56px;
       border-radius: 18px;
       display: flex;
       align-items: center;
       justify-content: center;
-      margin: 0 auto 18px;
+      margin: 0 auto 14px;
       background: linear-gradient(145deg, #d1fae5, #a7f3d0);
       box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);
     }
     
     .icon-wrapper svg {
-      width: 32px;
-      height: 32px;
+      width: 30px;
+      height: 30px;
       stroke: #059669;
     }
     
@@ -80,7 +82,7 @@
     .subtitle {
       font-size: 13px;
       color: #6b7280;
-      margin-bottom: 18px;
+      margin-bottom: 16px;
       font-weight: 450;
     }
     
@@ -97,18 +99,32 @@
       background: linear-gradient(145deg, #fefce8, #fef9c3);
       color: #a16207;
     }
+
+    .ft-card-wrap {
+      width: 90%;
+      max-width: 340px;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="icon-wrapper">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
+  <div class="ft-notif-shell">
+    <canvas id="particle-canvas" aria-hidden="true"></canvas>
+    <div class="ft-card-outline ft-card-wrap">
+      <div class="ft-card-inner card">
+        <div class="ft-brand">
+          <img src="/flowlocked-logo.png" width="32" height="32" alt="" />
+          <span class="ft-brand-name">Flowlocked</span>
+        </div>
+        <div class="icon-wrapper">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <div class="title">Flowlocked Active (139)</div>
+        <div class="subtitle">Desktop enforcer running in background</div>
+        <div class="status" id="status">Connecting...</div>
+      </div>
     </div>
-    <div class="title">Flowlocked Active (138)</div>
-    <div class="subtitle">Desktop enforcer running in background</div>
-    <div class="status" id="status">Connecting...</div>
   </div>
   
   <script>
@@ -136,5 +152,6 @@
       }
     }, 2000);
   </script>
+  <script type="module" src="/src/notification-particles.ts"></script>
 </body>
 </html>

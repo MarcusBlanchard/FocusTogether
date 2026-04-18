@@ -4,9 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Flowlocked — Session ended</title>
+  <script>
+    window.__NOTIFICATION_PARTICLES__ = {
+      color: '#c084fc',
+      alpha: 0.22,
+      particleCount: 42,
+      animationSpeed: 1,
+    };
+  </script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    /* Transparent root so closing never flashes default white WebView */
     html, body {
       height: 100%;
       overflow: hidden;
@@ -14,34 +21,16 @@
     }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+      --ft-outline: #7c3aed;
       -webkit-user-select: none;
       user-select: none;
     }
-    .shell {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 14px;
-      background: linear-gradient(160deg, #ddd6fe 0%, #a78bfa 45%, #7c3aed 100%);
-    }
-    /* Purple wraps the white card on all sides */
-    .purple-frame {
-      padding: 12px 14px;
-      border-radius: 22px;
-      background: linear-gradient(145deg, #c4b5fd 0%, #a78bfa 55%, #8b5cf6 100%);
-      box-shadow:
-        0 0 0 1px rgba(255, 255, 255, 0.12) inset,
-        0 10px 36px rgba(91, 33, 182, 0.35);
-      animation: slideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    .ft-notif-shell {
+      --ft-bg: linear-gradient(160deg, #ede9fe 0%, #ddd6fe 45%, #c4b5fd 100%);
+      background: var(--ft-bg);
     }
     .card {
-      background: rgba(255, 255, 255, 0.98);
-      border-radius: 16px;
-      padding: 14px 16px 12px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-      width: 100%;
-      max-width: 252px;
+      padding: 14px 16px 14px;
       text-align: center;
       display: flex;
       flex-direction: column;
@@ -51,6 +40,11 @@
     @keyframes slideIn {
       from { opacity: 0; transform: translateY(10px) scale(0.97); }
       to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .ft-card-wrap {
+      width: 100%;
+      max-width: 280px;
+      animation: slideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
     .icon-wrapper {
       width: 44px;
@@ -115,12 +109,20 @@
       letter-spacing: 0.45px;
       flex-shrink: 0;
     }
+    .ft-brand {
+      margin-bottom: 6px;
+    }
   </style>
 </head>
 <body>
-  <div class="shell">
-    <div class="purple-frame">
-      <div class="card">
+  <div class="ft-notif-shell">
+    <canvas id="particle-canvas" aria-hidden="true"></canvas>
+    <div class="ft-card-outline ft-card-wrap">
+      <div class="ft-card-inner card">
+        <div class="ft-brand">
+          <img src="/flowlocked-logo.png" width="28" height="28" alt="" />
+          <span class="ft-brand-name">Flowlocked</span>
+        </div>
         <div class="icon-wrapper">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -144,8 +146,6 @@
       if (isClosing) return;
       isClosing = true;
       try {
-        // Same pattern as yellow idle warning: main app calls `invoke('dismiss_notification')`.
-        // Here we invoke Rust with this window's label so the backend closes us (allowlist-safe).
         const T = window.__TAURI__;
         const currentWindow = T && T.window && typeof T.window.getCurrent === 'function'
           ? T.window.getCurrent()
@@ -186,5 +186,6 @@
       } catch (_) { /* ignore */ }
     })().catch(() => {});
   </script>
+  <script type="module" src="/src/notification-particles.ts"></script>
 </body>
 </html>

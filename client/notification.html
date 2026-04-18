@@ -4,6 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Flowlocked Warning</title>
+  <script>
+    window.__NOTIFICATION_PARTICLES__ = {
+      color: '#eab308',
+      alpha: 0.2,
+      particleCount: 48,
+      animationSpeed: 1,
+    };
+  </script>
   <style>
     * {
       margin: 0;
@@ -18,30 +26,27 @@
     
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(145deg, #fef9c3 0%, #fde047 100%);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-      padding: 28px 22px;
-      margin: 0;
+      --ft-outline: #ca8a04;
       -webkit-user-select: none;
       user-select: none;
       transition: background 0.4s ease;
     }
-    
+
     body.distracted {
-      background: linear-gradient(145deg, #fecaca 0%, #f87171 100%);
+      --ft-outline: #dc2626;
+    }
+    
+    .ft-notif-shell {
+      --ft-bg: linear-gradient(165deg, #fffbeb 0%, #fef9c3 45%, #fde047 100%);
+      background: var(--ft-bg);
+    }
+
+    body.distracted .ft-notif-shell {
+      --ft-bg: linear-gradient(165deg, #fef2f2 0%, #fecaca 50%, #f87171 100%);
     }
     
     .card {
-      background: rgba(255, 255, 255, 0.95);
-      border-radius: 20px;
-      padding: 24px 28px;
-      box-shadow: 
-        0 8px 32px rgba(0, 0, 0, 0.15);
-      width: 90%;
-      max-width: 340px;
+      padding: 22px 24px 20px;
       text-align: center;
       animation: slideUp 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
@@ -64,7 +69,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      margin: 0 auto 16px;
+      margin: 0 auto 14px;
       background: linear-gradient(145deg, #fef3c7, #fde68a);
       box-shadow: 0 4px 12px rgba(251, 191, 36, 0.3);
       transition: all 0.4s ease;
@@ -129,19 +134,33 @@
       background: rgba(239, 68, 68, 0.12);
       color: #991b1b;
     }
+
+    .ft-card-wrap {
+      width: 90%;
+      max-width: 360px;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="icon-wrapper">
-      <svg id="icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-      </svg>
+  <div class="ft-notif-shell">
+    <canvas id="particle-canvas" aria-hidden="true"></canvas>
+    <div class="ft-card-outline ft-card-wrap">
+      <div class="ft-card-inner card">
+        <div class="ft-brand">
+          <img src="/flowlocked-logo.png" width="28" height="28" alt="" />
+          <span class="ft-brand-name">Flowlocked</span>
+        </div>
+        <div class="icon-wrapper">
+          <svg id="icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+          </svg>
+        </div>
+        <div class="title" id="title">Idle Warning</div>
+        <div class="message" id="body">You're about to be marked as idle. Move your mouse or type.</div>
+        <div class="countdown" id="countdown" style="display: none;">30</div>
+        <div class="hint" id="hint">Move mouse or type to dismiss</div>
+      </div>
     </div>
-    <div class="title" id="title">Idle Warning</div>
-    <div class="message" id="body">You're about to be marked as idle. Move your mouse or type.</div>
-    <div class="countdown" id="countdown" style="display: none;">30</div>
-    <div class="hint" id="hint">Move mouse or type to dismiss</div>
   </div>
   
   <script>
@@ -161,6 +180,7 @@
               const iconEl = document.getElementById('icon');
               const hintEl = document.getElementById('hint');
               const countdownEl = document.getElementById('countdown');
+              const particles = window.__notificationParticles;
               
               if (titleEl && title) titleEl.textContent = title;
               if (bodyEl && body) bodyEl.textContent = body;
@@ -177,6 +197,9 @@
               
               if (isDistracted) {
                 document.body.classList.add('distracted');
+                if (particles && typeof particles.setColor === 'function') {
+                  particles.setColor('#f87171', 0.22);
+                }
                 if (hintEl) hintEl.textContent = 'Session participants notified';
                 if (countdownEl) countdownEl.style.display = 'none';
                 if (iconEl) {
@@ -184,6 +207,9 @@
                 }
               } else {
                 document.body.classList.remove('distracted');
+                if (particles && typeof particles.setColor === 'function') {
+                  particles.setColor('#eab308', 0.2);
+                }
                 if (hintEl) hintEl.textContent = 'Move mouse or type to dismiss';
               }
             } catch (error) {
@@ -196,5 +222,6 @@
       }
     })().catch(() => {});
   </script>
+  <script type="module" src="/src/notification-particles.ts"></script>
 </body>
 </html>

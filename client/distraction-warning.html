@@ -4,6 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Flowlocked - Distraction Warning</title>
+  <script>
+    window.__NOTIFICATION_PARTICLES__ = {
+      color: '#fb923c',
+      alpha: 0.2,
+      particleCount: 48,
+      animationSpeed: 1,
+    };
+  </script>
   <style>
     * {
       margin: 0;
@@ -18,29 +26,27 @@
     
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(145deg, #fed7aa 0%, #fb923c 100%);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      padding: 0;
-      margin: 0;
+      --ft-outline: #ea580c;
       -webkit-user-select: none;
       user-select: none;
       transition: background 0.4s ease;
     }
-    
+
     body.distracted {
-      background: linear-gradient(145deg, #fecaca 0%, #f87171 100%);
+      --ft-outline: #dc2626;
+    }
+    
+    .ft-notif-shell {
+      --ft-bg: linear-gradient(165deg, #fff7ed 0%, #ffedd5 45%, #fdba74 100%);
+      background: var(--ft-bg);
+    }
+
+    body.distracted .ft-notif-shell {
+      --ft-bg: linear-gradient(165deg, #fef2f2 0%, #fecaca 50%, #f87171 100%);
     }
     
     .card {
-      background: rgba(255, 255, 255, 0.95);
-      border-radius: 20px;
-      padding: 24px 28px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
-      width: 90%;
-      max-width: 340px;
+      padding: 22px 24px 18px;
       text-align: center;
       animation: slideUp 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
@@ -63,7 +69,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      margin: 0 auto 16px;
+      margin: 0 auto 14px;
       background: linear-gradient(145deg, #ffedd5, #fdba74);
       box-shadow: 0 4px 12px rgba(249, 115, 22, 0.3);
       transition: all 0.4s ease;
@@ -138,21 +144,34 @@
     body.distracted .settings-hint {
       display: none;
     }
+
+    .ft-card-wrap {
+      width: 90%;
+      max-width: 360px;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="icon-wrapper">
-      <svg id="icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-        <!-- Eye with slash icon -->
-        <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
-      </svg>
+  <div class="ft-notif-shell">
+    <canvas id="particle-canvas" aria-hidden="true"></canvas>
+    <div class="ft-card-outline ft-card-wrap">
+      <div class="ft-card-inner card">
+        <div class="ft-brand">
+          <img src="/flowlocked-logo.png" width="28" height="28" alt="" />
+          <span class="ft-brand-name">Flowlocked</span>
+        </div>
+        <div class="icon-wrapper">
+          <svg id="icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+          </svg>
+        </div>
+        <div class="title" id="title">Distracting App Detected</div>
+        <div class="message" id="body">Switch back to productive work to stay focused</div>
+        <div class="countdown" id="countdown">10</div>
+        <div class="hint" id="hint">Close distracting app to dismiss</div>
+        <div class="settings-hint">You can change what apps are distracting on your profile page.</div>
+      </div>
     </div>
-    <div class="title" id="title">Distracting App Detected</div>
-    <div class="message" id="body">Switch back to productive work to stay focused</div>
-    <div class="countdown" id="countdown">10</div>
-    <div class="hint" id="hint">Close distracting app to dismiss</div>
-    <div class="settings-hint">You can change what apps are distracting on your profile page.</div>
   </div>
   
   <script>
@@ -192,6 +211,7 @@
               const countdownEl = document.getElementById('countdown');
               const hintEl = document.getElementById('hint');
               const iconEl = document.getElementById('icon');
+              const particles = window.__notificationParticles;
               
               if (titleEl && title) titleEl.textContent = title;
               if (bodyEl && body) bodyEl.textContent = body;
@@ -202,12 +222,20 @@
               
               if (isDistracted) {
                 document.body.classList.add('distracted');
+                if (particles && typeof particles.setColor === 'function') {
+                  particles.setColor('#f87171', 0.22);
+                }
                 if (hintEl) hintEl.textContent = 'Session participants notified';
                 if (countdownEl) countdownEl.style.display = 'none';
                 if (iconEl) {
                   iconEl.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />';
                 }
               } else {
+                document.body.classList.remove('distracted');
+                if (particles && typeof particles.setColor === 'function') {
+                  particles.setColor('#fb923c', 0.2);
+                }
+                if (countdownEl) countdownEl.style.display = '';
                 startCountdown();
               }
             } catch (error) {
@@ -216,12 +244,12 @@
           });
         }
         
-        // Start countdown immediately
         startCountdown();
       } catch (error) {
         console.error('[DistractionWarning] Setup error:', error);
       }
     })().catch(() => {});
   </script>
+  <script type="module" src="/src/notification-particles.ts"></script>
 </body>
 </html>
