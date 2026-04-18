@@ -543,7 +543,18 @@ fn contains_any_rule_token(value: &str, rules: &HashSet<String>) -> bool {
     if lower.is_empty() {
         return false;
     }
-    rules.iter().any(|r| lower.contains(r))
+    rules.iter().any(|r| {
+        if r.is_empty() {
+            return false;
+        }
+        // Avoid substring traps on short app names (e.g. "ea" matching inside "steam").
+        if r.len() <= 3 {
+            return lower == *r
+                || lower.ends_with(&format!(".{}", r))
+                || lower.starts_with(&format!("{}.", r));
+        }
+        lower.contains(r.as_str())
+    })
 }
 
 fn looks_like_hostname_target(value: &str) -> bool {
@@ -908,7 +919,6 @@ fn get_running_app_names() -> Vec<String> {
     apps
 }
 
-#[cfg(target_os = "windows")]
 fn process_name_by_pid(pid: u32) -> Option<String> {
     if pid == 0 {
         return None;
@@ -929,19 +939,19 @@ fn process_name_by_pid(pid: u32) -> Option<String> {
 }
 
 fn sanitize_foreground_snapshot(app_name: String, title: String, pid: u32) -> Option<(String, String, u32)> {
-    #[cfg(target_os = "windows")]
     let mut app = app_name.trim().to_string();
-    #[cfg(not(target_os = "windows"))]
-    let app = app_name.trim().to_string();
     let t = title.trim().to_string();
 
-    // Windows can briefly report empty app name for secure/system overlays (UAC, shell dialogs).
-    // Fallback to process-table lookup by PID so classification/reporting still has a stable identifier.
-    #[cfg(target_os = "windows")]
-    {
-        if app.is_empty() {
-            app = process_name_by_pid(pid).unwrap_or_else(|| "windows-system".to_string());
+    // Window APIs can briefly report an empty owner name (macOS metadata limits, overlays).
+    // Fallback to the process table by PID so classification still runs (e.g. Steam).
+    if app.is_empty() {
+        if let Some(name) = process_name_by_pid(pid) {
+            app = name;
         }
+    }
+    #[cfg(target_os = "windows")]
+    if app.is_empty() {
+        app = "windows-system".to_string();
     }
 
     if app.is_empty() {
@@ -2195,12 +2205,76 @@ fn play_distracted_sound() {
 // DISTRACTION DETECTION
 // =====================================
 
+/// Steam embeds Chromium/CEF; the foreground process name is often "Chromium Helper" with no URL,
+/// which `is_browser_app` would treat as Chrome-without-domain → no distraction. If the bundle/exe
+/// path is clearly under Steam, classify as the Steam client instead.
+fn steam_label_when_cef_reports_as_browser(process_path: &std::path::Path, app_name: &str) -> Option<String> {
+    let p = process_path.to_string_lossy().to_lowercase();
+    let steam_install = p.contains("steam.app")
+        || p.ends_with("steam.exe")
+        || p.contains("steam_osx")
+        || p.contains("/steam/steamapps/")
+        || p.contains("\\steam\\steamapps\\");
+    if !steam_install {
+        return None;
+    }
+    let n = app_name.trim().to_lowercase();
+    if n.contains("steam") {
+        return None;
+    }
+    if browser_title_target::is_browser_app(app_name)
+        || n.contains("chromium")
+        || n.contains("cef")
+        || n.contains("helper")
+    {
+        return Some("Steam".to_string());
+    }
+    None
+}
+
+static LAST_STEAM_DISTRACTION_TRACE_MS: AtomicU64 = AtomicU64::new(0);
+
+fn maybe_log_steam_foreground_blocked(
+    app_name: &str,
+    desktop_fg: &str,
+    local_key: &Option<String>,
+    server_cleared_own_domain: bool,
+    is_distracting: bool,
+) {
+    if is_distracting {
+        return;
+    }
+    let a = app_name.to_lowercase();
+    let d = desktop_fg.to_lowercase();
+    if !a.contains("steam") && !d.contains("steam") {
+        return;
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|x| x.as_millis() as u64)
+        .unwrap_or(0);
+    let last = LAST_STEAM_DISTRACTION_TRACE_MS.load(Ordering::Relaxed);
+    if now_ms.saturating_sub(last) < 4_000 {
+        return;
+    }
+    LAST_STEAM_DISTRACTION_TRACE_MS.store(now_ms, Ordering::Relaxed);
+    println!(
+        "[Detection][steam-trace] foreground not treated as distracting: app={:?} desktop_fg={:?} local_key={:?} server_own_domain_cleared={}",
+        app_name, desktop_fg, local_key, server_cleared_own_domain
+    );
+}
+
 /// Get foreground app info. Returns (app_name, window_title, process_id).
 /// Data is used only for classification, then discarded.
 fn get_foreground_info() -> Option<(String, String, u32)> {
     match window_monitor::get_active_window_skip_pip_overlay() {
         Ok(window) => {
-            let app_name = window.app_name;
+            let mut app_name = window.app_name;
+            if let Some(label) =
+                steam_label_when_cef_reports_as_browser(&window.process_path, &app_name)
+            {
+                app_name = label;
+            }
             let title = window.title;
             let pid = window.process_id as u32;
             sanitize_foreground_snapshot(app_name, title, pid)
@@ -2507,6 +2581,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         effective_target.as_deref().or(browser_fallback_target),
                         Some(user_id.as_str()),
                     );
+                    let local_after_classify = local_distraction_key.clone();
                     // Any match while foreground is a real browser counts as browser distraction (not the
                     // "You opened Google Chrome" notification path). Do not require URL bar read: title hints
                     // and URL read both feed `effective_target`.
@@ -2585,6 +2660,14 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                             && (is_server_blocked
                                 || is_browser_distracting
                                 || server_blocked_after_own_guard);
+
+                    maybe_log_steam_foreground_blocked(
+                        &app_name,
+                        &desktop_apps_foreground,
+                        &local_after_classify,
+                        server_own_domain_match,
+                        is_distracting_now,
+                    );
 
                     // If our app is in foreground, handle timer but also check if distraction cleared
                     if is_our_app {

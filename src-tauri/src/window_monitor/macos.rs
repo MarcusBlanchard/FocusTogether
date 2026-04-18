@@ -96,6 +96,16 @@ unsafe fn frontmost_pid() -> Option<i64> {
     Some(i64::from(pid))
 }
 
+/// When `kCGWindowOwnerName` is empty (seen with some games/clients), use the frontmost bundle
+/// path from NSWorkspace (`…/Steam.app`) so local rules can still match "steam".
+fn display_name_from_bundle_path(path: &std::path::Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?.trim();
+    if stem.is_empty() {
+        return None;
+    }
+    Some(stem.to_string())
+}
+
 fn read_dict(dict: CFDictionaryRef, key: &str) -> DictVal {
     let cf_key: CFString = key.into();
     let mut value: *const c_void = std::ptr::null();
@@ -224,6 +234,11 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         let mut app_name = String::new();
         if let DictVal::String(s) = read_dict(dic_ref, "kCGWindowOwnerName") {
             app_name = s;
+        }
+        if app_name.is_empty() {
+            if let Some(s) = display_name_from_bundle_path(&process_path) {
+                app_name = s;
+            }
         }
 
         if is_top_for_front_pid && is_known_browser_app_name(&app_name) {

@@ -14,6 +14,10 @@ fn domain_regex() -> &'static Regex {
 /// OS-reported browser process names (substring match, case-insensitive).
 pub fn is_browser_app(app_name: &str) -> bool {
     let n = app_name.to_lowercase();
+    // Steam (and helpers) embed Chromium/CEF but are not general-purpose browsers for distraction rules.
+    if n.contains("steam") {
+        return false;
+    }
     [
         "google chrome",
         "chrome",
