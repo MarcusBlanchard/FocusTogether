@@ -1,9 +1,8 @@
 // Flowlocked Browser Extension - Background Service Worker
 // Reports active website to server, server decides if it's distracting
 
-// Default API host (Replit test). Override with apiBaseOverride in storage or use production via env.
-let API_BASE =
-  'https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev';
+// Default API host (production). Override with apiBaseOverride in storage for staging/dev.
+let API_BASE = 'https://flowlocked.com';
 
 // State
 let userId = null;

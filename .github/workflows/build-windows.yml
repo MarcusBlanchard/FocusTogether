@@ -12,6 +12,7 @@ on:
     paths:
       - "src-tauri/**"
       - "client/**"
+      - "browser-extension/**"
       - "scripts/**"
       - "package.json"
       - "package-lock.json"
@@ -23,6 +24,7 @@ on:
     paths:
       - "src-tauri/**"
       - "client/**"
+      - "browser-extension/**"
       - "scripts/**"
       - "package.json"
       - "package-lock.json"

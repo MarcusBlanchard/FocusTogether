@@ -707,8 +707,7 @@ fn classify_local_distraction(
 }
 
 /// Default API host (production). Override with `BACKEND_URL` or persisted `backend_url` if needed.
-const DEFAULT_BACKEND_BASE_URL: &str =
-    "https://85f28487-f52a-4264-bfe6-832501142976-00-36zv4e7q2xsre.spock.replit.dev";
+const DEFAULT_BACKEND_BASE_URL: &str = "https://flowlocked.com";
 
 /// Resolved API base: `BACKEND_URL` env → persisted `backend_url` in config → `DEFAULT_BACKEND_BASE_URL`.
 fn backend_base_url() -> String {
