@@ -28,6 +28,7 @@ use std::borrow::Cow;
 use std::ffi::c_void;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use sysinfo::{Pid, ProcessesToUpdate, System};
 
 #[allow(non_upper_case_globals)]
 const K_CF_NUMBER_SINT32: CFNumberType = 3;
@@ -131,7 +132,14 @@ fn read_dict(dict: CFDictionaryRef, key: &str) -> DictVal {
                     return DictVal::Number(i64::from(v));
                 }
             }
-            _ => {}
+            _ => {
+                let mut v = 0_f64;
+                let out: *mut f64 = &mut v;
+                // 13 = kCFNumberFloat64Type
+                if unsafe { CFNumberGetValue(value, 13, out.cast()) } {
+                    return DictVal::Number(v.round() as i64);
+                }
+            }
         }
     } else if type_id == unsafe { CFBooleanGetTypeID() } {
         return DictVal::Bool(unsafe { CFBooleanGetValue(value.cast()) });
@@ -166,6 +174,18 @@ fn screen_recording_granted() -> bool {
     unsafe { CGPreflightScreenCaptureAccess() }
 }
 
+fn process_path_by_pid(pid: u32) -> PathBuf {
+    if pid == 0 {
+        return PathBuf::new();
+    }
+    let mut sys = System::new();
+    let p = Pid::from_u32(pid);
+    let _ = sys.refresh_processes(ProcessesToUpdate::Some(&[p]), true);
+    sys.process(p)
+        .and_then(|proc| proc.exe().map(|p| p.to_path_buf()))
+        .unwrap_or_default()
+}
+
 pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     if FIRST_RUN.swap(false, Ordering::SeqCst) {
         let granted = screen_recording_granted();
@@ -175,8 +195,8 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         );
     }
 
-    let front_pid = unsafe { frontmost_pid().ok_or(())? };
-    let process_path = unsafe { frontmost_app_bundle_path() };
+    let _ = unsafe { frontmost_pid() };
+    let fallback_process_path = unsafe { frontmost_app_bundle_path() };
 
     let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
     let arr = copy_window_info(options, kCGNullWindowID).ok_or(())?;
@@ -184,8 +204,9 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     let n = unsafe { CFArrayGetCount(arr_ref) };
 
     let mut skipped_pip = false;
-    // First normal-layer on-screen window for the frontmost PID (Z-order); Document PiP is usually here.
+    // First normal-layer on-screen window in global Z-order.
     let mut top_qualifying_seen = false;
+    let mut skipped_pip_title: Option<String> = None;
 
     for i in 0..n {
         let dic_ref =
@@ -195,7 +216,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         }
 
         let window_pid = match read_dict(dic_ref, "kCGWindowOwnerPID") {
-            DictVal::Number(p) if p == front_pid => p,
+            DictVal::Number(p) => p,
             _ => continue,
         };
 
@@ -212,6 +233,13 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             _ => true,
         };
         if !on_screen {
+            continue;
+        }
+        let alpha_zero = match read_dict(dic_ref, "kCGWindowAlpha") {
+            DictVal::Number(v) => v == 0,
+            _ => false,
+        };
+        if alpha_zero {
             continue;
         }
 
@@ -235,8 +263,14 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         if let DictVal::String(s) = read_dict(dic_ref, "kCGWindowOwnerName") {
             app_name = s;
         }
+        let process_path = process_path_by_pid(window_pid as u32);
+        let process_path_ref = if process_path.as_os_str().is_empty() {
+            &fallback_process_path
+        } else {
+            &process_path
+        };
         if app_name.is_empty() {
-            if let Some(s) = display_name_from_bundle_path(&process_path) {
+            if let Some(s) = display_name_from_bundle_path(process_path_ref) {
                 app_name = s;
             }
         }
@@ -250,8 +284,8 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             if now_ms.saturating_sub(last) > 2000 {
                 LAST_DIAG_MS.store(now_ms, Ordering::Relaxed);
                 println!(
-                    "[window-monitor] top-window-for-front-pid pid={} app={:?} title={:?} size={}x{} layer={}",
-                    front_pid,
+                    "[window-monitor] top-window-in-z-order pid={} app={:?} title={:?} size={}x{} layer={}",
+                    window_pid,
                     app_name,
                     win_title,
                     win_pos.width as i64,
@@ -263,6 +297,9 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
 
         if is_flowlocked_pip_title(&win_title) {
             skipped_pip = true;
+            if skipped_pip_title.is_none() {
+                skipped_pip_title = Some(win_title.clone());
+            }
             continue;
         }
 
@@ -296,6 +333,9 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
                 app_name, win_pos.width as i64, win_pos.height as i64, sharing_state
             );
             skipped_pip = true;
+            if skipped_pip_title.is_none() {
+                skipped_pip_title = Some(win_title.clone());
+            }
             continue;
         }
 
@@ -305,7 +345,11 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         };
 
         if skipped_pip {
-            log_skipped_pip(&win_title, &app_name);
+            log_skipped_pip(
+                skipped_pip_title.as_deref().unwrap_or("Flowlocked PiP"),
+                &win_title,
+                &app_name,
+            );
         }
 
         return Ok(ActiveWindow {
@@ -314,7 +358,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             app_name,
             position: win_pos,
             title: win_title,
-            process_path,
+            process_path: process_path_ref.to_path_buf(),
         });
     }
 

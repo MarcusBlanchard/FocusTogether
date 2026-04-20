@@ -119,21 +119,32 @@ fn stacking_windows(conn: &xcb::Connection, root: x::Window) -> xcb::Result<Vec<
     Ok(reply.value().to_vec())
 }
 
+fn fallback_active_window_with_wayland_warning() -> Result<ActiveWindow, ()> {
+    let active = active_win_pos_rs::get_active_window()?;
+    if is_flowlocked_pip_title(&active.title) {
+        println!(
+            "[window_monitor] top window matches PiP on Linux fallback path; global Z-order unavailable (likely Wayland), distraction detection may be masked."
+        );
+    }
+    Ok(active)
+}
+
 pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     let Ok((conn, _)) = xcb::Connection::connect(None) else {
-        return active_win_pos_rs::get_active_window();
+        return fallback_active_window_with_wayland_warning();
     };
     let setup = conn.get_setup();
     let Some(root) = setup.roots().next().map(|r| r.root()) else {
-        return active_win_pos_rs::get_active_window();
+        return fallback_active_window_with_wayland_warning();
     };
 
     let windows = match stacking_windows(&conn, root) {
         Ok(w) if !w.is_empty() => w,
-        _ => return active_win_pos_rs::get_active_window(),
+        _ => return fallback_active_window_with_wayland_warning(),
     };
 
     let mut skipped_pip = false;
+    let mut skipped_pip_title: Option<String> = None;
     let mut pid_top_z: HashSet<u32> = HashSet::new();
 
     for wid in windows.iter().rev() {
@@ -154,6 +165,9 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         let is_top_for_pid = pid_top_z.insert(window_pid);
         if is_flowlocked_pip_title(&title) {
             skipped_pip = true;
+            if skipped_pip_title.is_none() {
+                skipped_pip_title = Some(title.clone());
+            }
             continue;
         }
 
@@ -172,6 +186,9 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         {
             log_skipped_suspected_pip_heuristic(position.width, position.height, &process_name);
             skipped_pip = true;
+            if skipped_pip_title.is_none() {
+                skipped_pip_title = Some(title.clone());
+            }
             continue;
         }
 
@@ -180,6 +197,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
 
         if skipped_pip {
             log_skipped_pip(
+                skipped_pip_title.as_deref().unwrap_or("Flowlocked PiP"),
                 &title,
                 if process_name.is_empty() {
                     "x11-app"
@@ -203,5 +221,5 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         });
     }
 
-    active_win_pos_rs::get_active_window()
+    fallback_active_window_with_wayland_warning()
 }

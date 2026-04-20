@@ -1,5 +1,5 @@
 //! Foreground window selection that skips the Flowlocked Document Picture-in-Picture overlay
-//! (title prefix `Flowlocked PiP` / `FocusTogether PiP`, tolerant of browser suffixes) so distraction
+//! (title contains `Flowlocked PiP` / `FocusTogether PiP`, tolerant of browser suffixes) so distraction
 //! detection sees the real window underneath.
 //!
 //! Browser tabs whose titles contain "Flowlocked" or "FocusTogether" are **not** skipped here: after
@@ -36,11 +36,12 @@ pub fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     }
 }
 
-/// Document PiP uses a title starting with `Flowlocked PiP` or `FocusTogether PiP` (case-insensitive).
-/// Prefix match tolerates browser suffixes such as ` — Google Chrome` on docked PiP windows.
+/// Document PiP uses a title containing `Flowlocked PiP` or `FocusTogether PiP` (case-insensitive).
+/// Substring match tolerates browser suffixes such as ` - Google Chrome` and
+/// ` — Picture in Picture` on docked PiP windows.
 pub(crate) fn is_flowlocked_pip_title(title: &str) -> bool {
     let t = title.trim().to_lowercase();
-    t.starts_with("flowlocked pip") || t.starts_with("focustogether pip")
+    t.contains("flowlocked pip") || t.contains("focustogether pip")
 }
 
 /// Browsers whose small, topmost normal window may be Document PiP before `document.title` is set.
@@ -97,10 +98,10 @@ pub(crate) fn log_skipped_suspected_pip_heuristic(w: f64, h: f64, app: &str) {
     );
 }
 
-pub(crate) fn log_skipped_pip(underlying_title: &str, underlying_app: &str) {
+pub(crate) fn log_skipped_pip(skipped_title: &str, underlying_title: &str, underlying_app: &str) {
     println!(
-        "[window-monitor] skipped PiP overlay, returning underlying window: {} ({})",
-        underlying_title, underlying_app
+        "[window_monitor] skipped PiP overlay \"{}\" → reporting underlying window \"{}\" (process={}).",
+        skipped_title, underlying_title, underlying_app
     );
 }
 
@@ -111,8 +112,13 @@ mod tests {
     #[test]
     fn detects_pip_title_case_insensitive() {
         assert!(is_flowlocked_pip_title("Flowlocked PiP"));
-        assert!(is_flowlocked_pip_title("flowlocked pip — Google Chrome"));
+        assert!(is_flowlocked_pip_title("flowlocked pip"));
+        assert!(is_flowlocked_pip_title("Flowlocked PiP - Google Chrome"));
+        assert!(is_flowlocked_pip_title("Flowlocked PiP — Picture in Picture"));
         assert!(is_flowlocked_pip_title("FocusTogether PiP"));
+        assert!(!is_flowlocked_pip_title("YouTube - Google Chrome"));
+        assert!(!is_flowlocked_pip_title("Flowlocked"));
+        assert!(!is_flowlocked_pip_title(""));
         assert!(!is_flowlocked_pip_title("Flowlocked - Reddit"));
         assert!(!is_flowlocked_pip_title("Reddit - Google Chrome"));
         assert!(!is_flowlocked_pip_title("FocusTogether"));

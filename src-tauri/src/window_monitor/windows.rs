@@ -1,5 +1,5 @@
-//! Windows: start at `GetForegroundWindow`, walk `GetWindow(..., GW_HWNDNEXT)` skipping PiP and
-//! tool-style chrome windows from the same process as the skipped PiP.
+//! Windows: walk EnumWindows in Z-order (front-to-back), skipping PiP and tool-style
+//! chrome windows from the same process as the skipped PiP.
 
 use super::{
     is_flowlocked_pip_title, is_known_browser_app_name, log_skipped_pip,
@@ -8,10 +8,11 @@ use super::{
 use active_win_pos_rs::{ActiveWindow, WindowPosition};
 use std::collections::HashSet;
 use sysinfo::{Pid, ProcessesToUpdate, System};
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, GW_HWNDNEXT, GWL_EXSTYLE,
+    EnumWindows, GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    IsIconic, IsWindowVisible, GW_OWNER, GWL_EXSTYLE,
 };
 
 const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
@@ -49,29 +50,57 @@ fn rect_to_position(r: RECT) -> WindowPosition {
 }
 
 pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
-    let mut hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.0 == 0 {
-        return Err(());
+    let mut z_windows: Vec<HWND> = Vec::new();
+    unsafe extern "system" fn enum_windows_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let out = lparam.0 as *mut Vec<HWND>;
+        if out.is_null() {
+            return BOOL(0);
+        }
+        (*out).push(hwnd);
+        BOOL(1)
+    }
+    let ok = unsafe {
+        EnumWindows(
+            Some(enum_windows_cb),
+            LPARAM((&mut z_windows as *mut Vec<HWND>) as isize),
+        )
+    };
+    if !ok.as_bool() || z_windows.is_empty() {
+        return active_win_pos_rs::get_active_window();
     }
 
     let mut pip_owner_pid: Option<u32> = None;
-    let mut skipped_pip = false;
+    let mut skipped_pip_title: Option<String> = None;
     let mut pid_top_z: HashSet<u32> = HashSet::new();
 
-    loop {
+    for hwnd in z_windows {
         if hwnd.0 == 0 {
-            return active_win_pos_rs::get_active_window();
+            continue;
         }
 
         unsafe {
             if !IsWindowVisible(hwnd).as_bool() {
-                hwnd = GetWindow(hwnd, GW_HWNDNEXT);
                 continue;
             }
             if IsIconic(hwnd).as_bool() {
-                hwnd = GetWindow(hwnd, GW_HWNDNEXT);
                 continue;
             }
+            if GetWindow(hwnd, GW_OWNER).0 != 0 {
+                continue;
+            }
+        }
+
+        let mut cloaked: u32 = 0;
+        let cloaked_ok = unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                (&mut cloaked as *mut u32).cast(),
+                std::mem::size_of::<u32>() as u32,
+            )
+        };
+        if cloaked_ok.is_ok() && cloaked != 0 {
+            continue;
         }
 
         let title = window_text(hwnd);
@@ -84,15 +113,15 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
 
         if is_flowlocked_pip_title(&title) {
             pip_owner_pid = Some(pid);
-            skipped_pip = true;
-            hwnd = unsafe { GetWindow(hwnd, GW_HWNDNEXT) };
+            if skipped_pip_title.is_none() {
+                skipped_pip_title = Some(title.clone());
+            }
             continue;
         }
 
         if let Some(ppid) = pip_owner_pid {
             let ex = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 };
             if pid == ppid && (ex & WS_EX_TOOLWINDOW != 0 || ex & WS_EX_NOACTIVATE != 0) {
-                hwnd = unsafe { GetWindow(hwnd, GW_HWNDNEXT) };
                 continue;
             }
         }
@@ -100,7 +129,6 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         let mut rect = RECT::default();
         unsafe {
             if !GetWindowRect(hwnd, &mut rect).as_bool() {
-                hwnd = GetWindow(hwnd, GW_HWNDNEXT);
                 continue;
             }
         }
@@ -116,13 +144,15 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             && position.height <= 600.0
         {
             log_skipped_suspected_pip_heuristic(position.width, position.height, &app_name);
-            skipped_pip = true;
-            hwnd = unsafe { GetWindow(hwnd, GW_HWNDNEXT) };
+            if skipped_pip_title.is_none() {
+                skipped_pip_title = Some(title.clone());
+            }
             continue;
         }
 
-        if skipped_pip {
+        if let Some(skipped) = skipped_pip_title.as_deref() {
             log_skipped_pip(
+                skipped,
                 &title,
                 if app_name.is_empty() {
                     "windows-app"
@@ -146,4 +176,5 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             process_path,
         });
     }
+    active_win_pos_rs::get_active_window()
 }
