@@ -121,12 +121,14 @@ fn stacking_windows(conn: &xcb::Connection, root: x::Window) -> xcb::Result<Vec<
 
 fn fallback_active_window_with_wayland_warning() -> Result<ActiveWindow, ()> {
     let active = active_win_pos_rs::get_active_window()?;
-    if is_flowlocked_pip_title(&active.title) {
+    let is_pip = is_flowlocked_pip_title(&active.title);
+    super::mark_pip_seen(is_pip);
+    if is_pip {
         println!(
             "[window_monitor] top window matches PiP on Linux fallback path; global Z-order unavailable (likely Wayland), distraction detection may be masked."
         );
     }
-    Ok(active)
+    Ok(super::finalize_with_history(active))
 }
 
 pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
@@ -145,6 +147,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
 
     let mut skipped_pip = false;
     let mut skipped_pip_title: Option<String> = None;
+    let mut saw_pip = false;
     let mut pid_top_z: HashSet<u32> = HashSet::new();
 
     for wid in windows.iter().rev() {
@@ -165,6 +168,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         let is_top_for_pid = pid_top_z.insert(window_pid);
         if is_flowlocked_pip_title(&title) {
             skipped_pip = true;
+            saw_pip = true;
             if skipped_pip_title.is_none() {
                 skipped_pip_title = Some(title.clone());
             }
@@ -186,6 +190,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         {
             log_skipped_suspected_pip_heuristic(position.width, position.height, &process_name);
             skipped_pip = true;
+            saw_pip = true;
             if skipped_pip_title.is_none() {
                 skipped_pip_title = Some(title.clone());
             }
@@ -207,7 +212,8 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             );
         }
 
-        return Ok(ActiveWindow {
+        super::mark_pip_seen(saw_pip);
+        let resolved = ActiveWindow {
             process_id: u64::from(window_pid),
             window_id: wid.resource_id().to_string(),
             app_name: if process_name.is_empty() {
@@ -218,8 +224,10 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             position,
             title,
             process_path,
-        });
+        };
+        return Ok(super::finalize_with_history(resolved));
     }
 
+    super::mark_pip_seen(saw_pip);
     fallback_active_window_with_wayland_warning()
 }

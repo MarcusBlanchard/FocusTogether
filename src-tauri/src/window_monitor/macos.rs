@@ -207,6 +207,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     // First normal-layer on-screen window in global Z-order.
     let mut top_qualifying_seen = false;
     let mut skipped_pip_title: Option<String> = None;
+    let mut saw_pip = false;
 
     for i in 0..n {
         let dic_ref =
@@ -297,6 +298,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
 
         if is_flowlocked_pip_title(&win_title) {
             skipped_pip = true;
+            saw_pip = true;
             if skipped_pip_title.is_none() {
                 skipped_pip_title = Some(win_title.clone());
             }
@@ -312,6 +314,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         {
             log_skipped_suspected_pip_heuristic(win_pos.width, win_pos.height, &app_name);
             skipped_pip = true;
+            saw_pip = true;
             continue;
         }
 
@@ -333,6 +336,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
                 app_name, win_pos.width as i64, win_pos.height as i64, sharing_state
             );
             skipped_pip = true;
+            saw_pip = true;
             if skipped_pip_title.is_none() {
                 skipped_pip_title = Some(win_title.clone());
             }
@@ -352,15 +356,18 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             );
         }
 
-        return Ok(ActiveWindow {
+        super::mark_pip_seen(saw_pip);
+        let resolved = ActiveWindow {
             window_id,
             process_id: window_pid as u64,
             app_name,
             position: win_pos,
             title: win_title,
             process_path: process_path_ref.to_path_buf(),
-        });
+        };
+        return Ok(super::finalize_with_history(resolved));
     }
 
-    active_win_pos_rs::get_active_window()
+    super::mark_pip_seen(saw_pip);
+    active_win_pos_rs::get_active_window().map(super::finalize_with_history)
 }

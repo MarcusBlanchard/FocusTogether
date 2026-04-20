@@ -66,11 +66,13 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         )
     };
     if !ok.as_bool() || z_windows.is_empty() {
-        return active_win_pos_rs::get_active_window();
+        super::mark_pip_seen(false);
+        return active_win_pos_rs::get_active_window().map(super::finalize_with_history);
     }
 
     let mut pip_owner_pid: Option<u32> = None;
     let mut skipped_pip_title: Option<String> = None;
+    let mut saw_pip = false;
     let mut pid_top_z: HashSet<u32> = HashSet::new();
 
     for hwnd in z_windows {
@@ -113,6 +115,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
 
         if is_flowlocked_pip_title(&title) {
             pip_owner_pid = Some(pid);
+            saw_pip = true;
             if skipped_pip_title.is_none() {
                 skipped_pip_title = Some(title.clone());
             }
@@ -144,6 +147,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             && position.height <= 600.0
         {
             log_skipped_suspected_pip_heuristic(position.width, position.height, &app_name);
+            saw_pip = true;
             if skipped_pip_title.is_none() {
                 skipped_pip_title = Some(title.clone());
             }
@@ -167,14 +171,17 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             app_name
         };
 
-        return Ok(ActiveWindow {
+        super::mark_pip_seen(saw_pip);
+        let resolved = ActiveWindow {
             window_id: format!("{:?}", hwnd),
             process_id: u64::from(pid),
             app_name,
             position,
             title,
             process_path,
-        });
+        };
+        return Ok(super::finalize_with_history(resolved));
     }
-    active_win_pos_rs::get_active_window()
+    super::mark_pip_seen(saw_pip);
+    active_win_pos_rs::get_active_window().map(super::finalize_with_history)
 }

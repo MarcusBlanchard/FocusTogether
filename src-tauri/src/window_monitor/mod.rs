@@ -8,6 +8,7 @@
 //! server-driven own domains).
 
 use active_win_pos_rs::ActiveWindow;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -15,6 +16,10 @@ mod macos;
 mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
+pub(crate) mod history;
+
+static PIP_OPEN: AtomicBool = AtomicBool::new(false);
+static PIP_OPEN_AT_MS: AtomicU64 = AtomicU64::new(0);
 
 /// Returns the effective foreground window, skipping Flowlocked PiP when it sits above real content.
 pub fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
@@ -42,6 +47,75 @@ pub fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
 pub(crate) fn is_flowlocked_pip_title(title: &str) -> bool {
     let t = title.trim().to_lowercase();
     t.contains("flowlocked pip") || t.contains("focustogether pip")
+}
+
+pub(crate) fn is_flowlocked_surface(w: &ActiveWindow) -> bool {
+    let title = w.title.trim().to_lowercase();
+    let app = w.app_name.trim().to_lowercase();
+    if is_flowlocked_pip_title(&title) {
+        return true;
+    }
+    // Native app (macOS bundle name "Flowlocked" / "FocusTogether"; Windows .exe stem too).
+    let app_stem = app.trim_end_matches(".exe");
+    if matches!(app_stem, "flowlocked" | "focustogether") {
+        return true;
+    }
+    // Browser tab title for the Flowlocked web app.
+    // Examples: "Flowlocked – Focus & Accountability App", "Flowlocked - Replit"
+    if title.starts_with("flowlocked") || title.starts_with("focustogether") {
+        return true;
+    }
+    false
+}
+
+pub(crate) fn mark_pip_seen(open: bool) {
+    PIP_OPEN.store(open, Ordering::Relaxed);
+    if open {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        PIP_OPEN_AT_MS.store(ms, Ordering::Relaxed);
+    }
+}
+
+/// True if PiP was observed in the current or previous walk (debounced ~5s).
+pub(crate) fn pip_recently_open() -> bool {
+    if PIP_OPEN.load(Ordering::Relaxed) {
+        return true;
+    }
+    let last = PIP_OPEN_AT_MS.load(Ordering::Relaxed);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    now.saturating_sub(last) < 5_000
+}
+
+pub(crate) fn finalize_with_history(resolved: ActiveWindow) -> ActiveWindow {
+    let final_win = if pip_recently_open() && is_flowlocked_surface(&resolved) {
+        match history::most_recent_non_flowlocked(is_flowlocked_surface) {
+            Some(prev) => {
+                println!(
+                    "[window_monitor] PiP-mask recovery: current=\"{}\" (app={}) → using recent \"{}\" (app={}, age={:.1}s)",
+                    resolved.title,
+                    resolved.app_name,
+                    prev.win.title,
+                    prev.win.app_name,
+                    prev.at.elapsed().as_secs_f64()
+                );
+                prev.win
+            }
+            None => resolved,
+        }
+    } else {
+        resolved
+    };
+    // Push *non-Flowlocked* entries into history so the next masked tick can use them.
+    if !is_flowlocked_surface(&final_win) {
+        history::push(&final_win);
+    }
+    final_win
 }
 
 /// Browsers whose small, topmost normal window may be Document PiP before `document.title` is set.
@@ -108,6 +182,8 @@ pub(crate) fn log_skipped_pip(skipped_title: &str, underlying_title: &str, under
 #[cfg(test)]
 mod tests {
     use super::*;
+    use active_win_pos_rs::WindowPosition;
+    use std::path::PathBuf;
 
     #[test]
     fn detects_pip_title_case_insensitive() {
@@ -122,5 +198,35 @@ mod tests {
         assert!(!is_flowlocked_pip_title("Flowlocked - Reddit"));
         assert!(!is_flowlocked_pip_title("Reddit - Google Chrome"));
         assert!(!is_flowlocked_pip_title("FocusTogether"));
+    }
+
+    #[test]
+    fn flowlocked_surface_classifier() {
+        let mk = |title: &str, app: &str| ActiveWindow {
+            window_id: "0".into(),
+            process_id: 0,
+            app_name: app.into(),
+            position: WindowPosition {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            title: title.into(),
+            process_path: PathBuf::new(),
+        };
+        assert!(is_flowlocked_surface(&mk(
+            "Flowlocked – Focus & Accountability App",
+            "Google Chrome"
+        )));
+        assert!(is_flowlocked_surface(&mk("Flowlocked - Replit", "Google Chrome")));
+        assert!(is_flowlocked_surface(&mk("Flowlocked PiP", "Google Chrome")));
+        assert!(is_flowlocked_surface(&mk("anything", "Flowlocked")));
+        assert!(is_flowlocked_surface(&mk("anything", "FocusTogether.exe")));
+        assert!(!is_flowlocked_surface(&mk(
+            "YouTube - Google Chrome",
+            "Google Chrome"
+        )));
+        assert!(!is_flowlocked_surface(&mk("Discord", "Discord")));
     }
 }
