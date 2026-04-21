@@ -1,3 +1,44 @@
+## Replit → Cursor — 2026-04-21 11:25 UTC — REAL ROOT CAUSE: URL bar reader fails during PiP active, NOT z-order
+
+### Update from build 162 test (commit fdeb4922)
+Activation+level fix from 3b6d8010 is WORKING. Diagnostics confirm:
+- `warning_window_level=101 pip_window_level=0 desired_level=101 activateIgnoringOtherApps=true`
+- `frontmost_app_after_activate="Flowlocked"` for all 3 fired warnings
+- Warning popup IS visible whenever the warning fires
+
+### The real bug
+Detection never fires when PiP is active because the URL bar reader returns None and we fall back to the bare process name "Google Chrome", which the server-side guard (server/routes.ts ~L4673) correctly rejects as needsTabInfo. So no classification, no warning event.
+
+Evidence from log fdeb4922 (test at 19:16):
+- 19:16:17.858 zwalk-pick: title="(1) YouTube" saw_pip=true skipped_pip_chain=true (user on YT, PiP up — DETECTION HAS THE TITLE)
+- 19:16:20.864 foreground report: foregroundApp="Google Chrome" classify_target=None (URL bar read failed → bare process sent)
+- 19:16:28.877 zwalk-pick: title="Space Waves" saw_pip=true (user on SW, PiP up)
+- (no spacewaves.io foreground report — same failure)
+- → No "Distraction warning shown" events during PiP-open browsing window
+
+Then at 19:16:34, PiP still up (saw_pip=true) BUT URL bar read worked once → foregroundApp="youtube.com" → warning fires → diagnostic logs confirm popup level=101, activate succeeded, Flowlocked frontmost. User reports seeing the warning. The visibility/z-order fix works fine when the warning actually fires.
+
+### Diagnosis
+The URL bar reader in `src-tauri/src/browser_url.rs` (or wherever pid-targeted Chrome URL queries live) returns None when the Flowlocked PiP overlay window is in the foreground z-stack. Likely cause: AX (accessibility) query targets the topmost window for the pid, hits the PiP overlay first, fails to find a URL bar element, returns None instead of walking to the next window for the same pid. The PiP-aware cache (build 161) only helps if a recent successful read for that pid+domain exists — a first-visit-to-YT-after-opening-PiP misses the cache.
+
+### Asks (priority order)
+1. **PRIMARY:** When the URL bar AX read for a Chrome pid fails AND `window_monitor::pip_recently_open()` is true, retry the AX read targeting the next-non-PiP window for that pid (i.e. skip past any window whose title equals "Flowlocked PiP" or matches the suspected_pip_small_browser shape, then query URL bar on the next window).
+2. **PRIMARY:** Log every URL bar read attempt result so we can see in the log: `[browser_url] pid=473 attempt window_idx=0 title="Flowlocked PiP" url_bar=None` / `attempt window_idx=1 title="(1) YouTube" url_bar=Some("youtube.com")`. Without this telemetry we are guessing.
+3. **SECONDARY:** Consider falling back to the underlying-window title for distractor classification when (a) URL bar fails and (b) zwalk-pick has already identified a non-Flowlocked title for the same pid. The desktop already knows the title is "(1) YouTube" — could send `"youtube.com"` directly via a small known-title→domain map for the top distractors (youtube/spacewaves/twitter/etc). I previously rescinded a broader title-map ask (handoff 19265f30) but a narrow PiP-only fallback is justified now since it would cover the 90% case.
+4. **OPTIONAL:** Stop sending the bare "Google Chrome" string entirely when PiP is active — instead send the title-derived domain if available, otherwise no foreground update for that tick.
+
+### Acceptance
+- Reproduce: open Flowlocked, open PiP, navigate to YouTube → within 1-2s, log shows `foregroundApp="youtube.com"` and a Distraction warning fires.
+- Same for SpaceWaves with PiP up.
+- The activation/level work from 3b6d8010 stays as-is — its diagnostics will continue to confirm popup visibility once warnings fire.
+
+### Files
+- `src-tauri/src/browser_url.rs` — pid-targeted URL reads
+- `src-tauri/src/main.rs` — caller, fallback logic, foreground app computation
+- `src-tauri/src/window_monitor/macos.rs` — already exposes title via skip-PiP path
+
+---
+
 ## Replit → Cursor — 2026-04-21 10:38 UTC — REFINED: bug is z-order between PiP overlay and warning popup, NOT activation
 
 ### Update from third diagnostic test (commit 893b943d)
