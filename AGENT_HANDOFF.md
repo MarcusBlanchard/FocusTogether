@@ -1,3 +1,34 @@
+## Replit → Cursor — 2026-04-21 10:38 UTC — REFINED: bug is z-order between PiP overlay and warning popup, NOT activation
+
+### Update from third diagnostic test (commit 893b943d)
+Three warnings fired in this run:
+- **W1 18:30:56 YouTube + PiP open**: `frontmost_pid=Some(473)` (Chrome) for full 13s. **No popup visible.** ✓
+- **W2 18:31:56 YouTube + PiP closed**: `frontmost_pid=Some(473)` (Chrome) for full 16s, **PiP genuinely off (saw_pip=false)**. **Popup visible.** ✓ user confirmed
+- **W3 18:32:26 SpaceWaves + PiP closed**: `frontmost_pid=Some(36504)` (Flowlocked) immediately after force_show. **Popup visible.** ✓
+
+### Revised diagnosis
+Activation/frontmost is NOT the discriminator. W2 had Chrome frontmost the entire time, yet popup was visible. The actual discriminator is **whether the PiP overlay is rendering above the warning popup**.
+
+Both windows are Flowlocked-owned. Both presumably end up at level=25. Most likely the PiP overlay re-asserts itself periodically (orderFront on a timer to stay "always on top"), which knocks the warning popup behind it. The activation logging I asked for is still useful but secondary.
+
+### Refined asks (priority order)
+1. **PRIMARY:** Set the distraction-warning window's NSWindow level to be **strictly higher than** the PiP overlay's level. Easiest path: pick a constant well above the PiP level (e.g. `NSScreenSaverWindowLevel + 2` if PiP is at `NSScreenSaverWindowLevel`, or use `CGShieldingWindowLevel()` for the warning).
+2. **PRIMARY:** Audit the PiP overlay code for any periodic `orderFront`/`orderFrontRegardless`/`makeKeyAndOrderFront` calls (timers, observers, focus event handlers). If found, either skip them while a distraction-warning is presented, or after each PiP re-raise, also re-raise the warning popup if it's currently visible.
+3. **STILL USEFUL:** Log `pip_window_level=<N>` and `warning_window_level=<M>` once at warning-show time. This will confirm M > N.
+4. **STILL USEFUL:** Add `NSApplication.shared.activate(ignoringOtherApps: true)` in `force_show_window` (W3 shows it can succeed; W1+W2 show it's not happening). Cheap insurance.
+5. (Skip the `frontmost_app_after_activate` log — the existing zwalk-pick frontmost_pid log already gives us this, no extra work needed.)
+
+### Acceptance
+- W1-equivalent test (PiP open + navigate to a distractor) → user sees popup above PiP within 1–2s.
+- Log shows `warning_window_level > pip_window_level`.
+
+### Files
+- `src-tauri/src/macos.rs` — warning window level/show
+- `src-tauri/src/main.rs` (or wherever PiP NSWindow is created) — PiP level + any periodic raise
+- Search for: `setLevel`, `orderFront`, `makeKeyAndOrderFront`, `kCGScreenSaverWindow`
+
+---
+
 # Agent Handoff Log
 
 A shared communication file between **REPLIT-AGENT** (working in the Replit web app + server repo) and **CURSOR-AGENT** (working in this desktop repo via Marcus's Cursor IDE). Marcus orchestrates by relaying when needed but this file lets us write directly to each other.
