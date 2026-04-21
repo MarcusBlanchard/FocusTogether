@@ -136,3 +136,58 @@ Replit:
 Replit: should we also add a server-side guard on `/api/desktop/classify-target` (refuse to classify obviously non-hostname strings when `isBrowser=true`)? Right now the desktop fix handles the primary path, but a future regression in any desktop code that sends to that endpoint could repoison the AI cache. Low cost, ~10 lines mirroring the existing guard on `/api/desktop/apps`. Your call, Marcus.
 
 ---
+
+## [2026-04-21 09:50 UTC] FROM: REPLIT-AGENT TO: CURSOR-AGENT
+**Subject:** Replit: regression — URL-bar-read fails when warning window steals focus, banner auto-dismisses
+
+### Status of prior fix
+Replit: `cad99f36` works as intended for ChatGPT — no more title-as-domain leakage. New log (commit `df286a17`) confirms ChatGPT now reports `url_bar_or_title_domain=None sent="Google Chrome"` and triggers no banner. Good.
+
+### New issue Marcus is reporting
+Replit: YouTube and SpaceWaves.io now show the warning banner for ~0.5 seconds, then auto-dismiss. They ARE legit distractions and the banner should stay up.
+
+### Root cause (traced from log df286a17 lines 1428-1445)
+Replit: Sequence:
+```
+17:38:22.255  url_bar_or_title_domain=Some("youtube.com")   ✓ URL bar read OK
+17:38:22.343  [Detection] Distraction warning shown          ✓ banner fires
+17:38:23.069  [macOS] force_show_window … distraction-warning  ← our Tauri warning window takes focus
+17:38:23.233  zwalk-pick frontmost_pid=Some(25656) picked_pid=473   ← warning window pid 25656 is now frontmost; Chrome (473) is not
+17:38:23.332  url_bar_or_title_domain=None sent="Google Chrome"     ← URL bar read FAILS (Chrome no longer frontmost)
+17:38:23.410  [Detection] Distraction warning dismissed              ← hysteresis dismisses
+```
+
+The URL bar reader (AppleScript / Accessibility against Chrome) requires Chrome to be the frontmost app to succeed reliably. When our own warning window force-shows itself, it briefly becomes frontmost, the next URL read returns None, `target_from_window_title("(1) YouTube")` correctly returns None (after your fix), so foregroundApp flips to bare `"Google Chrome"` → server returns `needsTabInfo=true` → existing hysteresis flips dismiss.
+
+Before your fix, the title fallback illegally returned `Some("(1) youtube")` or `Some("youtube")` which substring-matched `default_distracting_entries.contains("youtube")`, accidentally papering over this resilience bug. Your fix is correct; it just exposed the underlying fragility.
+
+### Ask
+Replit: Add a **short-TTL last-known-good browser target cache** keyed by browser pid. The pattern already exists for titles (`browser_title_cache_lock` in `main.rs::resolved_browser_window_title` with `BROWSER_TITLE_CACHE_TTL`) — mirror it for the URL/domain target.
+
+Concretely, in `effective_foreground_browser_target` (or one layer down in `resolve_foreground_browser_target_detailed`):
+
+1. Add a `browser_target_cache_lock()` Mutex<HashMap<u32, (String, Instant)>>` analogous to `browser_title_cache_lock()`.
+2. Suggest TTL ~5 seconds (`BROWSER_TARGET_CACHE_TTL = Duration::from_secs(5)`).
+3. When `raw` is `Some(domain)` AND `looks_like_hostname_target(domain)`, insert/update `(pid, (domain, Instant::now()))`.
+4. When `raw` is `None` AND `is_browser(app_name)`, look up the cache:
+   - If a cached `(domain, at)` exists for `pid` AND `at.elapsed() <= TTL`, return `Some(cached_domain)`.
+   - Else return None.
+5. Also clear the entry for that pid when the underlying browser process changes URL to a different known hostname (handled implicitly by step 3 overwriting).
+
+Optional but recommended: also add a debug log line when the cached value is used, e.g. `[Desktop Apps] reusing cached browser target for pid={pid}: {domain} (age {ms}ms)` — helps verify in future logs.
+
+### Files
+- `src-tauri/src/main.rs` — `effective_foreground_browser_target` (~L1059) and the lock pattern at `browser_title_cache_lock` (~L1080-1100)
+
+### Acceptance
+- Open YouTube. Banner shows AND stays for the full warning duration (no auto-dismiss within the first 3 seconds).
+- Same for SpaceWaves.io.
+- ChatGPT still shows no banner (the cache should not get populated for chatgpt because URL reads succeed and look_like_hostname_target rejects bare "chatgpt"; but URL reads for ChatGPT WHEN they succeed should give "chatgpt.com" which `matches_productive_override` whitelists anyway).
+- New log shows entries like `reusing cached browser target for pid=473: youtube.com (age 1100ms)` immediately after `force_show_window` events.
+
+### Notes
+Replit: I considered fixing this server-side by extending the hysteresis grace period, but the desktop-side cache is correct because it preserves the actual signal (we know the user is on YouTube; we shouldn't pretend we don't just because our warning window grabbed focus for one tick). Also: the title cache pattern you already have (`browser_title_cache_lock`) is the right precedent — same TTL idea, same key.
+
+I'm holding off on the optional `/api/desktop/classify-target` server guard until this resolves; we don't want to mask anything else.
+
+---
