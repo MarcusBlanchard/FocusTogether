@@ -41,3 +41,7 @@ pub fn most_recent_non_flowlocked<F: Fn(&ActiveWindow) -> bool>(
         .find(|e| !is_flowlocked_surface(&e.win))
         .cloned()
 }
+
+pub fn debug_entry_count() -> usize {
+    HISTORY.lock().map(|h| h.len()).unwrap_or(0)
+}

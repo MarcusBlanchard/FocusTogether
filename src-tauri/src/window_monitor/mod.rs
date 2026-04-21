@@ -10,6 +10,86 @@
 use active_win_pos_rs::ActiveWindow;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+/// Set `FLOWLOCKED_WM_DEBUG=1` (or `true` / `yes`) for full per-candidate z-order logs.
+pub fn wm_debug_enabled() -> bool {
+    match std::env::var("FLOWLOCKED_WM_DEBUG") {
+        Ok(s) => {
+            let t = s.trim();
+            !t.is_empty()
+                && t != "0"
+                && !t.eq_ignore_ascii_case("false")
+                && !t.eq_ignore_ascii_case("no")
+        }
+        Err(_) => false,
+    }
+}
+
+static LAST_LOG_FINALIZE_SUMMARY_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_LOG_DETECTION_FG_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_LOG_ZWALK_PICK_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_LOG_FINALIZE_DEBUG_MS: AtomicU64 = AtomicU64::new(0);
+
+fn throttle_print(last_ms: &AtomicU64, interval_ms: u64, msg: impl std::fmt::Display) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let prev = last_ms.load(Ordering::Relaxed);
+    if now_ms.saturating_sub(prev) < interval_ms {
+        return;
+    }
+    last_ms.store(now_ms, Ordering::Relaxed);
+    let line = format!("{}", msg);
+    println!("{}", line);
+    crate::diagnostic_log::append_line(&line);
+}
+
+/// After sanitize in the detection loop: shows what classification will see (throttled).
+pub fn log_detection_foreground_tick(snap: Option<(&str, &str, u32)>) {
+    let body = match snap {
+        Some((a, t, p)) => format!(
+            "pid={} app={:?} title_len={} title_prefix={:?}",
+            p,
+            a,
+            t.len(),
+            t.chars().take(72).collect::<String>()
+        ),
+        None => "sanitize returned None (no foreground)".to_string(),
+    };
+    throttle_print(
+        &LAST_LOG_DETECTION_FG_MS,
+        2_500,
+        format_args!("[window_monitor] detection-fg: {}", body),
+    );
+}
+
+/// macOS z-order walk chose this window (throttled).
+pub(crate) fn log_zwalk_pick_summary(
+    frontmost_pid: Option<i64>,
+    picked_pid: i64,
+    picked_app: &str,
+    title: &str,
+    saw_pip: bool,
+    skipped_pip_chain: bool,
+    source: &str,
+) {
+    let title_prefix: String = title.chars().take(80).collect();
+    throttle_print(
+        &LAST_LOG_ZWALK_PICK_MS,
+        2_500,
+        format_args!(
+            "[window-monitor] zwalk-pick: source={} frontmost_pid={:?} picked_pid={} picked_app={:?} title_prefix={:?} saw_pip={} skipped_pip_chain={}",
+            source,
+            frontmost_pid,
+            picked_pid,
+            picked_app,
+            title_prefix,
+            saw_pip,
+            skipped_pip_chain
+        ),
+    );
+}
+
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
@@ -92,11 +172,50 @@ pub(crate) fn pip_recently_open() -> bool {
     now.saturating_sub(last) < 5_000
 }
 
+/// Whether we should replace a Flowlocked-looking foreground with recent history (e.g. YouTube).
+///
+/// `pip_recent` + [`is_flowlocked_surface`] alone is too broad: after PiP, the user may genuinely
+/// focus the main Flowlocked browser tab (large window, title prefix `Flowlocked` / `FocusTogether`).
+/// History recovery would swap that for the last distracting window and the distraction warning
+/// never clears. Only treat as the PiP masking case when it still looks like a PiP-sized / overlay
+/// surface, or PiP title text — never for native Flowlocked, never for a large main browser tab.
+fn pip_history_recovery_eligible(resolved: &ActiveWindow, pip_recent: bool) -> bool {
+    if !pip_recent || !is_flowlocked_surface(resolved) {
+        return false;
+    }
+    let app = resolved.app_name.trim().to_lowercase();
+    let app_stem = app.trim_end_matches(".exe");
+    if matches!(app_stem, "flowlocked" | "focustogether") {
+        return false;
+    }
+    let t = resolved.title.trim().to_lowercase();
+    let browser = is_known_browser_app_name(&resolved.app_name);
+    let main_flow_tab = browser
+        && !is_flowlocked_pip_title(&resolved.title)
+        && (t.starts_with("flowlocked") || t.starts_with("focustogether"));
+    if main_flow_tab {
+        let w = resolved.position.width;
+        let h = resolved.position.height;
+        // Same shape band as Document PiP skips in macOS z-walk; larger ⇒ main browser session.
+        let pip_sized = w <= 800.0 && h <= 600.0;
+        if !pip_sized {
+            return false;
+        }
+    }
+    true
+}
+
 pub(crate) fn finalize_with_history(resolved: ActiveWindow) -> ActiveWindow {
-    let final_win = if pip_recently_open() && is_flowlocked_surface(&resolved) {
+    let pip_flag = PIP_OPEN.load(Ordering::Relaxed);
+    let pip_recent = pip_recently_open();
+    let res_is_flow = is_flowlocked_surface(&resolved);
+    let try_recovery = pip_history_recovery_eligible(&resolved, pip_recent);
+    let hist_n = history::debug_entry_count();
+
+    let (final_win, recovery_used) = if try_recovery {
         match history::most_recent_non_flowlocked(is_flowlocked_surface) {
             Some(prev) => {
-                println!(
+                let msg = format!(
                     "[window_monitor] PiP-mask recovery: current=\"{}\" (app={}) → using recent \"{}\" (app={}, age={:.1}s)",
                     resolved.title,
                     resolved.app_name,
@@ -104,13 +223,53 @@ pub(crate) fn finalize_with_history(resolved: ActiveWindow) -> ActiveWindow {
                     prev.win.app_name,
                     prev.at.elapsed().as_secs_f64()
                 );
-                prev.win
+                crate::diagnostic_log::emit_console_and_file(&msg);
+                (prev.win, true)
             }
-            None => resolved,
+            None => {
+                if wm_debug_enabled() {
+                    throttle_print(
+                        &LAST_LOG_FINALIZE_DEBUG_MS,
+                        900,
+                        format_args!(
+                            "[window_monitor] PiP-mask recovery skipped: no eligible history entry (hist_entries={} pip_recent={} recovery_eligible={} resolved_is_flow_surface={})",
+                            hist_n, pip_recent, try_recovery, res_is_flow
+                        ),
+                    );
+                }
+                (resolved, false)
+            }
         }
     } else {
-        resolved
+        if wm_debug_enabled() {
+            throttle_print(
+                &LAST_LOG_FINALIZE_DEBUG_MS,
+                900,
+                format_args!(
+                    "[window_monitor] finalize branch: using resolved as-is (pip_flag={} pip_recent={} recovery_eligible={} resolved_is_flow_surface={})",
+                    pip_flag, pip_recent, try_recovery, res_is_flow
+                ),
+            );
+        }
+        (resolved, false)
     };
+
+    throttle_print(
+        &LAST_LOG_FINALIZE_SUMMARY_MS,
+        2_500,
+        format_args!(
+            "[window_monitor] finalize-summary: pip_flag={} pip_recent={} recovery_eligible={} resolved_flow_surface={} recovery={} hist_entries={} final_app={:?} final_title_len={}",
+            pip_flag,
+            pip_recent,
+            try_recovery,
+            res_is_flow,
+            recovery_used,
+            hist_n,
+            final_win.app_name,
+            final_win.title.len()
+        ),
+    );
+
     // Push *non-Flowlocked* entries into history so the next masked tick can use them.
     if !is_flowlocked_surface(&final_win) {
         history::push(&final_win);
@@ -164,19 +323,21 @@ pub(crate) fn is_known_browser_app_name(name: &str) -> bool {
 
 /// `w` / `h` are the window content size in pixels (same units as platform helpers).
 pub(crate) fn log_skipped_suspected_pip_heuristic(w: f64, h: f64, app: &str) {
-    println!(
+    let msg = format!(
         "[window-monitor] skipped suspected-PiP overlay (browser+small+top): {}x{} app={}",
         w as i64,
         h as i64,
         app
     );
+    crate::diagnostic_log::emit_console_and_file(&msg);
 }
 
 pub(crate) fn log_skipped_pip(skipped_title: &str, underlying_title: &str, underlying_app: &str) {
-    println!(
+    let msg = format!(
         "[window_monitor] skipped PiP overlay \"{}\" → reporting underlying window \"{}\" (process={}).",
         skipped_title, underlying_title, underlying_app
     );
+    crate::diagnostic_log::emit_console_and_file(&msg);
 }
 
 #[cfg(test)]
@@ -228,5 +389,77 @@ mod tests {
             "Google Chrome"
         )));
         assert!(!is_flowlocked_surface(&mk("Discord", "Discord")));
+    }
+
+    #[test]
+    fn pip_history_recovery_not_eligible_for_large_flowlocked_browser_tab() {
+        let w = ActiveWindow {
+            window_id: "0".into(),
+            process_id: 0,
+            app_name: "Google Chrome".into(),
+            position: WindowPosition {
+                x: 0.0,
+                y: 0.0,
+                width: 1200.0,
+                height: 800.0,
+            },
+            title: "Flowlocked – Session".into(),
+            process_path: PathBuf::new(),
+        };
+        assert!(!pip_history_recovery_eligible(&w, true));
+    }
+
+    #[test]
+    fn pip_history_recovery_not_eligible_for_native_flowlocked() {
+        let w = ActiveWindow {
+            window_id: "0".into(),
+            process_id: 0,
+            app_name: "Flowlocked".into(),
+            position: WindowPosition {
+                x: 0.0,
+                y: 0.0,
+                width: 900.0,
+                height: 600.0,
+            },
+            title: "anything".into(),
+            process_path: PathBuf::new(),
+        };
+        assert!(!pip_history_recovery_eligible(&w, true));
+    }
+
+    #[test]
+    fn pip_history_recovery_eligible_for_pip_sized_flowlocked_title_browser() {
+        let w = ActiveWindow {
+            window_id: "0".into(),
+            process_id: 0,
+            app_name: "Google Chrome".into(),
+            position: WindowPosition {
+                x: 0.0,
+                y: 0.0,
+                width: 640.0,
+                height: 360.0,
+            },
+            title: "Flowlocked – Session".into(),
+            process_path: PathBuf::new(),
+        };
+        assert!(pip_history_recovery_eligible(&w, true));
+    }
+
+    #[test]
+    fn pip_history_recovery_eligible_for_explicit_pip_title() {
+        let w = ActiveWindow {
+            window_id: "0".into(),
+            process_id: 0,
+            app_name: "Google Chrome".into(),
+            position: WindowPosition {
+                x: 0.0,
+                y: 0.0,
+                width: 1200.0,
+                height: 800.0,
+            },
+            title: "Flowlocked PiP - Google Chrome".into(),
+            process_path: PathBuf::new(),
+        };
+        assert!(pip_history_recovery_eligible(&w, true));
     }
 }

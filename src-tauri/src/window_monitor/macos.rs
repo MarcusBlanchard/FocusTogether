@@ -26,8 +26,9 @@ use core_graphics::display::{
 use objc::{class, msg_send, sel, sel_impl};
 use std::borrow::Cow;
 use std::ffi::c_void;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::OnceLock;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 
 #[allow(non_upper_case_globals)]
@@ -36,6 +37,7 @@ const K_CF_NUMBER_SINT32: CFNumberType = 3;
 const K_CF_NUMBER_SINT64: CFNumberType = 4;
 static FIRST_RUN: AtomicBool = AtomicBool::new(true);
 static LAST_DIAG_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_SKIP_OWN_SHELL_MS: AtomicU64 = AtomicU64::new(0);
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -186,22 +188,71 @@ fn process_path_by_pid(pid: u32) -> PathBuf {
         .unwrap_or_default()
 }
 
+/// Walks up from an executable path to the containing `*.app` bundle directory, if any.
+fn macos_app_bundle_root(exe: &Path) -> Option<PathBuf> {
+    if exe.as_os_str().is_empty() {
+        return None;
+    }
+    let mut path = exe.to_path_buf();
+    loop {
+        let is_app = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".app"));
+        if is_app {
+            return Some(path);
+        }
+        if !path.pop() {
+            return None;
+        }
+    }
+}
+
+fn our_flowlocked_app_bundle() -> Option<PathBuf> {
+    static OUR_BUNDLE: OnceLock<Option<PathBuf>> = OnceLock::new();
+    OUR_BUNDLE
+        .get_or_init(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| macos_app_bundle_root(&exe))
+        })
+        .clone()
+}
+
+fn wm_trace(msg: impl std::fmt::Display) {
+    if super::wm_debug_enabled() {
+        crate::diagnostic_log::emit_console_and_file(format!("{}", msg));
+    }
+}
+
 pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     if FIRST_RUN.swap(false, Ordering::SeqCst) {
         let granted = screen_recording_granted();
-        println!(
-            "[window-monitor] build=137 skip-pip path active; screen_recording_granted={}",
+        crate::diagnostic_log::emit_console_and_file(format!(
+            "[window-monitor] build=155 skip-pip path active; screen_recording_granted={}",
             granted
+        ));
+        crate::diagnostic_log::emit_console_and_file(
+            "[window-monitor] Verbose z-order trace: export FLOWLOCKED_WM_DEBUG=1 then launch from Terminal. Window-monitor + detection lines also append to Desktop/focustogether-live.log",
         );
     }
 
-    let _ = unsafe { frontmost_pid() };
+    let frontmost_pid = unsafe { frontmost_pid() };
     let fallback_process_path = unsafe { frontmost_app_bundle_path() };
 
     let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
     let arr = copy_window_info(options, kCGNullWindowID).ok_or(())?;
     let arr_ref = arr.as_concrete_TypeRef();
     let n = unsafe { CFArrayGetCount(arr_ref) };
+
+    wm_trace(format_args!(
+        "[window-monitor] zwalk begin: cg_window_entries={} frontmost_pid={:?} our_bundle={:?}",
+        n,
+        frontmost_pid,
+        our_flowlocked_app_bundle()
+            .as_ref()
+            .map(|p| p.display().to_string())
+    ));
 
     let mut skipped_pip = false;
     // First normal-layer on-screen window in global Z-order.
@@ -252,9 +303,6 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             continue;
         }
 
-        let is_top_for_front_pid = !top_qualifying_seen;
-        top_qualifying_seen = true;
-
         let mut win_title = String::new();
         if let DictVal::String(s) = read_dict(dic_ref, "kCGWindowName") {
             win_title = s;
@@ -265,14 +313,76 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             app_name = s;
         }
         let process_path = process_path_by_pid(window_pid as u32);
-        let process_path_ref = if process_path.as_os_str().is_empty() {
-            &fallback_process_path
+        let bundle_theirs = macos_app_bundle_root(process_path.as_path());
+        let bundle_ours = our_flowlocked_app_bundle();
+        if super::wm_debug_enabled() {
+            crate::diagnostic_log::emit_console_and_file(format!(
+                "[window-monitor] zwalk[{i}] cand pid={} raw_owner={:?} title={:?} size={}x{} exe_empty={} bundle_win={:?} is_top_slot_yet={}",
+                window_pid,
+                app_name,
+                win_title,
+                win_pos.width as i64,
+                win_pos.height as i64,
+                process_path.as_os_str().is_empty(),
+                bundle_theirs
+                    .as_ref()
+                    .map(|p| p.display().to_string()),
+                !top_qualifying_seen
+            ));
+        }
+        // Native Flowlocked windows (WebView popups, hidden main, etc.) often sit above Chrome in
+        // global Z-order right after a deeplink. They must not consume the "top of stack" slot or
+        // become the reported foreground — walk past them to Chrome + Document PiP.
+        if let (Some(ref ours), Some(ref theirs)) = (bundle_ours.as_ref(), bundle_theirs.as_ref()) {
+            if ours == theirs {
+                if super::wm_debug_enabled() {
+                    crate::diagnostic_log::emit_console_and_file(format!(
+                        "[window-monitor] zwalk[{i}] skip reason=own_app_shell pid={} title={:?}",
+                        window_pid, win_title
+                    ));
+                } else {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let last = LAST_SKIP_OWN_SHELL_MS.load(Ordering::Relaxed);
+                    if now_ms.saturating_sub(last) > 3_000 {
+                        LAST_SKIP_OWN_SHELL_MS.store(now_ms, Ordering::Relaxed);
+                        crate::diagnostic_log::emit_console_and_file(format!(
+                            "[window-monitor] skipped own-app shell in z-order pid={} title={:?}",
+                            window_pid, win_title
+                        ));
+                    }
+                }
+                continue;
+            }
+        }
+
+        let is_top_for_front_pid = !top_qualifying_seen;
+        top_qualifying_seen = true;
+
+        let window_is_frontmost_app = frontmost_pid
+            .map(|p| p == window_pid)
+            .unwrap_or(false);
+        // Never use the frontmost *app* bundle to label a different PID's windows. After a deeplink,
+        // Flowlocked is often frontmost while Chrome PiP is still top in Z-order; mis-labeling those
+        // windows as "Flowlocked" skips browser PiP heuristics and breaks distraction detection.
+        let resolved_process_path = if !process_path.as_os_str().is_empty() {
+            process_path.clone()
+        } else if window_is_frontmost_app {
+            fallback_process_path.clone()
         } else {
-            &process_path
+            PathBuf::new()
         };
         if app_name.is_empty() {
-            if let Some(s) = display_name_from_bundle_path(process_path_ref) {
-                app_name = s;
+            if !process_path.as_os_str().is_empty() {
+                if let Some(s) = display_name_from_bundle_path(&process_path) {
+                    app_name = s;
+                }
+            } else if window_is_frontmost_app {
+                if let Some(s) = display_name_from_bundle_path(&fallback_process_path) {
+                    app_name = s;
+                }
             }
         }
 
@@ -284,7 +394,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             let last = LAST_DIAG_MS.load(Ordering::Relaxed);
             if now_ms.saturating_sub(last) > 2000 {
                 LAST_DIAG_MS.store(now_ms, Ordering::Relaxed);
-                println!(
+                crate::diagnostic_log::emit_console_and_file(format!(
                     "[window-monitor] top-window-in-z-order pid={} app={:?} title={:?} size={}x{} layer={}",
                     window_pid,
                     app_name,
@@ -292,11 +402,15 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
                     win_pos.width as i64,
                     win_pos.height as i64,
                     layer
-                );
+                ));
             }
         }
 
         if is_flowlocked_pip_title(&win_title) {
+            wm_trace(format_args!(
+                "[window-monitor] zwalk[{i}] skip reason=flowlocked_pip_title pid={}",
+                window_pid
+            ));
             skipped_pip = true;
             saw_pip = true;
             if skipped_pip_title.is_none() {
@@ -312,6 +426,13 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             && win_pos.width <= 800.0
             && win_pos.height <= 600.0
         {
+            wm_trace(format_args!(
+                "[window-monitor] zwalk[{i}] skip reason=suspected_pip_small_browser is_top={} app={:?} size={}x{}",
+                is_top_for_front_pid,
+                app_name,
+                win_pos.width as i64,
+                win_pos.height as i64
+            ));
             log_skipped_suspected_pip_heuristic(win_pos.width, win_pos.height, &app_name);
             skipped_pip = true;
             saw_pip = true;
@@ -331,10 +452,14 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             && win_pos.height <= 600.0
             && aspect_ok
         {
-            println!(
+            wm_trace(format_args!(
+                "[window-monitor] zwalk[{i}] skip reason=pip_shape_sharing is_top={} sharing={} aspect_ok={}",
+                is_top_for_front_pid, sharing_state, aspect_ok
+            ));
+            crate::diagnostic_log::emit_console_and_file(format!(
                 "[window-monitor] skipped PiP via shape fallback: app={} {}x{} sharing={}",
                 app_name, win_pos.width as i64, win_pos.height as i64, sharing_state
-            );
+            ));
             skipped_pip = true;
             saw_pip = true;
             if skipped_pip_title.is_none() {
@@ -363,11 +488,45 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             app_name,
             position: win_pos,
             title: win_title,
-            process_path: process_path_ref.to_path_buf(),
+            process_path: resolved_process_path,
         };
-        return Ok(super::finalize_with_history(resolved));
+        let finalized = super::finalize_with_history(resolved);
+        super::log_zwalk_pick_summary(
+            frontmost_pid,
+            finalized.process_id as i64,
+            &finalized.app_name,
+            &finalized.title,
+            saw_pip,
+            skipped_pip,
+            "cgwindow_zwalk",
+        );
+        wm_trace(format_args!(
+            "[window-monitor] zwalk[{i}] pick resolved pid={} finalized pid={} app={:?}",
+            window_pid,
+            finalized.process_id,
+            finalized.app_name
+        ));
+        return Ok(finalized);
     }
 
     super::mark_pip_seen(saw_pip);
-    active_win_pos_rs::get_active_window().map(super::finalize_with_history)
+    wm_trace(format_args!(
+        "[window-monitor] zwalk exhausted cg list (no pick) saw_pip={} → active_win_pos_rs fallback",
+        saw_pip
+    ));
+    match active_win_pos_rs::get_active_window().map(super::finalize_with_history) {
+        Ok(w) => {
+            super::log_zwalk_pick_summary(
+                frontmost_pid,
+                w.process_id as i64,
+                &w.app_name,
+                &w.title,
+                saw_pip,
+                skipped_pip,
+                "fallback_active_win_pos_rs",
+            );
+            Ok(w)
+        }
+        Err(()) => Err(()),
+    }
 }

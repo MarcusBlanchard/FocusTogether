@@ -124,8 +124,8 @@ fn fallback_active_window_with_wayland_warning() -> Result<ActiveWindow, ()> {
     let is_pip = is_flowlocked_pip_title(&active.title);
     super::mark_pip_seen(is_pip);
     if is_pip {
-        println!(
-            "[window_monitor] top window matches PiP on Linux fallback path; global Z-order unavailable (likely Wayland), distraction detection may be masked."
+        crate::diagnostic_log::emit_console_and_file(
+            "[window_monitor] top window matches PiP on Linux fallback path; global Z-order unavailable (likely Wayland), distraction detection may be masked.",
         );
     }
     Ok(super::finalize_with_history(active))

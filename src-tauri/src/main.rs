@@ -13,13 +13,10 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::io::Write;
-
 mod browser_url;
 mod browser_title_target;
+mod diagnostic_log;
 mod window_monitor;
-
-static LOG_FILE: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
 
 static LAST_CLASSIFY_AT: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
 static LAST_BROWSER_TITLE_BY_PID: OnceLock<Mutex<HashMap<u32, (String, std::time::Instant)>>> =
@@ -107,45 +104,17 @@ fn windows_title_target_debounce_lock() -> &'static Mutex<WindowsTitleTargetDebo
     WINDOWS_TITLE_TARGET_DEBOUNCE_STATE.get_or_init(|| Mutex::new(WindowsTitleTargetDebounce::default()))
 }
 
-/// Keep log small so TextEdit/Preview can open it; rotate when over limit.
-const LIVE_LOG_MAX_BYTES: u64 = 512 * 1024;
-
-fn init_log_file() {
-    let log_path = dirs::desktop_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("focustogether-live.log");
-    if let Ok(meta) = fs::metadata(&log_path) {
-        if meta.len() > LIVE_LOG_MAX_BYTES {
-            let rotated = log_path.with_extension("log.old");
-            let _ = fs::rename(&log_path, &rotated);
-            eprintln!(
-                "[Log] Rotated large log (>{}) to {}",
-                LIVE_LOG_MAX_BYTES,
-                rotated.display()
-            );
-        }
-    }
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .expect("Failed to open log file");
-    LOG_FILE.set(Mutex::new(file)).ok();
-    eprintln!("[Log] Writing to {}", log_path.display());
-}
-
 macro_rules! log {
     ($($arg:tt)*) => {{
         let msg = format!($($arg)*);
-        let timestamp = chrono::Local::now().format("%H:%M:%S%.3f");
-        let line = format!("[{}] {}", timestamp, msg);
-        println!("{}", line);
-        if let Some(f) = LOG_FILE.get() {
-            if let Ok(mut f) = f.lock() {
-                let _ = writeln!(f, "{}", line);
-                let _ = f.flush();
-            }
-        }
+        diagnostic_log::emit_console_and_file(&msg);
+    }};
+}
+
+/// Distraction detection and related diagnostics: stdout + `focustogether-live.log`.
+macro_rules! detection_println {
+    ($($arg:tt)*) => {{
+        diagnostic_log::emit_console_and_file(format!($($arg)*));
     }};
 }
 
@@ -334,6 +303,25 @@ fn distracting_keywords() -> &'static [&'static str] {
         "anime",
         "meme",
     ]
+}
+
+fn productive_override_tokens() -> &'static [&'static str] {
+    &[
+        "chatgpt",
+        "chatgpt.com",
+        "chat.openai.com",
+        "openai.com",
+    ]
+}
+
+fn matches_productive_override(value: &str) -> bool {
+    let lower = value.trim().to_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+    productive_override_tokens()
+        .iter()
+        .any(|token| lower.contains(token))
 }
 
 /// Env `OPENAI_API_KEY` wins; else `openaiApiKey` in ~/.focustogether/config.json.
@@ -625,6 +613,9 @@ fn classify_local_distraction(
         if rule_matches(d, &rules.allowed) {
             return None;
         }
+        if matches_productive_override(d) {
+            return None;
+        }
         if rule_matches(d, &rules.distracting) {
             return normalized;
         }
@@ -686,6 +677,9 @@ fn classify_local_distraction(
         return Some(app_norm);
     }
     if rule_matches(&app_norm, &rules.allowed) {
+        return None;
+    }
+    if matches_productive_override(&app_norm) {
         return None;
     }
     if rule_matches(&app_norm, &rules.distracting) {
@@ -1231,7 +1225,7 @@ fn check_apps_with_server(
             .build() {
                 Ok(c) => c,
                 Err(e) => {
-                    println!("[Detection] Failed to create HTTP client: {}", e);
+                    detection_println!("[Detection] Failed to create HTTP client: {}", e);
                     return None;
                 }
             };
@@ -1264,18 +1258,18 @@ fn check_apps_with_server(
                             );
                             Some(data)
                         } else {
-                            println!("[Detection] Server returned success: false");
+                            detection_println!("[Detection] Server returned success: false");
                             None
                         }
                     }
                     Err(e) => {
-                        println!("[Detection] Failed to parse server response: {}", e);
+                        detection_println!("[Detection] Failed to parse server response: {}", e);
                         None
                     }
                 }
             }
             Err(e) => {
-                println!("[Detection] Failed to contact server: {}", e);
+                detection_println!("[Detection] Failed to contact server: {}", e);
                 None
             }
         }
@@ -2290,7 +2284,7 @@ fn maybe_log_steam_foreground_blocked(
         return;
     }
     LAST_STEAM_DISTRACTION_TRACE_MS.store(now_ms, Ordering::Relaxed);
-    println!(
+    detection_println!(
         "[Detection][steam-trace] foreground not treated as distracting: app={:?} desktop_fg={:?} local_key={:?} server_own_domain_cleared={}",
         app_name, desktop_fg, local_key, server_cleared_own_domain
     );
@@ -2309,9 +2303,19 @@ fn get_foreground_info() -> Option<(String, String, u32)> {
             }
             let title = window.title;
             let pid = window.process_id as u32;
-            sanitize_foreground_snapshot(app_name, title, pid)
+            let out = sanitize_foreground_snapshot(app_name, title, pid);
+            #[cfg(target_os = "macos")]
+            window_monitor::log_detection_foreground_tick(
+                out.as_ref()
+                    .map(|(a, t, p)| (a.as_str(), t.as_str(), *p)),
+            );
+            out
         }
-        Err(_) => None,
+        Err(()) => {
+            #[cfg(target_os = "macos")]
+            window_monitor::log_detection_foreground_tick(None);
+            None
+        }
     }
 }
 
@@ -2463,10 +2467,10 @@ fn show_distraction_warning(app_handle: &tauri::AppHandle) {
                     }
                 }
             });
-            println!("[Detection] Distraction warning shown");
+            detection_println!("[Detection] Distraction warning shown");
         }
         Err(e) => {
-            println!("[Detection] Failed to create warning window: {}", e);
+            detection_println!("[Detection] Failed to create warning window: {}", e);
         }
     }
 }
@@ -2486,7 +2490,7 @@ fn update_distraction_warning_to_distracted(app_handle: &tauri::AppHandle) {
             play_distracted_sound();
         });
         
-        println!("[Detection] Warning updated to distracted state");
+        detection_println!("[Detection] Warning updated to distracted state");
     }
 }
 
@@ -2494,13 +2498,13 @@ fn update_distraction_warning_to_distracted(app_handle: &tauri::AppHandle) {
 fn dismiss_distraction_warning(app_handle: &tauri::AppHandle) {
     if let Some(window) = app_handle.get_window("distraction-warning") {
         let _ = window.close();
-        println!("[Detection] Distraction warning dismissed");
+        detection_println!("[Detection] Distraction warning dismissed");
     }
 }
 
 /// Start distraction detection for a session
 fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: String) {
-    println!("[Detection] 🚀 start_detection called with userId={}, sessionId={}", user_id, session_id);
+    detection_println!("[Detection] 🚀 start_detection called with userId={}, sessionId={}", user_id, session_id);
     println!(
         "[Detection] Backend base at start_detection: {}",
         backend_base_url()
@@ -2523,7 +2527,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         };
 
         if !should_restart {
-            println!("[Detection] ⚠️ Detection already running for same user+session — skipping start");
+            detection_println!("[Detection] ⚠️ Detection already running for same user+session — skipping start");
             return;
         }
 
@@ -2545,7 +2549,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
     // Store session info
     if let Ok(mut session) = get_detection_session().lock() {
         *session = Some((user_id.clone(), session_id.clone()));
-        println!("[Detection] ✅ Stored session info in DETECTION_SESSION");
+        detection_println!("[Detection] ✅ Stored session info in DETECTION_SESSION");
     }
 
     // If we previously failed to send a clear, retry once at session start.
@@ -2559,7 +2563,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
     let tray = app_handle.tray_handle();
     let _ = tray.get_item("status").set_title("Monitoring: Active");
     
-    println!("[Detection] Started for user {} in session {}", user_id, session_id);
+    detection_println!("[Detection] Started for user {} in session {}", user_id, session_id);
     
     // Spawn detection thread
     std::thread::spawn(move || {
@@ -2600,7 +2604,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                 if let Some((app_name, title, pid)) = get_foreground_info() {
                     // Check if foreground is our own app (the warning popup itself)
                     let app_lower = app_name.to_lowercase();
-                    let is_our_app = app_lower.contains("flowlocked");
+                    let is_our_app = app_lower.contains("flowlocked")
+                        || app_lower.contains("focustogether");
                     
                     let resolved_title = resolved_browser_window_title(&app_name, &title, pid);
                     let desktop_apps_foreground =
@@ -2710,15 +2715,28 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         is_distracting_now,
                     );
 
-                    // If our app is in foreground, handle timer but also check if distraction cleared
+                    // Native app in foreground: clear any warning from a prior browser/other app.
+                    // (Previously we `continue`d here without dismissing, so the orange popup
+                    // stayed up after switching from YouTube back to Flowlocked.)
                     if is_our_app {
-                        // Still check if warning timer expired
-                        if let Some(start_time) = warning_shown_at {
-                            if start_time.elapsed().as_secs() >= WARNING_DURATION_SECS && !is_marked_distracted {
-                                // Time's up - mark as distracted
-                                is_marked_distracted = true;
-                                println!("[Detection] ⏰ 10 seconds passed - transitioning to distracted");
-                                update_distraction_warning_to_distracted(&app_handle);
+                        if warning_shown_at.is_some() || is_marked_distracted {
+                            consecutive_clear_ticks = 0;
+                            dismiss_distraction_warning(&app_handle);
+                            warning_shown_at = None;
+                            is_marked_distracted = false;
+                            active_distraction_key = None;
+                            active_foreground_key = None;
+                            if last_sent_state == Some("distracted") {
+                                if send_distraction_state(&user_id, false, None) {
+                                    detection_println!(
+                                        "[Detection] Back to active (native app foreground)"
+                                    );
+                                    last_sent_state = Some("active");
+                                } else {
+                                    detection_println!(
+                                        "[Detection] ⚠️ Failed to clear distracted; will retry"
+                                    );
+                                }
                             }
                         }
                         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -2757,11 +2775,11 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 .or_else(|| Some(desktop_apps_foreground.to_lowercase()));
                             active_foreground_key = Some(current_foreground_key.clone());
                             if is_browser_distracting {
-                                println!("[Detection] Warning triggered by local browser domain match");
+                                detection_println!("[Detection] Warning triggered by local browser domain match");
                             } else if server_blocked_after_own_guard {
-                                println!("[Detection] Warning triggered by server isForegroundBlocked for '{}'", desktop_apps_foreground);
+                                detection_println!("[Detection] Warning triggered by server isForegroundBlocked for '{}'", desktop_apps_foreground);
                             } else {
-                                println!("[Detection] ⚠️ Warning triggered by local rules for '{}'", app_name);
+                                detection_println!("[Detection] ⚠️ Warning triggered by local rules for '{}'", app_name);
                             }
                         } else if let Some(start_time) = warning_shown_at {
                             // Refresh the foreground key while still distracting on the same site,
@@ -2771,7 +2789,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                             }
                             if start_time.elapsed().as_secs() >= WARNING_DURATION_SECS && !is_marked_distracted {
                                 is_marked_distracted = true;
-                                println!("[Detection] ⏰ 10 seconds passed - transitioning to distracted");
+                                detection_println!("[Detection] ⏰ 10 seconds passed - transitioning to distracted");
                                 update_distraction_warning_to_distracted(&app_handle);
                             }
                         }
@@ -2781,10 +2799,10 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 true,
                                 active_distraction_key.as_deref(),
                             ) {
-                                println!("[Detection] Marked as distracted after 10s warning");
+                                detection_println!("[Detection] Marked as distracted after 10s warning");
                                 last_sent_state = Some("distracted");
                             } else {
-                                println!("[Detection] ⚠️ Failed to report distracted; will retry");
+                                detection_println!("[Detection] ⚠️ Failed to report distracted; will retry");
                             }
                         }
                     } else {
@@ -2805,10 +2823,10 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 active_foreground_key = None;
                                 if last_sent_state == Some("distracted") {
                                     if send_distraction_state(&user_id, false, None) {
-                                        println!("[Detection] Back to active (foreground changed)");
+                                        detection_println!("[Detection] Back to active (foreground changed)");
                                         last_sent_state = Some("active");
                                     } else {
-                                        println!("[Detection] ⚠️ Failed to clear distracted; will retry");
+                                        detection_println!("[Detection] ⚠️ Failed to clear distracted; will retry");
                                     }
                                 }
                             } else {
@@ -2824,14 +2842,14 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                     active_foreground_key = None;
                                     if last_sent_state == Some("distracted") {
                                         if send_distraction_state(&user_id, false, None) {
-                                            println!("[Detection] Back to active (sustained clear)");
+                                            detection_println!("[Detection] Back to active (sustained clear)");
                                             last_sent_state = Some("active");
                                         } else {
-                                            println!("[Detection] ⚠️ Failed to clear distracted; will retry");
+                                            detection_println!("[Detection] ⚠️ Failed to clear distracted; will retry");
                                         }
                                     }
                                 } else {
-                                    println!(
+                                    detection_println!(
                                         "[Detection] Holding warning through transient clear ({}/{}) for key='{}'",
                                         consecutive_clear_ticks, DISMISS_CLEAR_TICKS, current_foreground_key
                                     );
@@ -2865,7 +2883,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         
         // Cleanup on stop
         dismiss_distraction_warning(&app_handle);
-        println!("[Detection] Thread stopped");
+        detection_println!("[Detection] Thread stopped");
     });
 }
 
@@ -2891,13 +2909,13 @@ fn stop_detection(app_handle: &tauri::AppHandle) {
         );
         if DISTRACTION_REPORTED.load(Ordering::SeqCst) {
             if send_distraction_state(&uid, false, None) {
-                println!("[Detection] Cleared distracted state on stop_detection");
+                detection_println!("[Detection] Cleared distracted state on stop_detection");
             } else {
-                println!("[Detection] ⚠️ Failed clearing distracted state on stop_detection");
+                detection_println!("[Detection] ⚠️ Failed clearing distracted state on stop_detection");
             }
         }
     } else {
-        println!("[Detection] 🛑 stop_detection called while running (no prior session stored)");
+        detection_println!("[Detection] 🛑 stop_detection called while running (no prior session stored)");
     }
     
     DETECTION_RUNNING.store(false, Ordering::SeqCst);
@@ -2918,7 +2936,7 @@ fn stop_detection(app_handle: &tauri::AppHandle) {
     let tray = app_handle.tray_handle();
     let _ = tray.get_item("status").set_title("Monitoring: Inactive");
     
-    println!("[Detection] Stopped");
+    detection_println!("[Detection] Stopped");
 }
 
 /// Dismiss all notification windows (called when session ends)
@@ -3473,7 +3491,7 @@ fn is_listener_only() -> bool {
 }
 
 fn main() {
-    init_log_file();
+    diagnostic_log::init();
     println!("[Tauri] Starting Flowlocked Enforcer...");
     
     // Create system tray menu
