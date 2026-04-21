@@ -587,8 +587,12 @@ fn classify_local_distraction(
     if app.contains("flowlocked") || app.contains("focustogether") {
         return None;
     }
-    if is_browser(app_name) && domain.is_none() {
-        return None;
+    if is_browser(app_name) {
+        match domain {
+            None => return None,
+            Some(d) if !looks_like_hostname_target(d) => return None,
+            _ => {}
+        }
     }
     let Ok(rules) = distraction_rules().lock().map(|g| g.clone()) else {
         return None;

@@ -181,5 +181,5 @@ pub fn target_from_window_title(title: &str) -> Option<String> {
     if should_skip_stripped(&stripped_lower) {
         return None;
     }
-    Some(stripped_lower)
+    None
 }
