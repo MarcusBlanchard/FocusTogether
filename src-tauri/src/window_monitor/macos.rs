@@ -411,6 +411,11 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
                 "[window-monitor] zwalk[{i}] skip reason=flowlocked_pip_title pid={}",
                 window_pid
             ));
+            super::record_flowlocked_pip_level(layer);
+            crate::diagnostic_log::emit_console_and_file(format!(
+                "[window-monitor] pip_window_level={} (reason=flowlocked_pip_title pid={} title={:?})",
+                layer, window_pid, win_title
+            ));
             skipped_pip = true;
             saw_pip = true;
             if skipped_pip_title.is_none() {
@@ -432,6 +437,11 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
                 app_name,
                 win_pos.width as i64,
                 win_pos.height as i64
+            ));
+            super::record_flowlocked_pip_level(layer);
+            crate::diagnostic_log::emit_console_and_file(format!(
+                "[window-monitor] pip_window_level={} (reason=suspected_pip_small_browser pid={} app={:?})",
+                layer, window_pid, app_name
             ));
             log_skipped_suspected_pip_heuristic(win_pos.width, win_pos.height, &app_name);
             skipped_pip = true;
@@ -455,6 +465,11 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             wm_trace(format_args!(
                 "[window-monitor] zwalk[{i}] skip reason=pip_shape_sharing is_top={} sharing={} aspect_ok={}",
                 is_top_for_front_pid, sharing_state, aspect_ok
+            ));
+            super::record_flowlocked_pip_level(layer);
+            crate::diagnostic_log::emit_console_and_file(format!(
+                "[window-monitor] pip_window_level={} (reason=pip_shape_sharing pid={} app={:?})",
+                layer, window_pid, app_name
             ));
             crate::diagnostic_log::emit_console_and_file(format!(
                 "[window-monitor] skipped PiP via shape fallback: app={} {}x{} sharing={}",

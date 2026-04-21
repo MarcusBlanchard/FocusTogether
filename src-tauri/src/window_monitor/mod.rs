@@ -8,7 +8,7 @@
 //! server-driven own domains).
 
 use active_win_pos_rs::ActiveWindow;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
 /// Set `FLOWLOCKED_WM_DEBUG=1` (or `true` / `yes`) for full per-candidate z-order logs.
 pub fn wm_debug_enabled() -> bool {
@@ -100,6 +100,7 @@ pub(crate) mod history;
 
 static PIP_OPEN: AtomicBool = AtomicBool::new(false);
 static PIP_OPEN_AT_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_FLOWLOCKED_PIP_LEVEL: AtomicI64 = AtomicI64::new(-1);
 
 /// Returns the effective foreground window, skipping Flowlocked PiP when it sits above real content.
 pub fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
@@ -156,6 +157,19 @@ pub(crate) fn mark_pip_seen(open: bool) {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         PIP_OPEN_AT_MS.store(ms, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn record_flowlocked_pip_level(level: i64) {
+    LAST_FLOWLOCKED_PIP_LEVEL.store(level, Ordering::Relaxed);
+}
+
+pub(crate) fn latest_flowlocked_pip_level() -> Option<i64> {
+    let level = LAST_FLOWLOCKED_PIP_LEVEL.load(Ordering::Relaxed);
+    if level >= 0 {
+        Some(level)
+    } else {
+        None
     }
 }
 

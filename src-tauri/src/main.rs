@@ -130,6 +130,7 @@ fn force_show_window(app_handle: &tauri::AppHandle, window_label: String) {
         use objc::runtime::YES;
         #[allow(unused_imports)]
         use objc::{sel, sel_impl, msg_send, class};
+        const WARNING_MIN_LEVEL: i64 = 101;
         
         unsafe {
             let ns_app = NSApp();
@@ -138,9 +139,48 @@ fn force_show_window(app_handle: &tauri::AppHandle, window_label: String) {
             
             if let Some(window) = handle.get_window(&window_label) {
                 let ns_win: id = window.ns_window().unwrap() as id;
-                let _: () = msg_send![ns_win, setLevel: 25_i64];
+                let pip_window_level = window_monitor::latest_flowlocked_pip_level().unwrap_or(-1);
+                let desired_level = std::cmp::max(
+                    WARNING_MIN_LEVEL,
+                    pip_window_level.saturating_add(1),
+                );
+                let _: () = msg_send![ns_win, setLevel: desired_level];
                 let _: () = msg_send![ns_win, orderFrontRegardless];
-                log!("[macOS] force_show_window on main thread: level=25 + orderFrontRegardless for {}", window_label);
+                ns_app.activateIgnoringOtherApps_(YES);
+                let warning_window_level: i64 = msg_send![ns_win, level];
+
+                let workspace: id = msg_send![class!(NSWorkspace), sharedWorkspace];
+                let frontmost_app: id = msg_send![workspace, frontmostApplication];
+                let (front_name, front_pid) = if frontmost_app.is_null() {
+                    ("<unknown>".to_string(), -1_i32)
+                } else {
+                    let front_name_ns: id = msg_send![frontmost_app, localizedName];
+                    let front_pid: i32 = msg_send![frontmost_app, processIdentifier];
+                    let front_name = if front_name_ns.is_null() {
+                        "<unknown>".to_string()
+                    } else {
+                        let cstr: *const i8 = msg_send![front_name_ns, UTF8String];
+                        if cstr.is_null() {
+                            "<unknown>".to_string()
+                        } else {
+                            std::ffi::CStr::from_ptr(cstr).to_string_lossy().into_owned()
+                        }
+                    };
+                    (front_name, front_pid)
+                };
+
+                log!(
+                    "[macOS] force_show_window on main thread: warning_window_level={} pip_window_level={} desired_level={} orderFrontRegardless=true activateIgnoringOtherApps=true label={}",
+                    warning_window_level,
+                    pip_window_level,
+                    desired_level,
+                    window_label
+                );
+                log!(
+                    "[macOS] frontmost_app_after_activate={:?} pid={}",
+                    front_name,
+                    front_pid
+                );
             } else {
                 log!("[macOS] ⚠️ Window {} not found on main thread", window_label);
             }
