@@ -1,0 +1,1165 @@
+[17:19:00.075] [POLL DEBUG] ═══ Poll #1 cycle starting for userId=50145776 ═══
+[17:19:00.076] [POLL DEBUG] GET https://flowlocked.com/api/desktop/poll?userId=50145776
+[17:19:00.309] [macOS] force_show_window on main thread: level=25 + orderFrontRegardless for startup-notification
+[17:19:00.661] [POLL DEBUG] Raw response body: {
+  "sessionId": "3878906c-6276-4899-92ac-7319315de686",
+  "joinedAt": "2026-04-21T09:18:57.648Z",
+  "active": true,
+  "pendingAlerts": [],
+  "distractingApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "allowedApps": [],
+  "blockedApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "blockedSites": [],
+  "ownAppDomains": [
+    "flowlocked.com",
+    "flowlocked.app",
+    "replit.com",
+    ".replit.dev",
+    ".repl.co",
+    "localhost"
+  ],
+  "noteTakingMode": true,
+  "nextPollMs": 3000
+}
+[17:19:00.661] [POLL DEBUG] Raw summary keys: sessionId=Some("3878906c-6276-4899-92ac-7319315de686") active=Some(true) kicked=None joinedAt=Some("2026-04-21T09:18:57.648Z") pendingAlerts_raw_present=true
+[17:19:00.661] [POLL DEBUG] pendingAlerts in raw JSON: []
+[17:19:00.661] [POLL DEBUG] Parsed OK — sessionId=Some("3878906c-6276-4899-92ac-7319315de686") pendingAlerts count=0 distractingApps count=45
+[17:19:00.661] [POLL DEBUG] Parsed extra: active=Some(true) kicked=false joinedAt=Some("2026-04-21T09:18:57.648Z") allowedApps count=0 blockedApps count=45 classroomAllowedApps count=0 classroomBlockedApps count=0 ownAppDomains count=6 whitelistModeApps=false whitelistModeWebsites=false whitelistApps count=0 whitelistWebsites count=0 requestImmediateAppReport=false
+[17:19:00.661] [POLL DEBUG] noteTakingMode=true (stored)
+[17:19:00.661] [POLL DEBUG] pendingAlerts=[] (empty)
+[17:19:00.661] [Detection] 🚀 start_detection called with userId=50145776, sessionId=3878906c-6276-4899-92ac-7319315de686
+[17:19:00.661] [Detection] ✅ Stored session info in DETECTION_SESSION
+[17:19:00.662] [Detection] Started for user 50145776 in session 3878906c-6276-4899-92ac-7319315de686
+[17:19:00.662] [POLL DEBUG] ═══ Poll #1 complete in 586ms ═══
+[17:19:00.662] [window-monitor] build=155 skip-pip path active; screen_recording_granted=true
+[17:19:00.663] [window-monitor] Verbose z-order trace: export FLOWLOCKED_WM_DEBUG=1 then launch from Terminal. Window-monitor + detection lines also append to Desktop/focustogether-live.log
+[17:19:00.679] [window-monitor] top-window-in-z-order pid=473 app="Google Chrome" title="Flowlocked – Focus & Accountability App" size=1468x858 layer=0
+[17:19:00.679] [window_monitor] finalize-summary: pip_flag=false pip_recent=false recovery_eligible=false resolved_flow_surface=true recovery=false hist_entries=0 final_app="Google Chrome" final_title_len=41
+[17:19:00.679] [window-monitor] zwalk-pick: source=cgwindow_zwalk frontmost_pid=Some(21147) picked_pid=473 picked_app="Google Chrome" title_prefix="Flowlocked – Focus & Accountability App" saw_pip=false skipped_pip_chain=false
+[17:19:00.679] [window_monitor] detection-fg: pid=473 app="Google Chrome" title_len=41 title_prefix="Flowlocked – Focus & Accountability App"
+[17:19:00.811] [macOS] Reverted to Accessory policy (main thread)
+[17:19:00.883] [POLL DEBUG] ═══ Poll #2 cycle starting for userId=50145776 ═══
+[17:19:00.883] [POLL DEBUG] GET https://flowlocked.com/api/desktop/poll?userId=50145776
+[17:19:00.936] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:01.022] [Desktop Apps] foreground report: process=Google Chrome pid=473 foregroundApp="Google Chrome" classify_target=None
+[17:19:01.395] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:01.422] [POLL DEBUG] Raw response body: {
+  "sessionId": "3878906c-6276-4899-92ac-7319315de686",
+  "joinedAt": "2026-04-21T09:18:57.648Z",
+  "active": true,
+  "pendingAlerts": [],
+  "distractingApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "allowedApps": [],
+  "blockedApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "blockedSites": [],
+  "ownAppDomains": [
+    "flowlocked.com",
+    "flowlocked.app",
+    "replit.com",
+    ".replit.dev",
+    ".repl.co",
+    "localhost"
+  ],
+  "noteTakingMode": true,
+  "nextPollMs": 3000
+}
+[17:19:01.423] [POLL DEBUG] Raw summary keys: sessionId=Some("3878906c-6276-4899-92ac-7319315de686") active=Some(true) kicked=None joinedAt=Some("2026-04-21T09:18:57.648Z") pendingAlerts_raw_present=true
+[17:19:01.423] [POLL DEBUG] pendingAlerts in raw JSON: []
+[17:19:01.423] [POLL DEBUG] Parsed OK — sessionId=Some("3878906c-6276-4899-92ac-7319315de686") pendingAlerts count=0 distractingApps count=45
+[17:19:01.423] [POLL DEBUG] Parsed extra: active=Some(true) kicked=false joinedAt=Some("2026-04-21T09:18:57.648Z") allowedApps count=0 blockedApps count=45 classroomAllowedApps count=0 classroomBlockedApps count=0 ownAppDomains count=6 whitelistModeApps=false whitelistModeWebsites=false whitelistApps count=0 whitelistWebsites count=0 requestImmediateAppReport=false
+[17:19:01.423] [POLL DEBUG] noteTakingMode=true (stored)
+[17:19:01.423] [POLL DEBUG] pendingAlerts=[] (empty)
+[17:19:01.423] [Detection] 🚀 start_detection called with userId=50145776, sessionId=3878906c-6276-4899-92ac-7319315de686
+[17:19:01.423] [Detection] ⚠️ Detection already running for same user+session — skipping start
+[17:19:01.423] [POLL DEBUG] ═══ Poll #2 complete in 539ms ═══
+[17:19:01.842] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:02.310] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:02.781] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:02.789] [window-monitor] top-window-in-z-order pid=473 app="Google Chrome" title="Flowlocked – Focus & Accountability App" size=1468x858 layer=0
+[17:19:03.130] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 270x122 app=Google Chrome
+[17:19:03.131] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "Flowlocked – Focus & Accountability App" (process=Google Chrome).
+[17:19:03.133] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 270x122 app=Google Chrome
+[17:19:03.133] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "Flowlocked – Focus & Accountability App" (process=Google Chrome).
+[17:19:03.255] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:03.258] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 270x122 app=Google Chrome
+[17:19:03.258] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "Flowlocked – Focus & Accountability App" (process=Google Chrome).
+[17:19:03.258] [window_monitor] finalize-summary: pip_flag=true pip_recent=true recovery_eligible=false resolved_flow_surface=true recovery=false hist_entries=0 final_app="Google Chrome" final_title_len=41
+[17:19:03.258] [window-monitor] zwalk-pick: source=cgwindow_zwalk frontmost_pid=Some(473) picked_pid=473 picked_app="Google Chrome" title_prefix="Flowlocked – Focus & Accountability App" saw_pip=true skipped_pip_chain=true
+[17:19:03.258] [window_monitor] detection-fg: pid=473 app="Google Chrome" title_len=41 title_prefix="Flowlocked – Focus & Accountability App"
+[17:19:03.604] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 270x122 app=Google Chrome
+[17:19:03.605] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "Flowlocked – Focus & Accountability App" (process=Google Chrome).
+[17:19:03.606] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 270x122 app=Google Chrome
+[17:19:03.606] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "Flowlocked – Focus & Accountability App" (process=Google Chrome).
+[17:19:03.721] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:03.724] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 270x122 app=Google Chrome
+[17:19:03.725] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "Flowlocked – Focus & Accountability App" (process=Google Chrome).
+[17:19:03.871] [POLL DEBUG] ═══ Poll #3 cycle starting for userId=50145776 ═══
+[17:19:03.871] [POLL DEBUG] GET https://flowlocked.com/api/desktop/poll?userId=50145776
+[17:19:04.175] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.175] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:04.177] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.177] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:04.290] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.290] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:04.290] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("youtube.com") sent="youtube.com"
+[17:19:04.291] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.291] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:04.377] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.377] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:04.377] [Desktop Apps] foreground report: process=Google Chrome pid=473 foregroundApp="youtube.com" classify_target=Some("youtube.com")
+[17:19:04.378] [Detection] Distraction warning shown
+[17:19:04.378] [Detection] Warning triggered by local browser domain match
+[17:19:04.481] [POLL DEBUG] Raw response body: {
+  "sessionId": "3878906c-6276-4899-92ac-7319315de686",
+  "joinedAt": "2026-04-21T09:18:57.648Z",
+  "active": true,
+  "pendingAlerts": [],
+  "distractingApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "allowedApps": [],
+  "blockedApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "blockedSites": [],
+  "ownAppDomains": [
+    "flowlocked.com",
+    "flowlocked.app",
+    "replit.com",
+    ".replit.dev",
+    ".repl.co",
+    "localhost"
+  ],
+  "noteTakingMode": true,
+  "nextPollMs": 3000
+}
+[17:19:04.481] [POLL DEBUG] Raw summary keys: sessionId=Some("3878906c-6276-4899-92ac-7319315de686") active=Some(true) kicked=None joinedAt=Some("2026-04-21T09:18:57.648Z") pendingAlerts_raw_present=true
+[17:19:04.481] [POLL DEBUG] pendingAlerts in raw JSON: []
+[17:19:04.481] [POLL DEBUG] Parsed OK — sessionId=Some("3878906c-6276-4899-92ac-7319315de686") pendingAlerts count=0 distractingApps count=45
+[17:19:04.481] [POLL DEBUG] Parsed extra: active=Some(true) kicked=false joinedAt=Some("2026-04-21T09:18:57.648Z") allowedApps count=0 blockedApps count=45 classroomAllowedApps count=0 classroomBlockedApps count=0 ownAppDomains count=6 whitelistModeApps=false whitelistModeWebsites=false whitelistApps count=0 whitelistWebsites count=0 requestImmediateAppReport=false
+[17:19:04.481] [POLL DEBUG] noteTakingMode=true (stored)
+[17:19:04.481] [POLL DEBUG] pendingAlerts=[] (empty)
+[17:19:04.481] [Detection] 🚀 start_detection called with userId=50145776, sessionId=3878906c-6276-4899-92ac-7319315de686
+[17:19:04.481] [Detection] ⚠️ Detection already running for same user+session — skipping start
+[17:19:04.481] [POLL DEBUG] ═══ Poll #3 complete in 609ms ═══
+[17:19:04.590] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.590] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:04.597] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.597] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:04.686] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.686] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:04.686] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("youtube.com") sent="youtube.com"
+[17:19:04.687] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.687] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:04.762] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.762] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:04.969] [window-monitor] top-window-in-z-order pid=473 app="Google Chrome" title="www.youtube.com wants to" size=320x174 layer=0
+[17:19:04.969] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.969] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:04.971] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:04.971] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.086] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.086] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.086] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("youtube.com") sent="youtube.com"
+[17:19:05.087] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.087] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.088] [macOS] force_show_window on main thread: level=25 + orderFrontRegardless for distraction-warning
+[17:19:05.198] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.198] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.406] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.406] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.407] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.407] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.515] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.515] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.515] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("youtube.com") sent="youtube.com"
+[17:19:05.517] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.518] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.594] [macOS] Reverted to Accessory policy (main thread)
+[17:19:05.637] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.637] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.845] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.845] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.845] [window_monitor] finalize-summary: pip_flag=true pip_recent=true recovery_eligible=false resolved_flow_surface=false recovery=false hist_entries=20 final_app="Google Chrome" final_title_len=7
+[17:19:05.845] [window-monitor] zwalk-pick: source=cgwindow_zwalk frontmost_pid=Some(473) picked_pid=473 picked_app="Google Chrome" title_prefix="YouTube" saw_pip=true skipped_pip_chain=true
+[17:19:05.845] [window_monitor] detection-fg: pid=473 app="Google Chrome" title_len=7 title_prefix="YouTube"
+[17:19:05.847] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.847] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.948] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.949] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:05.949] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("youtube.com") sent="youtube.com"
+[17:19:05.951] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:05.951] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:06.030] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:06.030] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:06.238] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:06.238] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:06.242] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:06.243] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:06.359] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:06.359] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:06.359] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("youtube.com") sent="youtube.com"
+[17:19:06.360] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:06.361] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:06.439] [window-monitor] skipped suspected-PiP overlay (browser+small+top): 320x174 app=Google Chrome
+[17:19:06.439] [window_monitor] skipped PiP overlay "Flowlocked PiP" → reporting underlying window "YouTube" (process=Google Chrome).
+[17:19:06.779] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("class from you huntuh - google docs") sent="class from you huntuh - google docs"
+[17:19:06.888] [POLL DEBUG] ═══ Poll #4 cycle starting for userId=50145776 ═══
+[17:19:06.888] [POLL DEBUG] GET https://flowlocked.com/api/desktop/poll?userId=50145776
+[17:19:07.474] [POLL DEBUG] Raw response body: {
+  "sessionId": "3878906c-6276-4899-92ac-7319315de686",
+  "joinedAt": "2026-04-21T09:18:57.648Z",
+  "active": true,
+  "pendingAlerts": [],
+  "distractingApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "allowedApps": [],
+  "blockedApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "blockedSites": [],
+  "ownAppDomains": [
+    "flowlocked.com",
+    "flowlocked.app",
+    "replit.com",
+    ".replit.dev",
+    ".repl.co",
+    "localhost"
+  ],
+  "noteTakingMode": true,
+  "nextPollMs": 3000
+}
+[17:19:07.474] [POLL DEBUG] Raw summary keys: sessionId=Some("3878906c-6276-4899-92ac-7319315de686") active=Some(true) kicked=None joinedAt=Some("2026-04-21T09:18:57.648Z") pendingAlerts_raw_present=true
+[17:19:07.474] [POLL DEBUG] pendingAlerts in raw JSON: []
+[17:19:07.474] [POLL DEBUG] Parsed OK — sessionId=Some("3878906c-6276-4899-92ac-7319315de686") pendingAlerts count=0 distractingApps count=45
+[17:19:07.474] [POLL DEBUG] Parsed extra: active=Some(true) kicked=false joinedAt=Some("2026-04-21T09:18:57.648Z") allowedApps count=0 blockedApps count=45 classroomAllowedApps count=0 classroomBlockedApps count=0 ownAppDomains count=6 whitelistModeApps=false whitelistModeWebsites=false whitelistApps count=0 whitelistWebsites count=0 requestImmediateAppReport=false
+[17:19:07.474] [POLL DEBUG] noteTakingMode=true (stored)
+[17:19:07.474] [POLL DEBUG] pendingAlerts=[] (empty)
+[17:19:07.475] [Detection] 🚀 start_detection called with userId=50145776, sessionId=3878906c-6276-4899-92ac-7319315de686
+[17:19:07.475] [Detection] ⚠️ Detection already running for same user+session — skipping start
+[17:19:07.475] [POLL DEBUG] ═══ Poll #4 complete in 596ms ═══
+[17:19:07.535] [Desktop Apps] foreground report: process=Google Chrome pid=473 foregroundApp="class from you huntuh - google docs" classify_target=Some("class from you huntuh - google docs")
+[17:19:07.535] [Detection] Distraction warning dismissed
+[17:19:07.794] [window-monitor] top-window-in-z-order pid=473 app="Google Chrome" title="class from you huntuh - Google Docs" size=1468x858 layer=0
+[17:19:07.910] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("class from you huntuh - google docs") sent="class from you huntuh - google docs"
+[17:19:08.376] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:08.380] [window_monitor] finalize-summary: pip_flag=false pip_recent=true recovery_eligible=false resolved_flow_surface=true recovery=false hist_entries=32 final_app="Google Chrome" final_title_len=41
+[17:19:08.380] [window-monitor] zwalk-pick: source=cgwindow_zwalk frontmost_pid=Some(473) picked_pid=473 picked_app="Google Chrome" title_prefix="Flowlocked – Focus & Accountability App" saw_pip=false skipped_pip_chain=false
+[17:19:08.380] [window_monitor] detection-fg: pid=473 app="Google Chrome" title_len=41 title_prefix="Flowlocked – Focus & Accountability App"
+[17:19:08.463] [Desktop Apps] foreground report: process=Google Chrome pid=473 foregroundApp="Google Chrome" classify_target=None
+[17:19:08.815] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:09.276] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:09.724] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:09.857] [POLL DEBUG] ═══ Poll #5 cycle starting for userId=50145776 ═══
+[17:19:09.857] [POLL DEBUG] GET https://flowlocked.com/api/desktop/poll?userId=50145776
+[17:19:10.085] [window-monitor] top-window-in-z-order pid=473 app="Google Chrome" title="Flowlocked – Focus & Accountability App" size=1468x858 layer=0
+[17:19:10.188] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:10.395] [POLL DEBUG] Raw response body: {
+  "sessionId": "3878906c-6276-4899-92ac-7319315de686",
+  "joinedAt": "2026-04-21T09:19:08.306Z",
+  "active": true,
+  "pendingAlerts": [],
+  "distractingApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "allowedApps": [],
+  "blockedApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "blockedSites": [],
+  "ownAppDomains": [
+    "flowlocked.com",
+    "flowlocked.app",
+    "replit.com",
+    ".replit.dev",
+    ".repl.co",
+    "localhost"
+  ],
+  "noteTakingMode": true,
+  "nextPollMs": 3000
+}
+[17:19:10.395] [POLL DEBUG] Raw summary keys: sessionId=Some("3878906c-6276-4899-92ac-7319315de686") active=Some(true) kicked=None joinedAt=Some("2026-04-21T09:19:08.306Z") pendingAlerts_raw_present=true
+[17:19:10.395] [POLL DEBUG] pendingAlerts in raw JSON: []
+[17:19:10.395] [POLL DEBUG] Parsed OK — sessionId=Some("3878906c-6276-4899-92ac-7319315de686") pendingAlerts count=0 distractingApps count=45
+[17:19:10.395] [POLL DEBUG] Parsed extra: active=Some(true) kicked=false joinedAt=Some("2026-04-21T09:19:08.306Z") allowedApps count=0 blockedApps count=45 classroomAllowedApps count=0 classroomBlockedApps count=0 ownAppDomains count=6 whitelistModeApps=false whitelistModeWebsites=false whitelistApps count=0 whitelistWebsites count=0 requestImmediateAppReport=false
+[17:19:10.395] [POLL DEBUG] noteTakingMode=true (stored)
+[17:19:10.395] [POLL DEBUG] pendingAlerts=[] (empty)
+[17:19:10.395] [Detection] 🚀 start_detection called with userId=50145776, sessionId=3878906c-6276-4899-92ac-7319315de686
+[17:19:10.395] [Detection] ⚠️ Detection already running for same user+session — skipping start
+[17:19:10.395] [POLL DEBUG] ═══ Poll #5 complete in 537ms ═══
+[17:19:10.683] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=None sent="Google Chrome"
+[17:19:11.009] [window_monitor] finalize-summary: pip_flag=false pip_recent=true recovery_eligible=false resolved_flow_surface=false recovery=false hist_entries=32 final_app="Google Chrome" final_title_len=24
+[17:19:11.009] [window-monitor] zwalk-pick: source=cgwindow_zwalk frontmost_pid=Some(473) picked_pid=473 picked_app="Google Chrome" title_prefix="Referral Program Pricing" saw_pip=false skipped_pip_chain=false
+[17:19:11.009] [window_monitor] detection-fg: pid=473 app="Google Chrome" title_len=24 title_prefix="Referral Program Pricing"
+[17:19:11.093] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("referral program pricing") sent="referral program pricing"
+[17:19:11.730] [Desktop Apps] foreground report: process=Google Chrome pid=473 foregroundApp="referral program pricing" classify_target=Some("referral program pricing")
+[17:19:12.093] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("referral program pricing") sent="referral program pricing"
+[17:19:12.097] [window-monitor] top-window-in-z-order pid=473 app="Google Chrome" title="Referral Program Pricing" size=1468x858 layer=0
+[17:19:12.544] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("referral program pricing") sent="referral program pricing"
+[17:19:12.859] [POLL DEBUG] ═══ Poll #6 cycle starting for userId=50145776 ═══
+[17:19:12.859] [POLL DEBUG] GET https://flowlocked.com/api/desktop/poll?userId=50145776
+[17:19:13.008] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("referral program pricing") sent="referral program pricing"
+[17:19:13.458] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("referral program pricing") sent="referral program pricing"
+[17:19:13.805] [window_monitor] finalize-summary: pip_flag=false pip_recent=false recovery_eligible=false resolved_flow_surface=false recovery=false hist_entries=32 final_app="Google Chrome" final_title_len=24
+[17:19:13.805] [window-monitor] zwalk-pick: source=cgwindow_zwalk frontmost_pid=Some(473) picked_pid=473 picked_app="Google Chrome" title_prefix="Referral Program Pricing" saw_pip=false skipped_pip_chain=false
+[17:19:13.805] [window_monitor] detection-fg: pid=473 app="Google Chrome" title_len=24 title_prefix="Referral Program Pricing"
+[17:19:13.999] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("referral program pricing") sent="referral program pricing"
+[17:19:14.011] [POLL DEBUG] Raw response body: {
+  "sessionId": "3878906c-6276-4899-92ac-7319315de686",
+  "joinedAt": "2026-04-21T09:19:08.306Z",
+  "active": true,
+  "pendingAlerts": [],
+  "distractingApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "allowedApps": [],
+  "blockedApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "blockedSites": [],
+  "ownAppDomains": [
+    "flowlocked.com",
+    "flowlocked.app",
+    "replit.com",
+    ".replit.dev",
+    ".repl.co",
+    "localhost"
+  ],
+  "noteTakingMode": true,
+  "nextPollMs": 3000
+}
+[17:19:14.011] [POLL DEBUG] Raw summary keys: sessionId=Some("3878906c-6276-4899-92ac-7319315de686") active=Some(true) kicked=None joinedAt=Some("2026-04-21T09:19:08.306Z") pendingAlerts_raw_present=true
+[17:19:14.011] [POLL DEBUG] pendingAlerts in raw JSON: []
+[17:19:14.011] [POLL DEBUG] Parsed OK — sessionId=Some("3878906c-6276-4899-92ac-7319315de686") pendingAlerts count=0 distractingApps count=45
+[17:19:14.011] [POLL DEBUG] Parsed extra: active=Some(true) kicked=false joinedAt=Some("2026-04-21T09:19:08.306Z") allowedApps count=0 blockedApps count=45 classroomAllowedApps count=0 classroomBlockedApps count=0 ownAppDomains count=6 whitelistModeApps=false whitelistModeWebsites=false whitelistApps count=0 whitelistWebsites count=0 requestImmediateAppReport=false
+[17:19:14.011] [POLL DEBUG] noteTakingMode=true (stored)
+[17:19:14.011] [POLL DEBUG] pendingAlerts=[] (empty)
+[17:19:14.011] [Detection] 🚀 start_detection called with userId=50145776, sessionId=3878906c-6276-4899-92ac-7319315de686
+[17:19:14.011] [Detection] ⚠️ Detection already running for same user+session — skipping start
+[17:19:14.011] [POLL DEBUG] ═══ Poll #6 complete in 1152ms ═══
+[17:19:14.327] [window-monitor] top-window-in-z-order pid=473 app="Google Chrome" title="ChatGPT" size=1468x858 layer=0
+[17:19:14.442] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("chatgpt") sent="chatgpt"
+[17:19:14.540] [Desktop Apps] foreground report: process=Google Chrome pid=473 foregroundApp="chatgpt" classify_target=Some("chatgpt")
+[17:19:14.904] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("chatgpt") sent="chatgpt"
+[17:19:15.356] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("pancake fatigue explained") sent="pancake fatigue explained"
+[17:19:15.859] [POLL DEBUG] ═══ Poll #7 cycle starting for userId=50145776 ═══
+[17:19:15.859] [POLL DEBUG] GET https://flowlocked.com/api/desktop/poll?userId=50145776
+[17:19:16.046] [Desktop Apps] foreground report: process=Google Chrome pid=473 foregroundApp="pancake fatigue explained" classify_target=Some("pancake fatigue explained")
+[17:19:16.047] [Detection] Distraction warning shown
+[17:19:16.048] [Detection] Warning triggered by local browser domain match
+[17:19:16.338] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("pancake fatigue explained") sent="pancake fatigue explained"
+[17:19:16.342] [window-monitor] top-window-in-z-order pid=473 app="Google Chrome" title="Pancake Fatigue Explained" size=1468x858 layer=0
+[17:19:16.342] [window_monitor] finalize-summary: pip_flag=false pip_recent=false recovery_eligible=false resolved_flow_surface=false recovery=false hist_entries=32 final_app="Google Chrome" final_title_len=25
+[17:19:16.342] [window-monitor] zwalk-pick: source=cgwindow_zwalk frontmost_pid=Some(21147) picked_pid=473 picked_app="Google Chrome" title_prefix="Pancake Fatigue Explained" saw_pip=false skipped_pip_chain=false
+[17:19:16.342] [window_monitor] detection-fg: pid=473 app="Google Chrome" title_len=25 title_prefix="Pancake Fatigue Explained"
+[17:19:16.389] [POLL DEBUG] Raw response body: {
+  "sessionId": "3878906c-6276-4899-92ac-7319315de686",
+  "joinedAt": "2026-04-21T09:19:08.306Z",
+  "active": true,
+  "pendingAlerts": [],
+  "distractingApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "allowedApps": [],
+  "blockedApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "blockedSites": [],
+  "ownAppDomains": [
+    "flowlocked.com",
+    "flowlocked.app",
+    "replit.com",
+    ".replit.dev",
+    ".repl.co",
+    "localhost"
+  ],
+  "noteTakingMode": true,
+  "nextPollMs": 3000
+}
+[17:19:16.389] [POLL DEBUG] Raw summary keys: sessionId=Some("3878906c-6276-4899-92ac-7319315de686") active=Some(true) kicked=None joinedAt=Some("2026-04-21T09:19:08.306Z") pendingAlerts_raw_present=true
+[17:19:16.389] [POLL DEBUG] pendingAlerts in raw JSON: []
+[17:19:16.389] [POLL DEBUG] Parsed OK — sessionId=Some("3878906c-6276-4899-92ac-7319315de686") pendingAlerts count=0 distractingApps count=45
+[17:19:16.389] [POLL DEBUG] Parsed extra: active=Some(true) kicked=false joinedAt=Some("2026-04-21T09:19:08.306Z") allowedApps count=0 blockedApps count=45 classroomAllowedApps count=0 classroomBlockedApps count=0 ownAppDomains count=6 whitelistModeApps=false whitelistModeWebsites=false whitelistApps count=0 whitelistWebsites count=0 requestImmediateAppReport=false
+[17:19:16.389] [POLL DEBUG] noteTakingMode=true (stored)
+[17:19:16.389] [POLL DEBUG] pendingAlerts=[] (empty)
+[17:19:16.389] [Detection] 🚀 start_detection called with userId=50145776, sessionId=3878906c-6276-4899-92ac-7319315de686
+[17:19:16.389] [Detection] ⚠️ Detection already running for same user+session — skipping start
+[17:19:16.389] [POLL DEBUG] ═══ Poll #7 complete in 529ms ═══
+[17:19:16.742] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("pancake fatigue explained") sent="pancake fatigue explained"
+[17:19:16.760] [macOS] force_show_window on main thread: level=25 + orderFrontRegardless for distraction-warning
+[17:19:17.149] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("pancake fatigue explained") sent="pancake fatigue explained"
+[17:19:17.265] [macOS] Reverted to Accessory policy (main thread)
+[17:19:17.532] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("pancake fatigue explained") sent="pancake fatigue explained"
+[17:19:18.043] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("pancake fatigue explained") sent="pancake fatigue explained"
+[17:19:18.382] [window-monitor] top-window-in-z-order pid=473 app="Google Chrome" title="class from you huntuh - Google Docs" size=1468x858 layer=0
+[17:19:18.471] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("class from you huntuh - google docs") sent="class from you huntuh - google docs"
+[17:19:18.574] [Desktop Apps] foreground report: process=Google Chrome pid=473 foregroundApp="class from you huntuh - google docs" classify_target=Some("class from you huntuh - google docs")
+[17:19:18.575] [Detection] Distraction warning dismissed
+[17:19:18.934] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("class from you huntuh - google docs") sent="class from you huntuh - google docs"
+[17:19:18.936] [window_monitor] finalize-summary: pip_flag=false pip_recent=false recovery_eligible=false resolved_flow_surface=false recovery=false hist_entries=32 final_app="Google Chrome" final_title_len=35
+[17:19:18.936] [window-monitor] zwalk-pick: source=cgwindow_zwalk frontmost_pid=Some(473) picked_pid=473 picked_app="Google Chrome" title_prefix="class from you huntuh - Google Docs" saw_pip=false skipped_pip_chain=false
+[17:19:18.936] [window_monitor] detection-fg: pid=473 app="Google Chrome" title_len=35 title_prefix="class from you huntuh - Google Docs"
+[17:19:19.393] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("class from you huntuh - google docs") sent="class from you huntuh - google docs"
+[17:19:19.607] [POLL DEBUG] ═══ Poll #8 cycle starting for userId=50145776 ═══
+[17:19:19.607] [POLL DEBUG] GET https://flowlocked.com/api/desktop/poll?userId=50145776
+[17:19:19.838] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("class from you huntuh - google docs") sent="class from you huntuh - google docs"
+[17:19:20.150] [POLL DEBUG] Raw response body: {
+  "sessionId": "3878906c-6276-4899-92ac-7319315de686",
+  "joinedAt": "2026-04-21T09:19:08.306Z",
+  "active": true,
+  "pendingAlerts": [],
+  "distractingApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "allowedApps": [],
+  "blockedApps": [
+    "discord",
+    "slack",
+    "telegram",
+    "whatsapp",
+    "messenger",
+    "signal",
+    "twitter",
+    "x.com",
+    "instagram",
+    "facebook",
+    "tiktok",
+    "snapchat",
+    "reddit",
+    "tumblr",
+    "pinterest",
+    "youtube",
+    "netflix",
+    "twitch",
+    "hulu",
+    "disney+",
+    "steam",
+    "epic games",
+    "battle.net",
+    "origin",
+    "gog galaxy",
+    "imessage",
+    "messages",
+    "facetime",
+    "amazon",
+    "ebay",
+    "etsy",
+    "aliexpress",
+    "wish",
+    "shein",
+    "temu",
+    "walmart",
+    "target",
+    "bestbuy",
+    "costco",
+    "wayfair",
+    "zappos",
+    "mercari",
+    "poshmark",
+    "depop",
+    "stockx"
+  ],
+  "blockedSites": [],
+  "ownAppDomains": [
+    "flowlocked.com",
+    "flowlocked.app",
+    "replit.com",
+    ".replit.dev",
+    ".repl.co",
+    "localhost"
+  ],
+  "noteTakingMode": true,
+  "nextPollMs": 3000
+}
+[17:19:20.151] [POLL DEBUG] Raw summary keys: sessionId=Some("3878906c-6276-4899-92ac-7319315de686") active=Some(true) kicked=None joinedAt=Some("2026-04-21T09:19:08.306Z") pendingAlerts_raw_present=true
+[17:19:20.151] [POLL DEBUG] pendingAlerts in raw JSON: []
+[17:19:20.151] [POLL DEBUG] Parsed OK — sessionId=Some("3878906c-6276-4899-92ac-7319315de686") pendingAlerts count=0 distractingApps count=45
+[17:19:20.151] [POLL DEBUG] Parsed extra: active=Some(true) kicked=false joinedAt=Some("2026-04-21T09:19:08.306Z") allowedApps count=0 blockedApps count=45 classroomAllowedApps count=0 classroomBlockedApps count=0 ownAppDomains count=6 whitelistModeApps=false whitelistModeWebsites=false whitelistApps count=0 whitelistWebsites count=0 requestImmediateAppReport=false
+[17:19:20.151] [POLL DEBUG] noteTakingMode=true (stored)
+[17:19:20.151] [POLL DEBUG] pendingAlerts=[] (empty)
+[17:19:20.151] [Detection] 🚀 start_detection called with userId=50145776, sessionId=3878906c-6276-4899-92ac-7319315de686
+[17:19:20.151] [Detection] ⚠️ Detection already running for same user+session — skipping start
+[17:19:20.151] [POLL DEBUG] ═══ Poll #8 complete in 543ms ═══
+[17:19:20.286] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("class from you huntuh - google docs") sent="class from you huntuh - google docs"
+[17:19:20.630] [window-monitor] top-window-in-z-order pid=473 app="Google Chrome" title="class from you huntuh - Google Docs" size=1468x858 layer=0
+[17:19:20.718] [Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("class from you huntuh - google docs") sent="class from you huntuh - google docs"
+[17:19:20.978] [Desktop Apps] foregroundApp computed: process=Terminal url_bar_or_title_domain=None sent="Terminal"
+[17:19:21.497] [Desktop Apps] foreground report: process=Terminal pid=82984 foregroundApp="Terminal" classify_target=None
+[17:19:21.756] [window_monitor] finalize-summary: pip_flag=false pip_recent=false recovery_eligible=false resolved_flow_surface=true recovery=false hist_entries=32 final_app="Terminal" final_title_len=33
+[17:19:21.756] [window-monitor] zwalk-pick: source=cgwindow_zwalk frontmost_pid=Some(82984) picked_pid=82984 picked_app="Terminal" title_prefix="FocusTogether — -zsh — 80×24" saw_pip=false skipped_pip_chain=false
+[17:19:21.756] [window_monitor] detection-fg: pid=82984 app="Terminal" title_len=33 title_prefix="FocusTogether — -zsh — 80×24"
+[17:19:21.756] [Desktop Apps] foregroundApp computed: process=Terminal url_bar_or_title_domain=None sent="Terminal"
+[17:19:22.011] [Desktop Apps] foregroundApp computed: process=Terminal url_bar_or_title_domain=None sent="Terminal"
+[17:19:22.269] [Desktop Apps] foregroundApp computed: process=Terminal url_bar_or_title_domain=None sent="Terminal"
+[17:19:22.527] [Desktop Apps] foregroundApp computed: process=Terminal url_bar_or_title_domain=None sent="Terminal"
+[17:19:22.782] [Desktop Apps] foregroundApp computed: process=Terminal url_bar_or_title_domain=None sent="Terminal"
+[17:19:23.038] [Desktop Apps] foregroundApp computed: process=Terminal url_bar_or_title_domain=None sent="Terminal"
