@@ -415,6 +415,46 @@ return ""
         }
     }
 
+    fn try_system_events_address_bar_for_window(pid: u32, one_based_window_index: usize) -> Option<String> {
+        let script = format!(
+            r#"
+tell application "System Events"
+    set targetProc to first application process whose unix id is {pid}
+    set targetWindow to window {win_idx} of targetProc
+    set candidateDescriptions to {{"Address and search bar", "Search or enter address"}}
+    repeat with d in candidateDescriptions
+        try
+            set v to value of first text field of first UI element of targetWindow whose description is (contents of d)
+            if v is not missing value and v is not "" then return v
+        end try
+    end repeat
+    try
+        set v2 to value of first text field of first UI element of targetWindow whose identifier is "WEB_BROWSER_ADDRESS_AND_SEARCH_BAR"
+        if v2 is not missing value and v2 is not "" then return v2
+    end try
+end tell
+return ""
+"#,
+            pid = pid,
+            win_idx = one_based_window_index
+        );
+
+        let output = Command::new("osascript").arg("-e").arg(script).output().ok()?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            if !err.trim().is_empty() {
+                println!("[browser_url] pid={} window_idx={} System Events stderr: {}", pid, one_based_window_index - 1, err.trim());
+            }
+            return None;
+        }
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    }
+
     fn try_system_events_window_titles(pid: u32) -> Vec<String> {
         let script = format!(
             r#"
@@ -571,6 +611,36 @@ If YouTube still fails: also enable Automation for Flowlocked on your browser (C
         if let Some(url) = try_system_events_address_bar(pid) {
             println!("[Browser URL] Resolved URL via System Events / address bar");
             return Some(url);
+        }
+
+        // PiP-aware fallback: when the topmost browser-owned window is Flowlocked PiP,
+        // the front-window address-bar lookup can fail. Walk windows front-to-back and
+        // attempt address-bar read for each non-PiP window.
+        if crate::window_monitor::pip_recently_open() {
+            let titles = try_system_events_window_titles(pid);
+            for (idx, title) in titles.iter().enumerate() {
+                if is_flowlocked_pip_title(title) {
+                    println!(
+                        "[browser_url] pid={} attempt window_idx={} title={:?} url_bar=None (skipped Flowlocked PiP title)",
+                        pid,
+                        idx,
+                        title
+                    );
+                    continue;
+                }
+                let url = try_system_events_address_bar_for_window(pid, idx + 1);
+                let domain = url.as_deref().and_then(super::extract_domain);
+                println!(
+                    "[browser_url] pid={} attempt window_idx={} title={:?} url_bar={:?}",
+                    pid,
+                    idx,
+                    title,
+                    domain
+                );
+                if let Some(u) = url {
+                    return Some(u);
+                }
+            }
         }
 
         println!("[Browser URL] ⚠️ Could not read browser URL — enable Automation (browser) and/or Accessibility (Flowlocked)");
