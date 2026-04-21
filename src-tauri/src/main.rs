@@ -23,17 +23,17 @@ static LAST_BROWSER_TITLE_BY_PID: OnceLock<Mutex<HashMap<u32, (String, std::time
     OnceLock::new();
 const BROWSER_TITLE_CACHE_TTL: std::time::Duration = std::time::Duration::from_millis(1500);
 
-static LAST_BROWSER_DOMAIN_BY_PID: OnceLock<Mutex<HashMap<u32, (String, std::time::Instant)>>> =
+static LAST_BROWSER_TARGET_BY_PID: OnceLock<Mutex<HashMap<u32, (String, std::time::Instant)>>> =
     OnceLock::new();
-/// How long to trust the last successfully URL-bar-read domain after a subsequent
+/// How long to trust the last successfully URL-bar-read browser target after a subsequent
 /// read times out. Long enough to span the 250 ms read timeout and a couple of
 /// detection ticks, short enough that real navigations replace the value almost
 /// immediately. Without this cache, sites whose tab title contains no domain
 /// (single-page games / apps like jcw87.github.io/c2-sans-fight/) flicker the
 /// orange distraction popup as the URL read alternates success/timeout.
-const BROWSER_DOMAIN_CACHE_TTL: std::time::Duration = std::time::Duration::from_millis(3000);
-fn browser_domain_cache_lock() -> &'static Mutex<HashMap<u32, (String, std::time::Instant)>> {
-    LAST_BROWSER_DOMAIN_BY_PID.get_or_init(|| Mutex::new(HashMap::new()))
+const BROWSER_TARGET_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+fn browser_target_cache_lock() -> &'static Mutex<HashMap<u32, (String, std::time::Instant)>> {
+    LAST_BROWSER_TARGET_BY_PID.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn last_classify_at_lock() -> &'static Mutex<Option<std::time::Instant>> {
@@ -986,7 +986,7 @@ fn resolve_focused_browser_domain_with_source(
     pid: u32,
 ) -> Option<(String, bool)> {
     if !is_browser(app_name) {
-        if let Ok(mut cache) = browser_domain_cache_lock().lock() {
+        if let Ok(mut cache) = browser_target_cache_lock().lock() {
             cache.remove(&pid);
         }
         return None;
@@ -1004,8 +1004,10 @@ fn resolve_focused_browser_domain_with_source(
         Some(app_name),
     ) {
         if foreground_pid_still_matches(pid) {
-            if let Ok(mut cache) = browser_domain_cache_lock().lock() {
-                cache.insert(pid, (d.clone(), std::time::Instant::now()));
+            if looks_like_hostname_target(&d) {
+                if let Ok(mut cache) = browser_target_cache_lock().lock() {
+                    cache.insert(pid, (d.clone(), std::time::Instant::now()));
+                }
             }
             return Some((d, false));
         }
@@ -1014,10 +1016,18 @@ fn resolve_focused_browser_domain_with_source(
     // URL bar read timed out / unavailable. Prefer the most recent successfully
     // read domain for this PID (within TTL) over title-based heuristics, so that
     // sites whose window title contains no domain don't oscillate the warning.
-    if let Ok(mut cache) = browser_domain_cache_lock().lock() {
+    if let Ok(mut cache) = browser_target_cache_lock().lock() {
         if let Some((cached_domain, at)) = cache.get(&pid).cloned() {
-            if at.elapsed() <= BROWSER_DOMAIN_CACHE_TTL {
-                if foreground_pid_still_matches(pid) {
+            if at.elapsed() <= BROWSER_TARGET_CACHE_TTL {
+                let pip_overlay_active = window_monitor::pip_recently_open();
+                if foreground_pid_still_matches(pid) || pip_overlay_active {
+                    log!(
+                        "[Desktop Apps] reusing cached browser target for pid={}: {} (age {}ms, pip_overlay_active={})",
+                        pid,
+                        cached_domain,
+                        at.elapsed().as_millis(),
+                        pip_overlay_active
+                    );
                     return Some((cached_domain, false));
                 }
             } else {
@@ -2931,7 +2941,7 @@ fn stop_detection(app_handle: &tauri::AppHandle) {
     
     DETECTION_RUNNING.store(false, Ordering::SeqCst);
 
-    if let Ok(mut cache) = browser_domain_cache_lock().lock() {
+    if let Ok(mut cache) = browser_target_cache_lock().lock() {
         cache.clear();
     }
 
