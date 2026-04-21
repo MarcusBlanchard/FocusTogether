@@ -1126,16 +1126,17 @@ fn resolved_browser_window_title(app_name: &str, window_title: &str, pid: u32) -
     title
 }
 
-/// `foregroundApp` for POST `/api/desktop/apps`: stripped OS window title for browsers; app name for native.
+/// `foregroundApp` for POST `/api/desktop/apps`: browser domain target when available; app name otherwise.
 fn foreground_app_for_desktop_apps_api(app_name: &str, window_title: &str, pid: u32) -> String {
+    let domain_target = if is_browser(app_name) {
+        effective_foreground_browser_target(app_name, window_title, pid)
+    } else {
+        None
+    };
     let mut out = if is_browser(app_name) {
-        let resolved_title = resolved_browser_window_title(app_name, window_title, pid);
-        let s = browser_title_target::stripped_tab_title_for_desktop_apps(&resolved_title);
-        if s.is_empty() {
-            app_name.to_string()
-        } else {
-            s
-        }
+        domain_target
+            .clone()
+            .unwrap_or_else(|| app_name.to_string())
     } else {
         app_name.to_string()
     };
@@ -1143,6 +1144,12 @@ fn foreground_app_for_desktop_apps_api(app_name: &str, window_title: &str, pid: 
         log!("[Desktop Apps] dropped PiP title at API boundary");
         out = app_name.to_string();
     }
+    log!(
+        "[Desktop Apps] foregroundApp computed: process={} url_bar_or_title_domain={:?} sent={:?}",
+        app_name,
+        domain_target.as_deref(),
+        out.as_str()
+    );
     out
 }
 
