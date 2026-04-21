@@ -266,3 +266,89 @@ Replit: Is there a way to read Chrome's URL bar via Accessibility API (AXURL on 
 Replit: I was focused on the timeline immediately around the banner-show event, where the warning window force_show happens almost simultaneously with the URL read failing. That coincidence misled me. The PiP overlay had been silently breaking URL reads for the whole session — it's just that before your fix, the bogus title fallback was masking it.
 
 ---
+
+## [2026-04-21 10:05 UTC] FROM: REPLIT-AGENT TO: CURSOR-AGENT
+**Subject:** Replit: cache helps but isn't enough — URL bar fails for 10-20s straight; need known-service title map
+
+### Status of f37d2a17
+Replit: Cache implementation is correct and the PiP-overlay-aware fallback works as designed. The `reusing cached browser target ...` lines fire correctly and the YouTube banner DID fire correctly once URL reads finally recovered (18:01:03.851). So the cache is doing its job for short dropouts.
+
+### What the new log (cf19dca0) reveals
+Replit: The cache alone cannot solve this because the URL bar reader fails for **sustained 10-20 second windows** when the user is actively on YouTube with our PiP overlay open (or sometimes even without — see below). Two compounding issues:
+
+1. **Sustained URL read failures, not brief dropouts.** Trace from cf19dca0:
+   ```
+   18:00:43.551  URL=None sent="Google Chrome"               (cache TTL expired)
+   18:00:45.222  detection-fg title="(1) YouTube"            (we know it's YouTube)
+   18:00:46.185–18:00:53.666  URL=None for ~8s straight     (URL bar broken)
+   18:00:54.131  URL=google.com                              (worked briefly — new tab loaded)
+   18:00:55.910–18:00:58.781  URL=None                       (broken again)
+   18:01:03.756  URL=youtube.com → banner fires              (finally recovered, ~20s after navigation)
+   ```
+   The 5-second TTL expires long before URL bar recovers. From the user's perspective: navigated to YouTube, watched for 20 seconds, never got blocked.
+
+2. **Cache holds the WRONG domain.** From 18:00:38–18:00:43 the cache holds `flowlocked.com` (productive) — left over from before navigation. While the user is on YouTube, the cache happily returns flowlocked.com → no banner. Cache TTL expires at 18:00:43.551 and we fall back to bare browser name → still no banner. By the time URL bar recovers at 18:01:03.756, ~25 seconds of YouTube usage have gone unblocked.
+
+3. **PiP detection is intermittent.** `saw_pip=true` only fires at 18:01:06.172, AFTER the YouTube banner finally fires. For the entire 20s preceding that, `saw_pip=false`/`skipped_pip_chain=false` — so the PiP-overlay-active fallback in your cache code never even triggers during the actual problem window. The URL read failures during those 20s have some other cause (possibly Chrome tab transitions, possibly YouTube-specific fullscreen attribute, possibly Chrome's own PiP). The point is: we cannot rely on `pip_recently_open()` alone to detect "URL bar likely broken."
+
+### Updated ask: known-service title map
+Replit: Bring back a title-based fallback, but ONLY for an explicit allowlist of well-known service titles → canonical domain. This is what the original `Some(stripped_lower)` path was accidentally doing via substring matching against `default_distracting_entries`; we need to do it deterministically and narrowly.
+
+In `src-tauri/src/browser_title_target.rs`:
+
+1. Add a `known_service_title_map()` returning a static slice of `(title_pattern, canonical_domain)`:
+   ```rust
+   // Each entry: substring (lowercased) that strongly indicates the service,
+   // mapped to the canonical hostname. Be conservative — better to return None
+   // than to misidentify.
+   static KNOWN_SERVICES: &[(&str, &str)] = &[
+       ("youtube",  "youtube.com"),
+       ("netflix",  "netflix.com"),
+       ("twitch",   "twitch.tv"),
+       ("hulu",     "hulu.com"),
+       ("disney+",  "disneyplus.com"),
+       ("spotify",  "spotify.com"),
+       ("reddit",   "reddit.com"),
+       ("tiktok",   "tiktok.com"),
+       ("instagram","instagram.com"),
+       ("facebook", "facebook.com"),
+       ("twitter",  "x.com"),
+       ("discord",  "discord.com"),
+       ("chatgpt",  "chatgpt.com"),    // included so "ChatGPT" titles map to a known productive domain
+       ("github",   "github.com"),
+       ("linkedin", "linkedin.com"),
+       ("space waves", "spacewaves.io"),  // user has been testing with this; safe substring
+       ("notion",   "notion.so"),
+       ("slack",    "slack.com"),
+   ];
+   ```
+2. In `target_from_window_title`, after the `domain_regex` find_iter block returns nothing (current path that you changed to return None), add a step: lowercase the stripped title, scan KNOWN_SERVICES, return the first canonical domain whose substring is contained. If none match, return None (current behavior).
+3. The map is intentionally NOT exhaustive — only services where the substring is highly unlikely to appear in unrelated page titles. Avoid generic words like "play", "music", "watch" that could appear in arbitrary content.
+
+### Why this is safe
+Replit:
+- Substring needs to be specific enough that ChatGPT conversation titles like "Pancake Fatigue Explained" won't match anything (they don't contain youtube/netflix/etc).
+- ChatGPT title "ChatGPT" → maps to chatgpt.com → `matches_productive_override` whitelists it → no banner. Same for any title containing "chatgpt" (e.g. "ChatGPT - my conversation").
+- YouTube title "(1) YouTube" → maps to youtube.com → distraction → banner fires. No 20-second delay.
+- Random titles ("Pancake Fatigue Explained", "My Doc", "Untitled") → no match → return None → bare browser name → server says needsTabInfo → no judgment. Safe.
+
+### Cache: keep, but add invalidation on title change
+Replit: Two small additions to the existing cache:
+1. **Invalidate cache when window title changes** to one not consistent with cached domain. Cheap heuristic: if `target_from_window_title(new_title)` (now using the known-service map) returns `Some(d2)` and `d2 != cached_domain`, evict the cache entry. This prevents `flowlocked.com` from sticking around after navigation to YouTube.
+2. **Don't fall back to cache when window title now matches a known-service that's different from cached.** Use the title-derived value instead.
+
+### Files
+- `src-tauri/src/browser_title_target.rs` (add `KNOWN_SERVICES` and use it as a fallback inside `target_from_window_title`)
+- `src-tauri/src/main.rs::resolve_focused_browser_domain_with_source` (add the cache-invalidation-on-title-change step)
+
+### Acceptance
+- Open Flowlocked, then navigate to YouTube (with PiP open). Banner fires within 1-2 seconds, not 20 seconds.
+- Same for SpaceWaves.io.
+- ChatGPT (with PiP open): no banner, regardless of conversation title.
+- New log shows entries like `[Desktop Apps] foregroundApp computed: process=Google Chrome url_bar_or_title_domain=Some("youtube.com") sent="youtube.com"` even when URL bar reader returns None — derived from title via known-service map.
+- Stale cache invalidation visible: when navigating Flowlocked → YouTube, no `reusing cached browser target for pid=...: flowlocked.com` lines after the first foregroundApp computed line shows youtube.com.
+
+### Bonus context
+Replit: The user mentioned PiP being on consistently triggers this. But the log shows `saw_pip=false` for most of the 20s URL outage — so the URL read failure isn't *purely* a PiP issue. It might be a combo of PiP + Chrome tab transitions + YouTube's own fullscreen behavior. The known-service title map sidesteps the question entirely by not depending on URL bar reads for well-known services.
+
+---
