@@ -252,6 +252,15 @@ mod macos {
         s.replace('"', "'").replace('\n', "\\n")
     }
 
+    #[derive(Debug)]
+    struct WindowMatchSummary {
+        pass: String,
+        matched_title: String,
+        matched_url: String,
+        total_windows: usize,
+        skipped_about_blank: usize,
+    }
+
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXIsProcessTrustedWithOptions(theDict: *const c_void) -> bool;
@@ -262,15 +271,89 @@ mod macos {
     }
 
     /// Chromium-style URL via AppleScript (Chrome, Brave, Edge, Vivaldi, Opera, Arc).
+    /// Prefers a window whose active tab title matches the picked foreground title and
+    /// skips document-PiP `about:blank` windows before falling back to front window.
     fn script_chromium_like(app_bundle_name: &str) -> String {
         format!(
             r#"
+on run argv
+    set targetTitle to ""
+    if (count of argv) > 0 then set targetTitle to item 1 of argv
+    set matchedPass to "none"
+    set matchedTitle to "-"
+    set matchedUrl to ""
+    set totalWindows to 0
+    set skippedAboutBlank to 0
+
 tell application "{app_bundle_name}"
-    if (count of windows) > 0 then
-        return URL of active tab of front window
+    set totalWindows to (count of windows)
+    if totalWindows is 0 then
+        return "none" & linefeed & "-" & linefeed & "" & linefeed & "0" & linefeed & "0"
+    end if
+
+    if targetTitle is not "" and targetTitle is not "-" then
+        repeat with w in windows
+            try
+                set t to title of active tab of w
+                set u to URL of active tab of w
+                if u starts with "about:" then
+                    set skippedAboutBlank to skippedAboutBlank + 1
+                else if t is targetTitle then
+                    set matchedPass to "1"
+                    set matchedTitle to t
+                    set matchedUrl to u
+                    exit repeat
+                end if
+            end try
+        end repeat
+    end if
+
+    if matchedUrl is "" and targetTitle is not "" and targetTitle is not "-" then
+        repeat with w in windows
+            try
+                set t to title of active tab of w
+                set u to URL of active tab of w
+                if u starts with "about:" then
+                    set skippedAboutBlank to skippedAboutBlank + 1
+                else if (t contains targetTitle) or (targetTitle contains t) then
+                    set matchedPass to "2"
+                    set matchedTitle to t
+                    set matchedUrl to u
+                    exit repeat
+                end if
+            end try
+        end repeat
+    end if
+
+    if matchedUrl is "" then
+        repeat with w in windows
+            try
+                set t to title of active tab of w
+                set u to URL of active tab of w
+                if u starts with "about:" then
+                    set skippedAboutBlank to skippedAboutBlank + 1
+                else
+                    set matchedPass to "3"
+                    set matchedTitle to t
+                    set matchedUrl to u
+                    exit repeat
+                end if
+            end try
+        end repeat
+    end if
+
+    if matchedUrl is "" then
+        set matchedPass to "fallback"
+        try
+            set matchedTitle to title of active tab of front window
+        end try
+        try
+            set matchedUrl to URL of active tab of front window
+        end try
     end if
 end tell
-return ""
+return matchedPass & linefeed & matchedTitle & linefeed & matchedUrl & linefeed & (totalWindows as text) & linefeed & (skippedAboutBlank as text)
+end run
 "#,
             app_bundle_name = app_bundle_name
         )
@@ -315,35 +398,58 @@ return ""
 
     /// Try each browser's native AppleScript — reads the real tab URL (incognito too). Uses
     /// Automation permission for that browser (System Settings → Privacy & Security → Automation).
-    fn try_native_browser_url(app_name: &str) -> Option<String> {
+    fn parse_window_match_summary(raw: &str) -> Option<WindowMatchSummary> {
+        let mut lines = raw.lines();
+        let pass = lines.next()?.trim().to_string();
+        let matched_title = lines.next().unwrap_or("-").trim().to_string();
+        let matched_url = lines.next().unwrap_or("").trim().to_string();
+        let total_windows = lines
+            .next()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let skipped_about_blank = lines
+            .next()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        Some(WindowMatchSummary {
+            pass,
+            matched_title,
+            matched_url,
+            total_windows,
+            skipped_about_blank,
+        })
+    }
+
+    fn try_native_browser_url(app_name: &str, picked_title: Option<&str>) -> Option<String> {
         let l = app_name.to_lowercase();
-        let script: String = if l.contains("safari") && !l.contains("technology") {
-            script_safari().to_string()
+        let (script, is_chromium_like): (String, bool) = if l.contains("safari") && !l.contains("technology") {
+            (script_safari().to_string(), false)
         } else if l.contains("chromium") {
-            script_chromium_like("Chromium")
+            (script_chromium_like("Chromium"), true)
         } else if l.contains("google chrome") || l == "chrome" {
-            script_chromium_like("Google Chrome")
+            (script_chromium_like("Google Chrome"), true)
         } else if l.contains("brave") {
-            script_chromium_like("Brave Browser")
+            (script_chromium_like("Brave Browser"), true)
         } else if l.contains("microsoft edge") || l == "edge" {
-            script_chromium_like("Microsoft Edge")
+            (script_chromium_like("Microsoft Edge"), true)
         } else if l.contains("vivaldi") {
-            script_chromium_like("Vivaldi")
+            (script_chromium_like("Vivaldi"), true)
         } else if l.contains("opera") {
-            script_chromium_like("Opera")
+            (script_chromium_like("Opera"), true)
         } else if l.contains("arc") {
-            script_chromium_like("Arc")
+            (script_chromium_like("Arc"), true)
         } else if l.contains("chrome") {
-            script_chromium_like("Google Chrome")
+            (script_chromium_like("Google Chrome"), true)
         } else {
             return None;
         };
 
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .output()
-            .ok()?;
+        let mut cmd = Command::new("osascript");
+        cmd.arg("-e").arg(&script);
+        if is_chromium_like {
+            cmd.arg(picked_title.unwrap_or("-"));
+        }
+        let output = cmd.output().ok()?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
             if err.contains("not allowed") || err.contains("(-1743)") {
@@ -358,7 +464,34 @@ System Settings → Privacy & Security → Automation to control this browser (o
         }
         let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if value.is_empty() {
+            if is_chromium_like {
+                super::emit_browser_url_log(
+                    "[browser_url] window_match pass=none matched_title=\"-\" matched_url_prefix=\"-\" total_windows=0 skipped_about_blank=0".to_string(),
+                );
+            }
             None
+        } else if is_chromium_like {
+            if let Some(summary) = parse_window_match_summary(&value) {
+                let prefix: String = browser_url_escape(&summary.matched_url).chars().take(40).collect();
+                super::emit_browser_url_log(format!(
+                    "[browser_url] window_match pass={} matched_title=\"{}\" matched_url_prefix=\"{}\" total_windows={} skipped_about_blank={}",
+                    summary.pass,
+                    browser_url_escape(&summary.matched_title),
+                    prefix,
+                    summary.total_windows,
+                    summary.skipped_about_blank
+                ));
+                if summary.matched_url.is_empty() {
+                    None
+                } else {
+                    Some(summary.matched_url)
+                }
+            } else {
+                super::emit_browser_url_log(
+                    "[browser_url] window_match pass=parse_failed matched_title=\"-\" matched_url_prefix=\"-\" total_windows=0 skipped_about_blank=0".to_string(),
+                );
+                None
+            }
         } else {
             Some(value)
         }
@@ -652,7 +785,7 @@ return ""
             pid
         ));
         let native_started = Instant::now();
-        if let Some(url) = try_native_browser_url(app_name) {
+        if let Some(url) = try_native_browser_url(app_name, picked_title) {
             let raw_prefix: String = browser_url_escape(&url).chars().take(40).collect();
             super::emit_browser_url_log(format!(
                 "[browser_url] result strategy=native_applescript outcome=ok raw_len={} raw_prefix=\"{}\" elapsed_ms={}",
