@@ -1055,6 +1055,7 @@ fn resolve_focused_browser_domain_with_source(
         pid,
         url_read_timeout,
         Some(app_name),
+        Some(title),
     ) {
         if foreground_pid_still_matches(pid) {
             if looks_like_hostname_target(&d) {

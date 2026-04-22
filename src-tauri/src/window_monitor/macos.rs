@@ -298,7 +298,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     if FIRST_RUN.swap(false, Ordering::SeqCst) {
         let granted = screen_recording_granted();
         crate::diagnostic_log::emit_console_and_file(format!(
-            "[window-monitor] build=164 skip-pip path active; screen_recording_granted={}",
+            "[window-monitor] build=165 skip-pip path active; screen_recording_granted={}",
             granted
         ));
         crate::diagnostic_log::emit_console_and_file(
