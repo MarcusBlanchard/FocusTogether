@@ -7,6 +7,7 @@
 use user_idle::UserIdle;
 use tauri::Manager;
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
@@ -17,6 +18,18 @@ mod browser_url;
 mod browser_title_target;
 mod diagnostic_log;
 mod window_monitor;
+
+thread_local! {
+    static DESKTOP_FG_BRANCH_OVERRIDE: Cell<Option<&'static str>> = Cell::new(None);
+}
+
+fn take_desktop_fg_branch_override() -> Option<&'static str> {
+    DESKTOP_FG_BRANCH_OVERRIDE.with(|c| {
+        let out = c.get();
+        c.set(None);
+        out
+    })
+}
 
 static LAST_CLASSIFY_AT: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
 static LAST_BROWSER_TITLE_BY_PID: OnceLock<Mutex<HashMap<u32, (String, std::time::Instant)>>> =
@@ -1047,7 +1060,18 @@ fn resolve_focused_browser_domain_with_source(
             if looks_like_hostname_target(&d) {
                 if let Ok(mut cache) = browser_target_cache_lock().lock() {
                     cache.insert(pid, (d.clone(), std::time::Instant::now()));
+                    log!(
+                        "[btcache] insert pid={} domain={} source_strategy=url_bar_read",
+                        pid,
+                        d
+                    );
                 }
+            } else {
+                log!(
+                    "[btcache] insert_skipped pid={} raw_value=\"{}\" reason=failed_hostname_check",
+                    pid,
+                    d.replace('"', "'")
+                );
             }
             return Some((d, false));
         }
@@ -1057,21 +1081,63 @@ fn resolve_focused_browser_domain_with_source(
     // read domain for this PID (within TTL) over title-based heuristics, so that
     // sites whose window title contains no domain don't oscillate the warning.
     if let Ok(mut cache) = browser_target_cache_lock().lock() {
-        if let Some((cached_domain, at)) = cache.get(&pid).cloned() {
-            if at.elapsed() <= BROWSER_TARGET_CACHE_TTL {
-                let pip_overlay_active = window_monitor::pip_recently_open();
-                if foreground_pid_still_matches(pid) || pip_overlay_active {
+        match cache.get(&pid).cloned() {
+            None => {
+                log!(
+                    "[btcache] lookup pid={} result=miss reason=no_entry",
+                    pid
+                );
+            }
+            Some((cached_domain, at)) => {
+                let age_ms = at.elapsed().as_millis() as u64;
+                let ttl_ms = BROWSER_TARGET_CACHE_TTL.as_millis() as u64;
+                if at.elapsed() > BROWSER_TARGET_CACHE_TTL {
                     log!(
-                        "[Desktop Apps] reusing cached browser target for pid={}: {} (age {}ms, pip_overlay_active={})",
+                        "[btcache] expire pid={} domain={} age_ms={}",
                         pid,
                         cached_domain,
-                        at.elapsed().as_millis(),
-                        pip_overlay_active
+                        age_ms
                     );
-                    return Some((cached_domain, false));
+                    cache.remove(&pid);
+                    log!(
+                        "[btcache] lookup pid={} result=miss reason=expired_age_ms={}",
+                        pid,
+                        age_ms
+                    );
+                } else {
+                    let ttl_remaining_ms = ttl_ms.saturating_sub(age_ms);
+                    let pip_overlay_active =
+                        window_monitor::pip_recently_open_traced("btcache_grace");
+                    if foreground_pid_still_matches(pid) || pip_overlay_active {
+                        let reuse_reason = if foreground_pid_still_matches(pid) {
+                            "pid_match"
+                        } else {
+                            "pip_recent_grace"
+                        };
+                        log!(
+                            "[btcache] lookup pid={} result=hit domain={} age_ms={} ttl_remaining_ms={} pip_overlay_active={} reuse_reason={}",
+                            pid,
+                            cached_domain,
+                            age_ms,
+                            ttl_remaining_ms,
+                            pip_overlay_active,
+                            reuse_reason
+                        );
+                        log!(
+                            "[Desktop Apps] reusing cached browser target for pid={}: {} (age {}ms, pip_overlay_active={})",
+                            pid,
+                            cached_domain,
+                            age_ms,
+                            pip_overlay_active
+                        );
+                        DESKTOP_FG_BRANCH_OVERRIDE.with(|c| c.set(Some("pip_grace_cache")));
+                        return Some((cached_domain, false));
+                    }
+                    log!(
+                        "[btcache] lookup pid={} result=miss reason=reuse_denied_no_pid_match",
+                        pid
+                    );
                 }
-            } else {
-                cache.remove(&pid);
             }
         }
     }
@@ -1187,6 +1253,7 @@ fn foreground_app_for_desktop_apps_api(app_name: &str, window_title: &str, pid: 
     } else {
         None
     };
+    let branch_override = take_desktop_fg_branch_override();
     let mut out = if is_browser(app_name) {
         domain_target
             .clone()
@@ -1194,17 +1261,50 @@ fn foreground_app_for_desktop_apps_api(app_name: &str, window_title: &str, pid: 
     } else {
         app_name.to_string()
     };
+    let mut branch: &str = if !is_browser(app_name) {
+        "non_browser"
+    } else if domain_target.is_some() {
+        branch_override.unwrap_or("browser_with_domain")
+    } else {
+        "browser_bare_name"
+    };
     if window_monitor::is_flowlocked_pip_title(&out) {
         log!("[Desktop Apps] dropped PiP title at API boundary");
         out = app_name.to_string();
+        branch = "other:pip_title_api_boundary";
     }
     log!(
-        "[Desktop Apps] foregroundApp computed: process={} url_bar_or_title_domain={:?} sent={:?}",
+        "[Desktop Apps] foregroundApp computed: process={} url_bar_or_title_domain={:?} sent={:?} branch={}",
         app_name,
         domain_target.as_deref(),
-        out.as_str()
+        out.as_str(),
+        branch
     );
     out
+}
+
+fn log_desktop_apps_outbound_body(body: &serde_json::Value) {
+    let mut v = body.clone();
+    if let serde_json::Value::Object(ref mut m) = v {
+        if let Some(serde_json::Value::Array(arr)) = m.get_mut("apps") {
+            let total = arr.len();
+            if total > 5 {
+                let more = total - 5;
+                *arr = arr.iter().take(5).cloned().collect();
+                m.insert(
+                    "_appsTruncated".to_string(),
+                    serde_json::Value::String(format!("(+{} more)", more)),
+                );
+            }
+        }
+    }
+    match serde_json::to_string(&v) {
+        Ok(s) => println!("[Desktop Apps] outbound POST /api/desktop/apps body={}", s),
+        Err(e) => println!(
+            "[Desktop Apps] outbound POST /api/desktop/apps body=<serialize_err:{}>",
+            e
+        ),
+    }
 }
 
 fn cache_foreground_server_decision(
@@ -1291,6 +1391,7 @@ fn check_apps_with_server(
                 }
             };
         
+        log_desktop_apps_outbound_body(&body);
         match client.post(&endpoint)
             .header("Content-Type", "application/json")
             .json(&body)

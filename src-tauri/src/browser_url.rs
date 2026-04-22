@@ -50,6 +50,15 @@ pub(crate) fn get_active_browser_domain_nonblocking(
     timeout: Duration,
     browser_app_name: Option<&str>,
 ) -> Option<String> {
+    let app_esc = browser_app_name
+        .map(|s| s.replace('"', "'").replace('\n', "\\n"))
+        .unwrap_or_else(|| "-".to_string());
+    println!(
+        "[browser_url] domain_nonblocking_begin pid={} timeout_ms={} app=\"{}\"",
+        pid,
+        timeout.as_millis(),
+        app_esc
+    );
     let hint = browser_app_name.map(|s| s.to_string());
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -61,6 +70,11 @@ pub(crate) fn get_active_browser_domain_nonblocking(
     match rx.recv_timeout(timeout) {
         Ok(v) => v,
         Err(_) => {
+            println!(
+                "[browser_url] domain_nonblocking_timeout pid={} timeout_ms={}",
+                pid,
+                timeout.as_millis()
+            );
             println!("[Browser URL] Timed out reading URL via accessibility");
             None
         }
@@ -219,6 +233,10 @@ mod macos {
     use crate::window_monitor::is_flowlocked_pip_title;
     use std::os::raw::c_void;
     use std::process::Command;
+
+    fn browser_url_escape(s: &str) -> String {
+        s.replace('"', "'").replace('\n', "\\n")
+    }
 
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
@@ -592,58 +610,115 @@ return ""
     }
 
     pub(super) fn get_active_browser_url(pid: u32, app_name: &str) -> Option<String> {
-        // 1) Native browser URL — best for Chrome/Safari; does not require Accessibility (needs Automation for that browser).
+        let pip_recent_enter = crate::window_monitor::pip_recently_open();
+        println!(
+            "[browser_url] enter pid={} app=\"{}\" pip_recent={}",
+            pid,
+            browser_url_escape(app_name),
+            pip_recent_enter
+        );
+
+        println!("[browser_url] try strategy=native_applescript pid={}", pid);
         if let Some(url) = try_native_browser_url(app_name) {
+            let dom = super::extract_domain(&url).unwrap_or_else(|| "-".to_string());
+            println!(
+                "[browser_url] result strategy=native_applescript pid={} outcome=some domain={} reason=-",
+                pid, dom
+            );
+            println!(
+                "[browser_url] exit pid={} chosen_strategy=native_applescript chosen_domain={}",
+                pid, dom
+            );
             println!("[Browser URL] Resolved URL via browser AppleScript");
             return Some(url);
         }
+        println!(
+            "[browser_url] result strategy=native_applescript pid={} outcome=none domain=- reason=native_none",
+            pid
+        );
 
-        // 2) UI Automation via System Events — requires Accessibility for Flowlocked.
+        println!("[browser_url] try strategy=system_events_front_window pid={}", pid);
         if !is_accessibility_trusted() {
+            println!(
+                "[browser_url] result strategy=system_events_front_window pid={} outcome=none domain=- reason=accessibility_not_trusted",
+                pid
+            );
             println!(
                 "[Browser URL] ⚠️ Accessibility not granted for UI-based address bar read. \
 Enable Flowlocked in System Settings → Privacy & Security → Accessibility. \
 If YouTube still fails: also enable Automation for Flowlocked on your browser (Chrome/Safari) under the same Privacy section."
             );
+            println!("[browser_url] exit pid={} chosen_strategy=- chosen_domain=-", pid);
             return None;
         }
 
         if let Some(url) = try_system_events_address_bar(pid) {
+            let dom = super::extract_domain(&url).unwrap_or_else(|| "-".to_string());
+            println!(
+                "[browser_url] result strategy=system_events_front_window pid={} outcome=some domain={} reason=-",
+                pid, dom
+            );
+            println!(
+                "[browser_url] exit pid={} chosen_strategy=system_events_front_window chosen_domain={}",
+                pid, dom
+            );
             println!("[Browser URL] Resolved URL via System Events / address bar");
             return Some(url);
         }
+        println!(
+            "[browser_url] result strategy=system_events_front_window pid={} outcome=none domain=- reason=address_bar_empty_or_not_found",
+            pid
+        );
 
-        // PiP-aware fallback: when the topmost browser-owned window is Flowlocked PiP,
-        // the front-window address-bar lookup can fail. Walk windows front-to-back and
-        // attempt address-bar read for each non-PiP window.
-        if crate::window_monitor::pip_recently_open() {
+        let pip_for_walk =
+            crate::window_monitor::pip_recently_open_traced("browser_url_walk_gate");
+        println!(
+            "[browser_url] gate_pip_recently_open pid={} value={} will_walk={}",
+            pid, pip_for_walk, pip_for_walk
+        );
+        if pip_for_walk {
+            println!("[browser_url] try strategy=per_window pid={}", pid);
             let titles = try_system_events_window_titles(pid);
             for (idx, title) in titles.iter().enumerate() {
+                let title_e = browser_url_escape(title);
                 if is_flowlocked_pip_title(title) {
                     println!(
-                        "[browser_url] pid={} attempt window_idx={} title={:?} url_bar=None (skipped Flowlocked PiP title)",
-                        pid,
-                        idx,
-                        title
+                        "[browser_url] attempt strategy=per_window pid={} window_idx={} title=\"{}\" outcome=none url_bar=- reason=skipped_flowlocked_pip_title",
+                        pid, idx, title_e
                     );
                     continue;
                 }
                 let url = try_system_events_address_bar_for_window(pid, idx + 1);
-                let domain = url.as_deref().and_then(super::extract_domain);
+                let (outcome, url_bar_s, reason): (&str, String, &str) = if let Some(ref u) = url {
+                    let dom = super::extract_domain(u).unwrap_or_else(|| "-".to_string());
+                    ("some", dom, "-")
+                } else {
+                    ("none", "-".to_string(), "address_bar_empty_or_not_found")
+                };
                 println!(
-                    "[browser_url] pid={} attempt window_idx={} title={:?} url_bar={:?}",
-                    pid,
-                    idx,
-                    title,
-                    domain
+                    "[browser_url] attempt strategy=per_window pid={} window_idx={} title=\"{}\" outcome={} url_bar={} reason={}",
+                    pid, idx, title_e, outcome, url_bar_s, reason
                 );
                 if let Some(u) = url {
+                    println!(
+                        "[browser_url] result strategy=per_window pid={} outcome=some domain={} reason=-",
+                        pid, url_bar_s
+                    );
+                    println!(
+                        "[browser_url] exit pid={} chosen_strategy=per_window chosen_domain={}",
+                        pid, url_bar_s
+                    );
                     return Some(u);
                 }
             }
+            println!(
+                "[browser_url] result strategy=per_window pid={} outcome=none domain=- reason=exhausted_window_list",
+                pid
+            );
         }
 
         println!("[Browser URL] ⚠️ Could not read browser URL — enable Automation (browser) and/or Accessibility (Flowlocked)");
+        println!("[browser_url] exit pid={} chosen_strategy=- chosen_domain=-", pid);
         None
     }
 

@@ -225,11 +225,80 @@ fn wm_trace(msg: impl std::fmt::Display) {
     }
 }
 
+fn wm_enum_escape(s: &str) -> String {
+    s.chars()
+        .take(80)
+        .collect::<String>()
+        .replace('\n', "\\n")
+        .replace('"', "'")
+}
+
+fn wm_enum_alpha(dic_ref: CFDictionaryRef) -> f64 {
+    match read_dict(dic_ref, "kCGWindowAlpha") {
+        DictVal::Number(v) => {
+            let vf = v as f64;
+            if vf > 1.0 {
+                vf / 255.0
+            } else {
+                vf
+            }
+        }
+        _ => 1.0,
+    }
+}
+
+fn wm_enum_emit(
+    pid: i64,
+    app: &str,
+    title: &str,
+    layer: i64,
+    alpha: f64,
+    w: f64,
+    h: f64,
+    verdict: &str,
+    total_candidates: &mut u32,
+) {
+    *total_candidates = total_candidates.saturating_add(1);
+    let app_e = wm_enum_escape(app);
+    let title_e = wm_enum_escape(title);
+    let line = format!(
+        "[wm-enum] pid={} app=\"{}\" title=\"{}\" layer={} alpha={:.4} w={} h={} verdict={}",
+        pid,
+        app_e,
+        title_e,
+        layer,
+        alpha,
+        w.round() as i64,
+        h.round() as i64,
+        verdict
+    );
+    println!("{}", line);
+    crate::diagnostic_log::append_line(&line);
+}
+
+fn wm_pick_emit(
+    picked_pid: i64,
+    picked_app: &str,
+    picked_title: &str,
+    pip_flag: bool,
+    pip_recent: bool,
+    total_candidates: u32,
+) {
+    let app_e = wm_enum_escape(picked_app);
+    let title_e = wm_enum_escape(picked_title);
+    let line = format!(
+        "[wm-pick] picked_pid={} picked_app=\"{}\" picked_title=\"{}\" pip_flag={} pip_recent={} total_candidates={}",
+        picked_pid, app_e, title_e, pip_flag, pip_recent, total_candidates
+    );
+    println!("{}", line);
+    crate::diagnostic_log::append_line(&line);
+}
+
 pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     if FIRST_RUN.swap(false, Ordering::SeqCst) {
         let granted = screen_recording_granted();
         crate::diagnostic_log::emit_console_and_file(format!(
-            "[window-monitor] build=155 skip-pip path active; screen_recording_granted={}",
+            "[window-monitor] build=164 skip-pip path active; screen_recording_granted={}",
             granted
         ));
         crate::diagnostic_log::emit_console_and_file(
@@ -259,6 +328,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     let mut top_qualifying_seen = false;
     let mut skipped_pip_title: Option<String> = None;
     let mut saw_pip = false;
+    let mut wm_candidate_count: u32 = 0;
 
     for i in 0..n {
         let dic_ref =
@@ -272,37 +342,6 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             _ => continue,
         };
 
-        let layer = match read_dict(dic_ref, "kCGWindowLayer") {
-            DictVal::Number(l) => l,
-            _ => 0,
-        };
-        if layer != 0 {
-            continue;
-        }
-
-        let on_screen = match read_dict(dic_ref, "kCGWindowIsOnscreen") {
-            DictVal::Bool(b) => b,
-            _ => true,
-        };
-        if !on_screen {
-            continue;
-        }
-        let alpha_zero = match read_dict(dic_ref, "kCGWindowAlpha") {
-            DictVal::Number(v) => v == 0,
-            _ => false,
-        };
-        if alpha_zero {
-            continue;
-        }
-
-        let win_pos = match read_dict(dic_ref, "kCGWindowBounds") {
-            DictVal::Rect(r) => r,
-            _ => continue,
-        };
-        if win_pos.width < 50.0 || win_pos.height < 50.0 {
-            continue;
-        }
-
         let mut win_title = String::new();
         if let DictVal::String(s) = read_dict(dic_ref, "kCGWindowName") {
             win_title = s;
@@ -312,6 +351,97 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         if let DictVal::String(s) = read_dict(dic_ref, "kCGWindowOwnerName") {
             app_name = s;
         }
+
+        let layer = match read_dict(dic_ref, "kCGWindowLayer") {
+            DictVal::Number(l) => l,
+            _ => 0,
+        };
+        let alpha_disp = wm_enum_alpha(dic_ref);
+
+        if layer != 0 {
+            wm_enum_emit(
+                window_pid,
+                &app_name,
+                &win_title,
+                layer,
+                alpha_disp,
+                0.0,
+                0.0,
+                "skipped_other:layer_nonzero",
+                &mut wm_candidate_count,
+            );
+            continue;
+        }
+
+        let on_screen = match read_dict(dic_ref, "kCGWindowIsOnscreen") {
+            DictVal::Bool(b) => b,
+            _ => true,
+        };
+        if !on_screen {
+            wm_enum_emit(
+                window_pid,
+                &app_name,
+                &win_title,
+                layer,
+                alpha_disp,
+                0.0,
+                0.0,
+                "skipped_offscreen",
+                &mut wm_candidate_count,
+            );
+            continue;
+        }
+        let alpha_zero = match read_dict(dic_ref, "kCGWindowAlpha") {
+            DictVal::Number(v) => v == 0,
+            _ => false,
+        };
+        if alpha_zero {
+            wm_enum_emit(
+                window_pid,
+                &app_name,
+                &win_title,
+                layer,
+                alpha_disp,
+                0.0,
+                0.0,
+                "skipped_other:alpha_zero",
+                &mut wm_candidate_count,
+            );
+            continue;
+        }
+
+        let win_pos = match read_dict(dic_ref, "kCGWindowBounds") {
+            DictVal::Rect(r) => r,
+            _ => {
+                wm_enum_emit(
+                    window_pid,
+                    &app_name,
+                    &win_title,
+                    layer,
+                    alpha_disp,
+                    0.0,
+                    0.0,
+                    "skipped_other:no_bounds",
+                    &mut wm_candidate_count,
+                );
+                continue;
+            }
+        };
+        if win_pos.width < 50.0 || win_pos.height < 50.0 {
+            wm_enum_emit(
+                window_pid,
+                &app_name,
+                &win_title,
+                layer,
+                alpha_disp,
+                win_pos.width,
+                win_pos.height,
+                "skipped_other:small_size",
+                &mut wm_candidate_count,
+            );
+            continue;
+        }
+
         let process_path = process_path_by_pid(window_pid as u32);
         let bundle_theirs = macos_app_bundle_root(process_path.as_path());
         let bundle_ours = our_flowlocked_app_bundle();
@@ -354,6 +484,17 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
                         ));
                     }
                 }
+                wm_enum_emit(
+                    window_pid,
+                    &app_name,
+                    &win_title,
+                    layer,
+                    alpha_disp,
+                    win_pos.width,
+                    win_pos.height,
+                    "skipped_other:own_app_shell",
+                    &mut wm_candidate_count,
+                );
                 continue;
             }
         }
@@ -421,6 +562,17 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             if skipped_pip_title.is_none() {
                 skipped_pip_title = Some(win_title.clone());
             }
+            wm_enum_emit(
+                window_pid,
+                &app_name,
+                &win_title,
+                layer,
+                alpha_disp,
+                win_pos.width,
+                win_pos.height,
+                "skipped_pip",
+                &mut wm_candidate_count,
+            );
             continue;
         }
 
@@ -446,6 +598,17 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             log_skipped_suspected_pip_heuristic(win_pos.width, win_pos.height, &app_name);
             skipped_pip = true;
             saw_pip = true;
+            wm_enum_emit(
+                window_pid,
+                &app_name,
+                &win_title,
+                layer,
+                alpha_disp,
+                win_pos.width,
+                win_pos.height,
+                "skipped_pip",
+                &mut wm_candidate_count,
+            );
             continue;
         }
 
@@ -480,12 +643,36 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             if skipped_pip_title.is_none() {
                 skipped_pip_title = Some(win_title.clone());
             }
+            wm_enum_emit(
+                window_pid,
+                &app_name,
+                &win_title,
+                layer,
+                alpha_disp,
+                win_pos.width,
+                win_pos.height,
+                "skipped_pip",
+                &mut wm_candidate_count,
+            );
             continue;
         }
 
         let window_id = match read_dict(dic_ref, "kCGWindowNumber") {
             DictVal::Number(id) => id.to_string(),
-            _ => continue,
+            _ => {
+                wm_enum_emit(
+                    window_pid,
+                    &app_name,
+                    &win_title,
+                    layer,
+                    alpha_disp,
+                    win_pos.width,
+                    win_pos.height,
+                    "skipped_other:no_window_id",
+                    &mut wm_candidate_count,
+                );
+                continue;
+            }
         };
 
         if skipped_pip {
@@ -521,6 +708,27 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             finalized.process_id,
             finalized.app_name
         ));
+        wm_enum_emit(
+            finalized.process_id as i64,
+            &finalized.app_name,
+            &finalized.title,
+            layer,
+            alpha_disp,
+            finalized.position.width,
+            finalized.position.height,
+            "picked",
+            &mut wm_candidate_count,
+        );
+        let pip_flag = super::pip_open_immediate();
+        let pip_recent = super::pip_recently_open();
+        wm_pick_emit(
+            finalized.process_id as i64,
+            &finalized.app_name,
+            &finalized.title,
+            pip_flag,
+            pip_recent,
+            wm_candidate_count,
+        );
         return Ok(finalized);
     }
 
@@ -540,8 +748,41 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
                 skipped_pip,
                 "fallback_active_win_pos_rs",
             );
+            wm_enum_emit(
+                w.process_id as i64,
+                &w.app_name,
+                &w.title,
+                0,
+                1.0,
+                w.position.width,
+                w.position.height,
+                "picked",
+                &mut wm_candidate_count,
+            );
+            let pip_flag = super::pip_open_immediate();
+            let pip_recent = super::pip_recently_open();
+            wm_pick_emit(
+                w.process_id as i64,
+                &w.app_name,
+                &w.title,
+                pip_flag,
+                pip_recent,
+                wm_candidate_count,
+            );
             Ok(w)
         }
-        Err(()) => Err(()),
+        Err(()) => {
+            let pip_flag = super::pip_open_immediate();
+            let pip_recent = super::pip_recently_open();
+            wm_pick_emit(
+                0,
+                "",
+                "",
+                pip_flag,
+                pip_recent,
+                wm_candidate_count,
+            );
+            Err(())
+        }
     }
 }

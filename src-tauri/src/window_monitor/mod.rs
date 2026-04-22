@@ -186,6 +186,35 @@ pub(crate) fn pip_recently_open() -> bool {
     now.saturating_sub(last) < 5_000
 }
 
+/// Same as [`pip_recently_open`], plus a `[pip-recent]` log line (call from outside this module only).
+pub(crate) fn pip_recently_open_traced(caller: &str) -> bool {
+    let v = pip_recently_open();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let last = PIP_OPEN_AT_MS.load(Ordering::Relaxed);
+    let open_now = PIP_OPEN.load(Ordering::Relaxed);
+    let ago_str = if open_now {
+        "0".to_string()
+    } else if last > 0 {
+        format!("{}", now.saturating_sub(last))
+    } else {
+        "-".to_string()
+    };
+    let line = format!(
+        "[pip-recent] caller={} value={} last_seen_ms_ago={}",
+        caller, v, ago_str
+    );
+    println!("{}", line);
+    crate::diagnostic_log::append_line(&line);
+    v
+}
+
+pub(crate) fn pip_open_immediate() -> bool {
+    PIP_OPEN.load(Ordering::Relaxed)
+}
+
 /// Whether we should replace a Flowlocked-looking foreground with recent history (e.g. YouTube).
 ///
 /// `pip_recent` + [`is_flowlocked_surface`] alone is too broad: after PiP, the user may genuinely
