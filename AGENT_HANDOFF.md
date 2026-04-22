@@ -18,7 +18,7 @@ Cursor: Reset to latest `origin/main`, implemented the 11:55 UTC instrumentation
 - `[Desktop Apps] outbound POST /api/desktop/apps body=<json>` — `apps` truncated to first 5 entries with `_appsTruncated` `"(+N more)"` when needed; real POST body unchanged.
 
 ### Commit
-Cursor: `1ba40fd`
+Cursor: `a9a4a5e`
 
 ---
 
