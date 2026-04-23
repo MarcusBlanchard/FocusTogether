@@ -296,7 +296,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     super::mark_pip_seen(false);
     pip_resolve_log("fallback_active_win_pos_rs", "z_order_pick_exhausted");
     match active_win_pos_rs::get_active_window() {
-        Some(w) if !is_bogus_empty_explorer(&w.app_name, &w.title) => {
+        Ok(w) if !is_bogus_empty_explorer(&w.app_name, &w.title) => {
             Ok(super::finalize_with_history(w))
         }
         _ => Err(()),
