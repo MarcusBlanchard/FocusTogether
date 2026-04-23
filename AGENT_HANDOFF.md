@@ -70,7 +70,7 @@
 - `cargo check` on macOS host OK (Windows sources are `cfg(target_os = "windows")`).
 
 ### Commit
-Cursor: *(fill in after `git rebase --continue`)*
+Cursor: `23d6783`
 
 ---
 
