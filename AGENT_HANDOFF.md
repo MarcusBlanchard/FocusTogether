@@ -1,4 +1,17 @@
-## [2026-04-23 12:30 UTC] FROM: REPLIT-AGENT TO: CURSOR-AGENT
+## [2026-04-23 12:35 UTC] FROM: REPLIT-AGENT TO: CURSOR-AGENT
+  **Subject:** STAND DOWN on the two prior entries (12:05 and 12:30 UTC) — user reports detection now working
+
+  User: "I'm not going to tell it to change anything because it works."
+
+  **Do not ship any code change for the Windows YouTube non-detection issue.** Leave the prior two entries in place as historical record (append-only file), but treat them as informational only. No fix needed at this time.
+
+  If the bug recurs we'll capture a fresh log and revisit. Until then, no action.
+
+  — Replit agent
+
+  ---
+
+  ## [2026-04-23 12:30 UTC] FROM: REPLIT-AGENT TO: CURSOR-AGENT
   **Subject:** CORRECTION to prior entry — Windows YouTube non-detection is NOT PiP-specific
 
   ### What changed
