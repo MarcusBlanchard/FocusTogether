@@ -1,5 +1,6 @@
-//! Windows: walk EnumWindows in Z-order (front-to-back), skipping PiP and tool-style
-//! chrome windows from the same process as the skipped PiP.
+//! Windows: walk EnumWindows in Z-order (front-to-back), skipping document PiP overlays.
+//! When the user is in a browser, prefer [`GetForegroundWindow`] PID and walk that process's
+//! top-level HWNDs so we do not pick `explorer.exe` from under-floating PiP geometry.
 
 use super::{
     is_flowlocked_pip_title, is_known_browser_app_name, log_skipped_pip,
@@ -11,12 +12,13 @@ use sysinfo::{Pid, ProcessesToUpdate, System};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
-    IsIconic, IsWindowVisible, GW_OWNER, GWL_EXSTYLE,
+    EnumWindows, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, GW_OWNER, GWL_EXSTYLE,
 };
 
 const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
 const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
+const WS_EX_TOPMOST: u32 = 0x00000008;
 
 fn window_text(hwnd: HWND) -> String {
     unsafe {
@@ -49,7 +51,7 @@ fn rect_to_position(r: RECT) -> WindowPosition {
     }
 }
 
-pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
+fn enum_top_level_z_order() -> Vec<HWND> {
     let mut z_windows: Vec<HWND> = Vec::new();
     unsafe extern "system" fn enum_windows_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let out = lparam.0 as *mut Vec<HWND>;
@@ -59,23 +61,72 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         (*out).push(hwnd);
         BOOL(1)
     }
-    let ok = unsafe {
+    let _ = unsafe {
         EnumWindows(
             Some(enum_windows_cb),
             LPARAM((&mut z_windows as *mut Vec<HWND>) as isize),
         )
     };
-    if !ok.as_bool() || z_windows.is_empty() {
-        super::mark_pip_seen(false);
-        return active_win_pos_rs::get_active_window().map(super::finalize_with_history);
-    }
+    z_windows
+}
 
+/// Titles used by the Flowlocked web app / document PiP surface (not the literal "Flowlocked PiP" string).
+fn flowlocked_document_surface_hint(title: &str) -> bool {
+    let t = title.trim().to_lowercase();
+    (t.contains("flowlocked") || t.contains("focustogether"))
+        && (t.contains("focus")
+            || t.contains("accountability")
+            || t.contains("pip")
+            || t.contains("replit"))
+}
+
+/// Narrow skip: do **not** treat "small browser window" alone as PiP (that hid real Chrome and led to
+/// `explorer.exe` picks). Require explicit PiP markers or topmost + Flowlocked-ish small window.
+fn skip_windows_browser_document_pip(
+    hwnd: HWND,
+    title: &str,
+    app_name: &str,
+    width: f64,
+    height: f64,
+    is_first_visible_for_pid: bool,
+) -> bool {
+    if is_flowlocked_pip_title(title) {
+        return true;
+    }
+    if !is_known_browser_app_name(app_name) || !is_first_visible_for_pid {
+        return false;
+    }
+    if width > 800.0 || height > 600.0 {
+        return false;
+    }
+    let ex = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 };
+    let topmost = (ex & WS_EX_TOPMOST) != 0;
+    topmost && flowlocked_document_surface_hint(title)
+}
+
+fn is_bogus_empty_explorer(app: &str, title: &str) -> bool {
+    let a = app.trim().to_lowercase();
+    let stem = a.trim_end_matches(".exe");
+    stem == "explorer" && title.trim().is_empty()
+}
+
+fn pip_resolve_log(pass: &str, detail: &str) {
+    let line = format!("[window_monitor] pip_resolve pass={} {}", pass, detail);
+    println!("{}", line);
+    crate::diagnostic_log::append_line(&line);
+}
+
+/// `pid_filter` `None` = consider all processes (desktop shell allowed except bogus explorer pick).
+fn walk_z_order_pick(
+    z_windows: &[HWND],
+    pid_filter: Option<u32>,
+) -> Option<(ActiveWindow, bool)> {
     let mut pip_owner_pid: Option<u32> = None;
     let mut skipped_pip_title: Option<String> = None;
     let mut saw_pip = false;
     let mut pid_top_z: HashSet<u32> = HashSet::new();
 
-    for hwnd in z_windows {
+    for &hwnd in z_windows {
         if hwnd.0 == 0 {
             continue;
         }
@@ -105,13 +156,18 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             continue;
         }
 
-        let title = window_text(hwnd);
         let mut pid = 0u32;
         unsafe {
             GetWindowThreadProcessId(hwnd, Some(&mut pid));
         }
+        if let Some(only) = pid_filter {
+            if pid != only {
+                continue;
+            }
+        }
 
         let is_top_for_pid = pid_top_z.insert(pid);
+        let title = window_text(hwnd);
 
         if is_flowlocked_pip_title(&title) {
             pip_owner_pid = Some(pid);
@@ -139,18 +195,29 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         let (app_name, process_path) = process_info(pid);
         let position = rect_to_position(rect);
 
-        // Race fallback: PiP can appear before `document.title` is set. Skip only the first visible
-        // window per PID in Z-order when it is a known browser and unusually small for a main window.
-        if is_top_for_pid
-            && is_known_browser_app_name(&app_name)
-            && position.width <= 800.0
-            && position.height <= 600.0
-        {
+        if skip_windows_browser_document_pip(
+            hwnd,
+            &title,
+            &app_name,
+            position.width,
+            position.height,
+            is_top_for_pid,
+        ) {
             log_skipped_suspected_pip_heuristic(position.width, position.height, &app_name);
             saw_pip = true;
             if skipped_pip_title.is_none() {
                 skipped_pip_title = Some(title.clone());
             }
+            continue;
+        }
+
+        let app_name = if app_name.is_empty() {
+            "windows-app".to_string()
+        } else {
+            app_name
+        };
+
+        if is_bogus_empty_explorer(&app_name, &title) {
             continue;
         }
 
@@ -165,13 +232,7 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
                 },
             );
         }
-        let app_name = if app_name.is_empty() {
-            "windows-app".to_string()
-        } else {
-            app_name
-        };
 
-        super::mark_pip_seen(saw_pip);
         let resolved = ActiveWindow {
             window_id: format!("{:?}", hwnd),
             process_id: u64::from(pid),
@@ -180,8 +241,64 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
             title,
             process_path,
         };
-        return Ok(super::finalize_with_history(resolved));
+        return Some((resolved, saw_pip));
     }
-    super::mark_pip_seen(saw_pip);
-    active_win_pos_rs::get_active_window().map(super::finalize_with_history)
+    None
+}
+
+pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
+    let z_windows = enum_top_level_z_order();
+    if z_windows.is_empty() {
+        super::mark_pip_seen(false);
+        return active_win_pos_rs::get_active_window().map(super::finalize_with_history);
+    }
+
+    let fg = unsafe { GetForegroundWindow() };
+    if fg.0 != 0 {
+        let mut fg_pid = 0u32;
+        unsafe {
+            GetWindowThreadProcessId(fg, Some(&mut fg_pid));
+        }
+        let (fg_app, _) = process_info(fg_pid);
+        if is_known_browser_app_name(&fg_app) {
+            if let Some((win, saw_pip)) = walk_z_order_pick(&z_windows, Some(fg_pid)) {
+                pip_resolve_log(
+                    "foreground_browser_pid",
+                    &format!(
+                        "fg_pid={} picked_app={:?} title_prefix={:?} saw_pip={}",
+                        fg_pid,
+                        win.app_name,
+                        win.title.chars().take(48).collect::<String>(),
+                        saw_pip
+                    ),
+                );
+                super::mark_pip_seen(saw_pip);
+                return Ok(super::finalize_with_history(win));
+            }
+        }
+    }
+
+    if let Some((win, saw_pip)) = walk_z_order_pick(&z_windows, None) {
+        pip_resolve_log(
+            "global_zorder",
+            &format!(
+                "picked_pid={} picked_app={:?} title_prefix={:?} saw_pip={}",
+                win.process_id,
+                win.app_name,
+                win.title.chars().take(48).collect::<String>(),
+                saw_pip
+            ),
+        );
+        super::mark_pip_seen(saw_pip);
+        return Ok(super::finalize_with_history(win));
+    }
+
+    super::mark_pip_seen(false);
+    pip_resolve_log("fallback_active_win_pos_rs", "z_order_pick_exhausted");
+    match active_win_pos_rs::get_active_window() {
+        Some(w) if !is_bogus_empty_explorer(&w.app_name, &w.title) => {
+            Ok(super::finalize_with_history(w))
+        }
+        _ => Err(()),
+    }
 }

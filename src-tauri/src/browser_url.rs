@@ -26,8 +26,7 @@ pub fn get_active_browser_url(
     #[cfg(target_os = "windows")]
     {
         let _ = browser_app_name;
-        let _ = picked_title;
-        return windows::get_active_browser_url(pid);
+        return windows::get_active_browser_url(pid, picked_title);
     }
 
     #[allow(unreachable_code)]
@@ -1004,12 +1003,104 @@ If YouTube still fails: also enable Automation for Flowlocked on your browser (C
 
 #[cfg(target_os = "windows")]
 mod windows {
+    use crate::window_monitor::is_flowlocked_pip_title;
     use uiautomation::controls::ControlType;
     use uiautomation::patterns::UIValuePattern;
     use uiautomation::types::{Handle, TreeScope, UIProperty};
     use uiautomation::variants::Variant;
     use uiautomation::{UIElement, UIAutomation};
-    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+        IsWindowVisible, GW_OWNER,
+    };
+
+    fn window_text(hwnd: HWND) -> String {
+        unsafe {
+            let mut buf = vec![0u16; 512];
+            let n = GetWindowTextW(hwnd, &mut buf);
+            String::from_utf16_lossy(&buf[..n as usize])
+        }
+    }
+
+    /// Same idea as macOS AppleScript passes: document-PiP windows often show `about:blank` or
+    /// internal `chrome://newtab` in the omnibox; skip those so a deeper window can supply the real URL.
+    fn should_skip_raw_browser_url(raw: &str) -> bool {
+        let lower = raw.trim().to_lowercase();
+        if lower.starts_with("about:") {
+            return true;
+        }
+        lower.starts_with("chrome://newtab")
+            || lower.starts_with("edge://newtab")
+            || lower.starts_with("brave://newtab")
+            || lower.starts_with("vivaldi://newtab")
+    }
+
+    /// Top-level HWNDs for `pid` in front-to-back Z-order (same EnumWindows ordering as window monitor).
+    fn hwnds_for_pid_zorder(pid: u32) -> Vec<(HWND, String)> {
+        let mut z_windows: Vec<HWND> = Vec::new();
+        unsafe extern "system" fn enum_windows_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let out = lparam.0 as *mut Vec<HWND>;
+            if out.is_null() {
+                return BOOL(0);
+            }
+            (*out).push(hwnd);
+            BOOL(1)
+        }
+        let ok = unsafe {
+            EnumWindows(
+                Some(enum_windows_cb),
+                LPARAM((&mut z_windows as *mut Vec<HWND>) as isize),
+            )
+        };
+        if !ok.as_bool() {
+            return Vec::new();
+        }
+
+        let mut out = Vec::new();
+        for hwnd in z_windows {
+            if hwnd.0 == 0 {
+                continue;
+            }
+            unsafe {
+                if !IsWindowVisible(hwnd).as_bool() {
+                    continue;
+                }
+                if IsIconic(hwnd).as_bool() {
+                    continue;
+                }
+                if GetWindow(hwnd, GW_OWNER).0 != 0 {
+                    continue;
+                }
+            }
+
+            let mut cloaked: u32 = 0;
+            let cloaked_ok = unsafe {
+                DwmGetWindowAttribute(
+                    hwnd,
+                    DWMWA_CLOAKED,
+                    (&mut cloaked as *mut u32).cast(),
+                    std::mem::size_of::<u32>() as u32,
+                )
+            };
+            if cloaked_ok.is_ok() && cloaked != 0 {
+                continue;
+            }
+
+            let mut wpid = 0u32;
+            unsafe {
+                GetWindowThreadProcessId(hwnd, Some(&mut wpid));
+            }
+            if wpid != pid {
+                continue;
+            }
+
+            let title = window_text(hwnd);
+            out.push((hwnd, title));
+        }
+        out
+    }
 
     fn read_edit_value(
         automation: &UIAutomation,
@@ -1039,36 +1130,7 @@ mod windows {
         }
     }
 
-    pub(super) fn get_active_browser_url(pid: u32) -> Option<String> {
-        let automation = match UIAutomation::new() {
-            Ok(a) => a,
-            Err(e) => {
-                println!("[Browser URL] ⚠️ UIA init failed: {}", e);
-                return None;
-            }
-        };
-
-        let hwnd = unsafe { GetForegroundWindow() };
-        if hwnd.0 == 0 {
-            println!("[Browser URL] ⚠️ No foreground window");
-            return None;
-        }
-        let mut fg_pid = 0u32;
-        unsafe {
-            GetWindowThreadProcessId(hwnd, Some(&mut fg_pid));
-        }
-        if fg_pid != pid {
-            return None;
-        }
-
-        let root = match automation.element_from_handle(Handle::from(hwnd)) {
-            Ok(el) => el,
-            Err(e) => {
-                println!("[Browser URL] ⚠️ element_from_handle failed: {}", e);
-                return None;
-            }
-        };
-
+    fn read_address_bar_from_root(automation: &UIAutomation, root: &UIElement) -> Option<String> {
         let name_candidates = [
             "Address and search bar",
             "Search or enter address",
@@ -1076,7 +1138,7 @@ mod windows {
             "Address field",
         ];
         for candidate in name_candidates {
-            if let Some(url) = read_edit_value(&automation, &root, UIProperty::Name, candidate) {
+            if let Some(url) = read_edit_value(automation, root, UIProperty::Name, candidate) {
                 return Some(url);
             }
         }
@@ -1088,14 +1150,104 @@ mod windows {
         ];
         for candidate in automation_id_candidates {
             if let Some(url) =
-                read_edit_value(&automation, &root, UIProperty::AutomationId, candidate)
+                read_edit_value(automation, root, UIProperty::AutomationId, candidate)
             {
                 return Some(url);
             }
         }
+        None
+    }
+
+    fn titles_match_exact(a: &str, b: &str) -> bool {
+        let a = a.trim();
+        let b = b.trim();
+        a == b || a.eq_ignore_ascii_case(b)
+    }
+
+    fn titles_match_substring(win_title: &str, picked: &str) -> bool {
+        let a = win_title.trim().to_lowercase();
+        let b = picked.trim().to_lowercase();
+        a.contains(&b) || b.contains(&a)
+    }
+
+    pub(super) fn get_active_browser_url(pid: u32, picked_title: Option<&str>) -> Option<String> {
+        let automation = match UIAutomation::new() {
+            Ok(a) => a,
+            Err(e) => {
+                println!("[Browser URL] ⚠️ UIA init failed: {}", e);
+                return None;
+            }
+        };
+
+        let picked = picked_title.map(str::trim).filter(|s| !s.is_empty());
+        let hwnds = hwnds_for_pid_zorder(pid);
+
+        let mut z_good: Vec<(String, String)> = Vec::new();
+        for (hwnd, title) in &hwnds {
+            if is_flowlocked_pip_title(title) {
+                continue;
+            }
+            let root = match automation.element_from_handle(Handle::from(*hwnd)) {
+                Ok(el) => el,
+                Err(_) => continue,
+            };
+            let Some(url) = read_address_bar_from_root(&automation, &root) else {
+                continue;
+            };
+            if should_skip_raw_browser_url(&url) {
+                continue;
+            }
+            z_good.push((title.clone(), url));
+        }
+
+        let mut strategy = "none";
+        let chosen = if let Some(pt) = picked {
+            if let Some((t, u)) = z_good.iter().find(|(t, _)| titles_match_exact(t, pt)) {
+                strategy = "pass1_title_exact";
+                Some((t.clone(), u.clone()))
+            } else if let Some((t, u)) = z_good
+                .iter()
+                .find(|(t, _)| titles_match_substring(t, pt))
+            {
+                strategy = "pass2_title_substring";
+                Some((t.clone(), u.clone()))
+            } else if let Some((t, u)) = z_good.first() {
+                strategy = "pass3_first_non_junk_zorder";
+                Some((t.clone(), u.clone()))
+            } else {
+                None
+            }
+        } else if let Some((t, u)) = z_good.first() {
+            strategy = "pass3_first_non_junk_zorder";
+            Some((t.clone(), u.clone()))
+        } else {
+            None
+        };
+
+        let picked_esc = picked
+            .map(|s| s.replace('"', "'").replace('\n', "\\n"))
+            .unwrap_or_else(|| "-".to_string());
+        super::emit_browser_url_log(format!(
+            "[browser_url] win_uia pid={} picked_title=\"{}\" hwnd_candidates={} good_reads={} strategy={}",
+            pid,
+            picked_esc,
+            hwnds.len(),
+            z_good.len(),
+            strategy
+        ));
+
+        if let Some((matched_title, url)) = chosen {
+            let prefix: String = url.chars().take(48).collect();
+            super::emit_browser_url_log(format!(
+                "[browser_url] win_uia_pick matched_title=\"{}\" url_prefix=\"{}\"",
+                matched_title.replace('"', "'").replace('\n', "\\n"),
+                prefix.replace('"', "'")
+            ));
+            return Some(url);
+        }
 
         println!(
-            "[Browser URL] ⚠️ Failed reading browser address bar via UI Automation (possibly elevated browser)"
+            "[Browser URL] ⚠️ Failed reading browser address bar via UI Automation (possibly elevated browser or only about:blank/newtab windows)"
         );
         None
     }
