@@ -2491,6 +2491,13 @@ fn get_detection_session() -> &'static Mutex<Option<(String, String)>> {
     DETECTION_SESSION.get_or_init(|| Mutex::new(None))
 }
 
+fn epoch_ms_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 fn post_distraction_state_blocking(user_id: &str, distracted: bool, domain: Option<&str>) -> bool {
     if distracted && domain.is_none() {
         println!("[DistractionState] Skipped distracted=true without domain");
@@ -2517,6 +2524,12 @@ fn post_distraction_state_blocking(user_id: &str, distracted: bool, domain: Opti
             return false;
         }
     };
+    let clear_sent_at_ms = if !distracted { Some(epoch_ms_now()) } else { None };
+    let clear_started_at = if !distracted {
+        Some(std::time::Instant::now())
+    } else {
+        None
+    };
     for attempt in 1..=3 {
         let res = client
             .post(&endpoint)
@@ -2525,6 +2538,21 @@ fn post_distraction_state_blocking(user_id: &str, distracted: bool, domain: Opti
             .send();
         match res {
             Ok(r) if r.status().is_success() => {
+                if !distracted {
+                    let resp_at_ms = epoch_ms_now();
+                    let elapsed_ms = clear_started_at
+                        .as_ref()
+                        .map(|s| s.elapsed().as_millis() as u64)
+                        .unwrap_or(0);
+                    detection_println!(
+                        "[Detection] post_distraction_state_clear sent_at={} resp_at={} status={} attempt={} elapsed_ms={}",
+                        clear_sent_at_ms.unwrap_or(0),
+                        resp_at_ms,
+                        r.status(),
+                        attempt,
+                        elapsed_ms
+                    );
+                }
                 println!(
                     "[DistractionState] ✅ sent distracted={} attempt={}",
                     distracted, attempt
@@ -2532,16 +2560,48 @@ fn post_distraction_state_blocking(user_id: &str, distracted: bool, domain: Opti
                 return true;
             }
             Ok(r) => {
+                if !distracted {
+                    let resp_at_ms = epoch_ms_now();
+                    let elapsed_ms = clear_started_at
+                        .as_ref()
+                        .map(|s| s.elapsed().as_millis() as u64)
+                        .unwrap_or(0);
+                    detection_println!(
+                        "[Detection] post_distraction_state_clear sent_at={} resp_at={} status={} attempt={} elapsed_ms={}",
+                        clear_sent_at_ms.unwrap_or(0),
+                        resp_at_ms,
+                        r.status(),
+                        attempt,
+                        elapsed_ms
+                    );
+                }
                 println!(
                     "[DistractionState] HTTP {} (attempt {}/3)",
                     r.status(),
                     attempt
                 );
             }
-            Err(e) => println!(
-                "[DistractionState] request failed: {} (attempt {}/3)",
-                e, attempt
-            ),
+            Err(e) => {
+                if !distracted {
+                    let resp_at_ms = epoch_ms_now();
+                    let elapsed_ms = clear_started_at
+                        .as_ref()
+                        .map(|s| s.elapsed().as_millis() as u64)
+                        .unwrap_or(0);
+                    detection_println!(
+                        "[Detection] post_distraction_state_clear sent_at={} resp_at={} status=request_error attempt={} elapsed_ms={} err={}",
+                        clear_sent_at_ms.unwrap_or(0),
+                        resp_at_ms,
+                        attempt,
+                        elapsed_ms,
+                        e
+                    );
+                }
+                println!(
+                    "[DistractionState] request failed: {} (attempt {}/3)",
+                    e, attempt
+                )
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
@@ -2666,8 +2726,25 @@ fn update_distraction_warning_to_distracted(app_handle: &tauri::AppHandle) {
 /// Dismiss distraction warning popup
 fn dismiss_distraction_warning(app_handle: &tauri::AppHandle) {
     if let Some(window) = app_handle.get_window("distraction-warning") {
+        let sent_at_ms = epoch_ms_now();
+        let started = std::time::Instant::now();
+        detection_println!(
+            "[Detection] distraction_popup_close_requested sent_at={}",
+            sent_at_ms
+        );
         let _ = window.close();
+        detection_println!(
+            "[Detection] distraction_popup_close_completed sent_at={} completed_at={} elapsed_ms={}",
+            sent_at_ms,
+            epoch_ms_now(),
+            started.elapsed().as_millis()
+        );
         detection_println!("[Detection] Distraction warning dismissed");
+    } else {
+        detection_println!(
+            "[Detection] distraction_popup_close_skipped reason=window_not_found at={}",
+            epoch_ms_now()
+        );
     }
 }
 
@@ -2759,6 +2836,13 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         const WARNING_DURATION_SECS: u64 = 10;
         // Optional apps-report heartbeat for server-side UI/debug views; local rules drive distraction state.
         const SERVER_REPORT_HEARTBEAT_SECS: u64 = 10;
+        let mut clear_pending_started_at: Option<std::time::Instant> = None;
+        #[cfg(target_os = "macos")]
+        let mut mac_last_tick_ms: Option<u64> = None;
+        #[cfg(target_os = "macos")]
+        let mut mac_last_host_change_ms: Option<u64> = None;
+        #[cfg(target_os = "macos")]
+        let mut mac_prev_host: Option<String> = None;
 
         while DETECTION_RUNNING.load(Ordering::SeqCst) {
             // Keep app/site transitions snappy: 250ms baseline, 200ms while warning/distracted.
@@ -2797,6 +2881,39 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         effective_target.as_deref().or(browser_fallback_target),
                         Some(user_id.as_str()),
                     );
+                    #[cfg(target_os = "macos")]
+                    {
+                        let now_ms = epoch_ms_now();
+                        let dt_ms = mac_last_tick_ms
+                            .map(|p| now_ms.saturating_sub(p))
+                            .unwrap_or(0);
+                        mac_last_tick_ms = Some(now_ms);
+                        let host_for_log = effective_target
+                            .as_ref()
+                            .map(|s| s.to_lowercase())
+                            .or_else(|| browser_fallback_target.map(|s| s.to_lowercase()));
+                        detection_println!(
+                            "[Detection] clear-lag tick app={:?} host={:?} tick_delta_ms={} warning_shown={} marked_distracted={}",
+                            app_name,
+                            host_for_log.as_deref().unwrap_or("-"),
+                            dt_ms,
+                            warning_shown_at.is_some(),
+                            is_marked_distracted
+                        );
+                        if host_for_log != mac_prev_host {
+                            let delta_ms = mac_last_host_change_ms
+                                .map(|p| now_ms.saturating_sub(p))
+                                .unwrap_or(0);
+                            detection_println!(
+                                "[Detection] url_changed prev={:?} new={:?} delta_ms_since_last_change={}",
+                                mac_prev_host.as_deref().unwrap_or("-"),
+                                host_for_log.as_deref().unwrap_or("-"),
+                                delta_ms
+                            );
+                            mac_prev_host = host_for_log;
+                            mac_last_host_change_ms = Some(now_ms);
+                        }
+                    }
                     let local_after_classify = local_distraction_key.clone();
                     // Any match while foreground is a real browser counts as browser distraction (not the
                     // "You opened Google Chrome" notification path). Do not require URL bar read: title hints
@@ -2890,6 +3007,11 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     // stayed up after switching from YouTube back to Flowlocked.)
                     if is_our_app {
                         if warning_shown_at.is_some() || is_marked_distracted {
+                            clear_pending_started_at = None;
+                            detection_println!(
+                                "[Detection] distraction_exit_immediate reason=native_app_foreground app={:?}",
+                                app_name
+                            );
                             consecutive_clear_ticks = 0;
                             dismiss_distraction_warning(&app_handle);
                             warning_shown_at = None;
@@ -2928,6 +3050,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     if is_distracting_now {
                         // Reset the clear-tick counter the moment we see distraction again.
                         consecutive_clear_ticks = 0;
+                        clear_pending_started_at = None;
                         if warning_shown_at.is_none() && !is_marked_distracted {
                             // First detection - show warning
                             show_distraction_warning(&app_handle);
@@ -2943,6 +3066,11 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 .clone()
                                 .or_else(|| normalize_rule_value(&desktop_apps_foreground))
                                 .or_else(|| Some(desktop_apps_foreground.to_lowercase()));
+                            detection_println!(
+                                "[Detection] distraction_enter domain={:?} countdown_started_at={} reason=is_distracting_now",
+                                active_distraction_key.as_deref().unwrap_or("-"),
+                                epoch_ms_now()
+                            );
                             active_foreground_key = Some(current_foreground_key.clone());
                             if is_browser_distracting {
                                 detection_println!("[Detection] Warning triggered by local browser domain match");
@@ -2985,6 +3113,12 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 .unwrap_or(true);
                             if identity_changed {
                                 // Real navigation away from the distracting target → dismiss immediately.
+                                clear_pending_started_at = None;
+                                detection_println!(
+                                    "[Detection] distraction_exit_immediate reason=foreground_changed from_key={:?} to_key={:?}",
+                                    active_foreground_key.as_deref().unwrap_or("-"),
+                                    current_foreground_key
+                                );
                                 consecutive_clear_ticks = 0;
                                 dismiss_distraction_warning(&app_handle);
                                 warning_shown_at = None;
@@ -3003,7 +3137,25 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 // Same foreground, but classifier transiently flipped to "not distracting".
                                 // Hold the warning until we see a sustained run of clear ticks.
                                 consecutive_clear_ticks = consecutive_clear_ticks.saturating_add(1);
+                                if consecutive_clear_ticks == 1 {
+                                    clear_pending_started_at = Some(std::time::Instant::now());
+                                    detection_println!(
+                                        "[Detection] distraction_exit_pending grace_ms={} reason=same_foreground_transient_clear key={:?}",
+                                        DISMISS_CLEAR_TICKS as u64 * 200,
+                                        current_foreground_key
+                                    );
+                                }
                                 if consecutive_clear_ticks >= DISMISS_CLEAR_TICKS {
+                                    let elapsed_ms = clear_pending_started_at
+                                        .as_ref()
+                                        .map(|s| s.elapsed().as_millis() as u64)
+                                        .unwrap_or(0);
+                                    detection_println!(
+                                        "[Detection] distraction_exit_committed elapsed_ms={} reason=sustained_clear key={:?}",
+                                        elapsed_ms,
+                                        current_foreground_key
+                                    );
+                                    clear_pending_started_at = None;
                                     consecutive_clear_ticks = 0;
                                     dismiss_distraction_warning(&app_handle);
                                     warning_shown_at = None;

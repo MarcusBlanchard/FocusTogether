@@ -64,6 +64,7 @@ pub(crate) fn get_active_browser_domain_nonblocking(
     browser_app_name: Option<&str>,
     picked_title: Option<&str>,
 ) -> Option<String> {
+    let started = std::time::Instant::now();
     let app_esc = browser_app_name.map(|s| s.replace('"', "'").replace('\n', "\\n"));
     emit_browser_url_log(format!(
         "[browser_url] domain_nonblocking_begin pid={} timeout_ms={} app={}",
@@ -81,7 +82,16 @@ pub(crate) fn get_active_browser_domain_nonblocking(
     });
 
     match rx.recv_timeout(timeout) {
-        Ok(v) => v,
+        Ok(v) => {
+            let elapsed_ms = started.elapsed().as_millis();
+            emit_browser_url_log(format!(
+                "[browser_url] domain_nonblocking_end pid={} elapsed_ms={} domain={}",
+                pid,
+                elapsed_ms,
+                v.as_deref().unwrap_or("-")
+            ));
+            v
+        }
         Err(_) => {
             emit_browser_url_log(format!(
                 "[browser_url] domain_nonblocking_timeout pid={} timeout_ms={}",
