@@ -11,7 +11,7 @@
 - `cargo check` (Windows host) OK.
 
 ### Commit
-Cursor: `2088d2f8e7ec76bd6a142149e9904ec2b8b097dc`
+Cursor: `42cf6d0`
 
 ---
 
