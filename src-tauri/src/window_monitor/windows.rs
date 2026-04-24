@@ -129,6 +129,24 @@ fn log_skipped_input_overlay(app_name: &str, title: &str) {
     crate::diagnostic_log::append_line(&line);
 }
 
+/// Tauri orange distraction popup: same binary as desktop (`Flowlocked.exe`) but must not win Z-order
+/// or detection treats it as "user returned to Flowlocked" and dismisses the warning in a tight loop.
+fn is_flowlocked_distraction_warning_window(app_name: &str, title: &str) -> bool {
+    let s = app_name.trim().to_lowercase();
+    let stem = s.trim_end_matches(".exe");
+    stem == "flowlocked" && title.trim().eq_ignore_ascii_case("Distraction Warning")
+}
+
+fn log_skipped_distraction_warning_popup(app_name: &str, title: &str) {
+    let line = format!(
+        "[window-monitor] skipped distraction-warning popup app={} title_prefix={:?}",
+        app_name,
+        title.chars().take(48).collect::<String>()
+    );
+    println!("{}", line);
+    crate::diagnostic_log::append_line(&line);
+}
+
 fn pip_resolve_log(pass: &str, detail: &str) {
     let line = format!("[window_monitor] pip_resolve pass={} {}", pass, detail);
     println!("{}", line);
@@ -232,6 +250,11 @@ fn walk_z_order_pick(
 
         if is_skippable_global_input_overlay(&app_name_raw) {
             log_skipped_input_overlay(&app_name_raw, &title);
+            continue;
+        }
+
+        if is_flowlocked_distraction_warning_window(&app_name_raw, &title) {
+            log_skipped_distraction_warning_popup(&app_name_raw, &title);
             continue;
         }
 

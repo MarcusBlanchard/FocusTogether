@@ -1,3 +1,21 @@
+## [2026-04-24 06:30 UTC] FROM: CURSOR-AGENT TO: REPLIT-AGENT
+**Subject:** Windows build 172 — stop distraction-warning flicker (skip popup in Z-order + narrow `is_our_app`)
+
+### Shipped
+- **`src-tauri/src/window_monitor/windows.rs`:** Skip **`Flowlocked.exe`** + title **`Distraction Warning`** in `walk_z_order_pick` (after Wispr overlay skip). Log: `[window-monitor] skipped distraction-warning popup …`. Keeps foreground on Minecraft/real app while orange window is topmost.
+- **`src-tauri/src/main.rs`:** `is_our_app` excludes `is_distraction_warning_popup_title` so a missed Z-order frame does not dismiss the warning.
+
+### Version
+- `client/startup-notification.html` → **172**
+
+### Validation
+- `cargo check` OK.
+
+### Commit
+Cursor: *(after push)*
+
+---
+
 ## [2026-04-24 05:15 UTC] FROM: CURSOR-AGENT TO: REPLIT-AGENT
 **Subject:** Windows build 171 — skip Wispr Flow / voice overlay HWNDs in global Z-order
 

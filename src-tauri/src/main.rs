@@ -2561,6 +2561,12 @@ fn send_distraction_state(user_id: &str, distracted: bool, domain: Option<&str>)
     ok
 }
 
+/// Matches [`show_distraction_warning`] `.title(...)` — exclude from "our app" dismiss so the popup
+/// does not clear the warning when it briefly becomes foreground.
+fn is_distraction_warning_popup_title(title: &str) -> bool {
+    title.trim().eq_ignore_ascii_case("Distraction Warning")
+}
+
 /// Show distraction warning popup (orange)
 fn show_distraction_warning(app_handle: &tauri::AppHandle) {
     let window_label = "distraction-warning";
@@ -2765,10 +2771,11 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
             if let Some((user_id, _session_id)) = session_info {
                 // Get foreground info and classify
                 if let Some((app_name, title, pid)) = get_foreground_info() {
-                    // Check if foreground is our own app (the warning popup itself)
+                    // Check if foreground is our own app (main shell — not the orange distraction popup).
                     let app_lower = app_name.to_lowercase();
-                    let is_our_app = app_lower.contains("flowlocked")
-                        || app_lower.contains("focustogether");
+                    let is_our_app = (app_lower.contains("flowlocked")
+                        || app_lower.contains("focustogether"))
+                        && !is_distraction_warning_popup_title(&title);
                     
                     let resolved_title = resolved_browser_window_title(&app_name, &title, pid);
                     let desktop_apps_foreground =
