@@ -110,6 +110,25 @@ fn is_bogus_empty_explorer(app: &str, title: &str) -> bool {
     stem == "explorer" && title.trim().is_empty()
 }
 
+/// Voice/dictation apps that register a tiny always-on-top HWND above the real focused app.
+/// macOS drops these via `kCGWindowLayer != 0`; Windows EnumWindows includes them—skip so Z-order
+/// resolves to the underlying browser/game (e.g. Wispr Flow vs Minecraft).
+fn is_skippable_global_input_overlay(app_name: &str) -> bool {
+    let s = app_name.trim().to_lowercase();
+    let stem = s.trim_end_matches(".exe");
+    matches!(stem, "wispr flow" | "wisprflow")
+}
+
+fn log_skipped_input_overlay(app_name: &str, title: &str) {
+    let line = format!(
+        "[window-monitor] skipped input-overlay app={} title_prefix={:?}",
+        app_name,
+        title.chars().take(48).collect::<String>()
+    );
+    println!("{}", line);
+    crate::diagnostic_log::append_line(&line);
+}
+
 fn pip_resolve_log(pass: &str, detail: &str) {
     let line = format!("[window_monitor] pip_resolve pass={} {}", pass, detail);
     println!("{}", line);
@@ -192,18 +211,18 @@ fn walk_z_order_pick(
             }
         }
 
-        let (app_name, process_path) = process_info(pid);
+        let (app_name_raw, process_path) = process_info(pid);
         let position = rect_to_position(rect);
 
         if skip_windows_browser_document_pip(
             hwnd,
             &title,
-            &app_name,
+            &app_name_raw,
             position.width,
             position.height,
             is_top_for_pid,
         ) {
-            log_skipped_suspected_pip_heuristic(position.width, position.height, &app_name);
+            log_skipped_suspected_pip_heuristic(position.width, position.height, &app_name_raw);
             saw_pip = true;
             if skipped_pip_title.is_none() {
                 skipped_pip_title = Some(title.clone());
@@ -211,10 +230,15 @@ fn walk_z_order_pick(
             continue;
         }
 
-        let app_name = if app_name.is_empty() {
+        if is_skippable_global_input_overlay(&app_name_raw) {
+            log_skipped_input_overlay(&app_name_raw, &title);
+            continue;
+        }
+
+        let app_name = if app_name_raw.is_empty() {
             "windows-app".to_string()
         } else {
-            app_name
+            app_name_raw
         };
 
         if is_bogus_empty_explorer(&app_name, &title) {
