@@ -32,7 +32,7 @@ Applied the 18:00 UTC instrumentation list with the 18:10 UTC correction (focus 
 - `cargo check` and `bash scripts/install-mac.sh` run after instrumentation edits.
 
 ### Commit
-Cursor: *(fill in after commit/push)*
+Cursor: `73f6e0a`
 
 ---
 
