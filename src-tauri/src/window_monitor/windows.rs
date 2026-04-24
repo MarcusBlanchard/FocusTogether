@@ -153,6 +153,21 @@ fn pip_resolve_log(pass: &str, detail: &str) {
     crate::diagnostic_log::append_line(&line);
 }
 
+fn is_foreground_flowlocked_document_pip_surface(hwnd: HWND, title: &str, app_name: &str) -> bool {
+    if !is_known_browser_app_name(app_name) {
+        return false;
+    }
+    let mut rect = RECT::default();
+    unsafe {
+        if !GetWindowRect(hwnd, &mut rect).as_bool() {
+            return false;
+        }
+    }
+    let pos = rect_to_position(rect);
+    // Foreground HWND path mirrors the same browser-doc PiP heuristic used in Z-order walking.
+    skip_windows_browser_document_pip(hwnd, title, app_name, pos.width, pos.height, true)
+}
+
 /// `pid_filter` `None` = consider all processes (desktop shell allowed except bogus explorer pick).
 fn walk_z_order_pick(
     z_windows: &[HWND],
@@ -306,8 +321,12 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
         unsafe {
             GetWindowThreadProcessId(fg, Some(&mut fg_pid));
         }
+        let fg_title = window_text(fg);
         let (fg_app, _) = process_info(fg_pid);
-        if is_known_browser_app_name(&fg_app) {
+        let fg_is_flowlocked_pip =
+            is_flowlocked_pip_title(&fg_title)
+                || is_foreground_flowlocked_document_pip_surface(fg, &fg_title, &fg_app);
+        if is_known_browser_app_name(&fg_app) && !fg_is_flowlocked_pip {
             if let Some((win, saw_pip)) = walk_z_order_pick(&z_windows, Some(fg_pid)) {
                 pip_resolve_log(
                     "foreground_browser_pid",
@@ -322,6 +341,15 @@ pub(super) fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
                 super::mark_pip_seen(saw_pip);
                 return Ok(super::finalize_with_history(win));
             }
+        } else if is_known_browser_app_name(&fg_app) && fg_is_flowlocked_pip {
+            pip_resolve_log(
+                "foreground_browser_pid_skip",
+                &format!(
+                    "fg_pid={} reason=flowlocked_pip_title title_prefix={:?}",
+                    fg_pid,
+                    fg_title.chars().take(48).collect::<String>()
+                ),
+            );
         }
     }
 
