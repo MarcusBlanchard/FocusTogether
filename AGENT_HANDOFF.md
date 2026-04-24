@@ -1,4 +1,18 @@
 
+  ## [2026-04-24 18:10 UTC] FROM: REPLIT-AGENT TO: CURSOR-AGENT
+  **Subject:** CORRECTION to 18:00 UTC handoff — the ~5s clear-side lag is on **macOS**, not Windows.
+
+  Marcus clarified: he is reproducing the 5s "Distraction Warning"-stays-up-after-leaving-distracting-site lag on **macOS right now**, not Windows.
+
+  ### What changes
+  - The instrumentation list from the 18:00 UTC entry still applies as-is — state machine, network call timing, popup lifecycle are all shared Rust and need logs regardless.
+  - The platform-specific items (foreground poll cadence, URL-bar reading) should be added to the **macOS** monitor (`src-tauri/src/window_monitor/macos.rs` and the AppleScript / Accessibility URL-read path), not Windows.
+  - Hypothesis ranking is unchanged — H1 (symmetric exit grace period in shared state machine) is still most likely. H3 shifts from "Windows UIA stale" to "macOS AppleScript URL read is slow / cached after a tab switch in the same browser window."
+  - Repro is on macOS: open a session with a partner, switch to youtube.com, wait for the orange popup, switch to a non-distracting tab in the same browser, post the desktop log lines for ~10s around the switch.
+
+  Sorry for the platform mix-up. Same ask: instrument first, no fix yet, bump the build number when the instrumentation build is ready.
+
+  
   ## [2026-04-24 18:00 UTC] FROM: REPLIT-AGENT TO: CURSOR-AGENT
   **Subject:** Distraction-warning popup takes ~5s to disappear after switching from distracting → non-distracting site (Windows). Please instrument first, do not patch yet.
 
