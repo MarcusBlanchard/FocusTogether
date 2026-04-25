@@ -370,6 +370,21 @@ fn productive_override_tokens() -> &'static [&'static str] {
     ]
 }
 
+fn system_always_allowed_domains() -> &'static [&'static str] {
+    &["accounts.google.com"]
+}
+
+fn matching_system_always_allowed_domain(value: &str) -> Option<&'static str> {
+    let lower = value.trim().to_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+    system_always_allowed_domains()
+        .iter()
+        .copied()
+        .find(|domain| lower.contains(domain))
+}
+
 fn matches_productive_override(value: &str) -> bool {
     let lower = value.trim().to_lowercase();
     if lower.is_empty() {
@@ -747,6 +762,13 @@ fn classify_local_distraction(
     };
     if let Some(d) = domain {
         let normalized = normalize_rule_value(d);
+        if let Some(matched_domain) = matching_system_always_allowed_domain(d) {
+            detection_println!(
+                "[Detection] local_judge_system_allowed domain={} origin=static",
+                matched_domain
+            );
+            return None;
+        }
         if contains_any_rule_token(d, &rules.own_app_domains) {
             return None;
         }
@@ -3236,6 +3258,22 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         .map(|d| d.is_foreground_blocked)
                         .unwrap_or(false);
                     let local_non_browser_allow = is_locally_allowed_non_browser_app(&app_name);
+                    let system_allowed_domain_match = effective_target
+                        .as_deref()
+                        .or(browser_fallback_target)
+                        .and_then(matching_system_always_allowed_domain)
+                        .or_else(|| matching_system_always_allowed_domain(&desktop_apps_foreground));
+                    if let Some(matched_domain) = system_allowed_domain_match {
+                        detection_println!(
+                            "[Detection] local_judge_system_allowed domain={} origin=runtime",
+                            matched_domain
+                        );
+                    }
+                    let whitelist_mode_websites_enabled = distraction_rules()
+                        .lock()
+                        .ok()
+                        .map(|rules| rules.whitelist_mode_websites)
+                        .unwrap_or(false);
                     let bare_browser_pending_url_read =
                         is_browser(&app_name) && effective_target.is_none() && browser_fallback_target.is_none();
                     if bare_browser_pending_url_read {
@@ -3247,7 +3285,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     let server_blocked_after_own_guard = server_report_blocked
                         && !server_own_domain_match
                         && !local_non_browser_allow
-                        && !bare_browser_pending_url_read;
+                        && !(bare_browser_pending_url_read && whitelist_mode_websites_enabled)
+                        && system_allowed_domain_match.is_none();
                     if server_report_blocked && local_non_browser_allow {
                         detection_println!(
                             "[AllowedAppsDebug] suppress_server_block app={:?} desktop_fg={:?} reason=local_non_browser_allow_match",
@@ -3390,18 +3429,27 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         // Not distracting on this tick. Decide whether this is a genuine
                         // "user navigated away" or a transient classifier flip.
                         if warning_shown_at.is_some() || is_marked_distracted {
+                            let immediate_system_allowed_clear = system_allowed_domain_match.is_some();
                             let identity_changed = active_foreground_key
                                 .as_deref()
                                 .map(|prev| prev != current_foreground_key.as_str())
                                 .unwrap_or(true);
-                            if identity_changed {
+                            if identity_changed || immediate_system_allowed_clear {
                                 // Real navigation away from the distracting target → dismiss immediately.
                                 clear_pending_started_at = None;
-                                detection_println!(
-                                    "[Detection] distraction_exit_immediate reason=foreground_changed from_key={:?} to_key={:?}",
-                                    active_foreground_key.as_deref().unwrap_or("-"),
-                                    current_foreground_key
-                                );
+                                if immediate_system_allowed_clear {
+                                    detection_println!(
+                                        "[Detection] distraction_exit_immediate reason=system_allowed_domain from_key={:?} to_key={:?}",
+                                        active_foreground_key.as_deref().unwrap_or("-"),
+                                        current_foreground_key
+                                    );
+                                } else {
+                                    detection_println!(
+                                        "[Detection] distraction_exit_immediate reason=foreground_changed from_key={:?} to_key={:?}",
+                                        active_foreground_key.as_deref().unwrap_or("-"),
+                                        current_foreground_key
+                                    );
+                                }
                                 consecutive_clear_ticks = 0;
                                 dismiss_distraction_warning(&app_handle);
                                 warning_shown_at = None;
