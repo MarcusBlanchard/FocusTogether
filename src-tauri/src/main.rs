@@ -313,6 +313,9 @@ fn normalize_app_name(v: &str) -> Option<String> {
     if n.ends_with(".app") {
         n = n.trim_end_matches(".app").trim().to_string();
     }
+    if n.ends_with(".exe") {
+        n = n.trim_end_matches(".exe").trim().to_string();
+    }
     normalize_rule_value(&n)
 }
 
@@ -525,6 +528,21 @@ fn update_distraction_rules_from_poll(
     whitelist_mode_apps: bool,
     whitelist_mode_websites: bool,
 ) {
+    let allowed_debug_raw: Vec<String> = allowed
+        .iter()
+        .filter(|v| is_allowed_apps_debug_target(v))
+        .cloned()
+        .collect();
+    let classroom_allowed_debug_raw: Vec<String> = classroom_allowed
+        .iter()
+        .filter(|v| is_allowed_apps_debug_target(v))
+        .cloned()
+        .collect();
+    let whitelist_apps_debug_raw: Vec<String> = whitelist_apps
+        .iter()
+        .filter(|v| is_allowed_apps_debug_target(v))
+        .cloned()
+        .collect();
     let mut dset = HashSet::new();
     for v in distracting.iter().chain(blocked.iter()) {
         if let Some(n) = normalize_rule_value(v) {
@@ -568,6 +586,39 @@ fn update_distraction_rules_from_poll(
         }
     }
     if let Ok(mut g) = distraction_rules().lock() {
+        let allowed_debug_norm: Vec<String> = aset
+            .iter()
+            .filter(|v| is_allowed_apps_debug_target(v))
+            .cloned()
+            .collect();
+        let classroom_allowed_debug_norm: Vec<String> = classroom_allowed_set
+            .iter()
+            .filter(|v| is_allowed_apps_debug_target(v))
+            .cloned()
+            .collect();
+        let whitelist_apps_debug_norm: Vec<String> = whitelist_apps_set
+            .iter()
+            .filter(|v| is_allowed_apps_debug_target(v))
+            .cloned()
+            .collect();
+        if !allowed_debug_raw.is_empty()
+            || !classroom_allowed_debug_raw.is_empty()
+            || !whitelist_apps_debug_raw.is_empty()
+            || !allowed_debug_norm.is_empty()
+            || !classroom_allowed_debug_norm.is_empty()
+            || !whitelist_apps_debug_norm.is_empty()
+        {
+            detection_println!(
+                "[AllowedAppsDebug] rules_update allowed_raw={:?} allowed_norm={:?} classroom_allowed_raw={:?} classroom_allowed_norm={:?} whitelist_apps_raw={:?} whitelist_apps_norm={:?} whitelist_mode_apps={}",
+                allowed_debug_raw,
+                allowed_debug_norm,
+                classroom_allowed_debug_raw,
+                classroom_allowed_debug_norm,
+                whitelist_apps_debug_raw,
+                whitelist_apps_debug_norm,
+                whitelist_mode_apps
+            );
+        }
         *g = LocalDistractionRules {
             distracting: dset,
             allowed: aset,
@@ -609,6 +660,50 @@ fn contains_any_rule_token(value: &str, rules: &HashSet<String>) -> bool {
         }
         lower.contains(r.as_str())
     })
+}
+
+fn compact_ascii_alnum(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn app_rule_match_detail(app_value: &str, rules: &HashSet<String>) -> Option<String> {
+    let app_norm = normalize_rule_value(app_value)?;
+    if rules.contains(&app_norm) {
+        return Some(format!("exact_norm={}", app_norm));
+    }
+    if let Some(rule) = rules
+        .iter()
+        .find(|r| app_norm.ends_with(&format!(".{}", r)) || app_norm.contains(r.as_str()))
+    {
+        return Some(format!("rule_matches_contains app_norm={} rule={}", app_norm, rule));
+    }
+    let app_compact = compact_ascii_alnum(&app_norm);
+    if app_compact.is_empty() {
+        return None;
+    }
+    rules.iter().find_map(|r| {
+        let r_compact = compact_ascii_alnum(r);
+        if r_compact.is_empty() {
+            return None;
+        }
+        if app_compact == r_compact || app_compact.contains(&r_compact) {
+            Some(format!(
+                "compact_match app_compact={} rule={} rule_compact={}",
+                app_compact, r, r_compact
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+fn is_allowed_apps_debug_target(value: &str) -> bool {
+    let v = value.trim().to_lowercase();
+    v.contains("roblox") || v.contains("studio")
 }
 
 fn looks_like_hostname_target(value: &str) -> bool {
@@ -718,46 +813,144 @@ fn classify_local_distraction(
         return None;
     }
     let app_norm = normalize_app_name(&app).unwrap_or(app.clone());
+    let debug_allowed_apps = is_allowed_apps_debug_target(app_name)
+        || is_allowed_apps_debug_target(&app_norm)
+        || rules.allowed.iter().any(|r| is_allowed_apps_debug_target(r))
+        || rules
+            .classroom_allowed
+            .iter()
+            .any(|r| is_allowed_apps_debug_target(r))
+        || rules
+            .whitelist_apps
+            .iter()
+            .any(|r| is_allowed_apps_debug_target(r));
+    if debug_allowed_apps {
+        detection_println!(
+            "[AllowedAppsDebug] classify_enter app_raw={:?} app_norm={:?} app_compact={:?} is_browser={} domain={:?} whitelist_mode_apps={} allowed_count={} classroom_allowed_count={} whitelist_apps_count={} distracting_count={}",
+            app_name,
+            app_norm,
+            compact_ascii_alnum(&app_norm),
+            is_browser(app_name),
+            domain,
+            rules.whitelist_mode_apps,
+            rules.allowed.len(),
+            rules.classroom_allowed.len(),
+            rules.whitelist_apps.len(),
+            rules.distracting.len()
+        );
+    }
     if contains_any_rule_token(&app_norm, &rules.own_app_domains) {
+        if debug_allowed_apps {
+            detection_println!(
+                "[AllowedAppsDebug] classify_exit app_norm={:?} reason=own_app_domains_match",
+                app_norm
+            );
+        }
         return None;
     }
-    if rule_matches(&app_norm, &rules.classroom_allowed) {
+    if let Some(reason) = app_rule_match_detail(&app_norm, &rules.classroom_allowed) {
+        if debug_allowed_apps {
+            detection_println!(
+                "[AllowedAppsDebug] classify_exit app_norm={:?} reason=classroom_allowed match_detail={}",
+                app_norm, reason
+            );
+        }
         return None;
     }
-    if rule_matches(&app_norm, &rules.classroom_blocked) {
+    if let Some(reason) = app_rule_match_detail(&app_norm, &rules.classroom_blocked) {
+        if debug_allowed_apps {
+            detection_println!(
+                "[AllowedAppsDebug] classify_exit app_norm={:?} reason=classroom_blocked match_detail={}",
+                app_norm, reason
+            );
+        }
         return Some(app_norm.clone());
     }
     if rules.whitelist_mode_apps {
-        if rule_matches(&app_norm, &rules.whitelist_apps) {
+        if let Some(reason) = app_rule_match_detail(&app_norm, &rules.whitelist_apps) {
+            if debug_allowed_apps {
+                detection_println!(
+                    "[AllowedAppsDebug] classify_exit app_norm={:?} reason=whitelist_apps_allow match_detail={}",
+                    app_norm, reason
+                );
+            }
             return None;
+        }
+        if debug_allowed_apps {
+            detection_println!(
+                "[AllowedAppsDebug] classify_exit app_norm={:?} reason=whitelist_mode_apps_block_no_match",
+                app_norm
+            );
         }
         return Some(app_norm);
     }
-    if rule_matches(&app_norm, &rules.allowed) {
+    if let Some(reason) = app_rule_match_detail(&app_norm, &rules.allowed) {
+        if debug_allowed_apps {
+            detection_println!(
+                "[AllowedAppsDebug] classify_exit app_norm={:?} reason=allowed_match match_detail={}",
+                app_norm, reason
+            );
+        }
         return None;
     }
     if matches_productive_override(&app_norm) {
+        if debug_allowed_apps {
+            detection_println!(
+                "[AllowedAppsDebug] classify_exit app_norm={:?} reason=productive_override",
+                app_norm
+            );
+        }
         return None;
     }
-    if rule_matches(&app_norm, &rules.distracting) {
+    if let Some(reason) = app_rule_match_detail(&app_norm, &rules.distracting) {
+        if debug_allowed_apps {
+            detection_println!(
+                "[AllowedAppsDebug] classify_exit app_norm={:?} reason=distracting_rule_match match_detail={}",
+                app_norm, reason
+            );
+        }
         return Some(app_norm.clone());
     }
     if default_distracting_entries()
         .iter()
         .any(|k| app_norm.contains(k))
     {
+        if debug_allowed_apps {
+            detection_println!(
+                "[AllowedAppsDebug] classify_exit app_norm={:?} reason=default_distracting_entries",
+                app_norm
+            );
+        }
         return Some(app_norm.clone());
     }
     if distracting_keywords().iter().any(|k| app_norm.contains(k)) {
+        if debug_allowed_apps {
+            detection_println!(
+                "[AllowedAppsDebug] classify_exit app_norm={:?} reason=distracting_keywords",
+                app_norm
+            );
+        }
         return Some(app_norm.clone());
     }
     if let Ok(cache) = ai_classifications().lock() {
         if let Some(v) = cache.get(&app_norm) {
+            if debug_allowed_apps {
+                detection_println!(
+                    "[AllowedAppsDebug] classify_cache app_norm={:?} cached_distracting={}",
+                    app_norm, v
+                );
+            }
             return if *v { Some(app_norm.clone()) } else { None };
         }
     }
     if let Some(uid) = user_id {
         let (opt, detail) = server_classify_target_with_detail(uid, &app_norm, Some(false));
+        if debug_allowed_apps {
+            detection_println!(
+                "[AllowedAppsDebug] classify_server app_norm={:?} server_result={:?} detail={:?}",
+                app_norm, opt, detail
+            );
+        }
         match opt {
             Some(true) => {
                 println!("[Server Classifier] {} => distracting ({})", app_norm, detail);
@@ -778,7 +971,33 @@ fn classify_local_distraction(
             }
         }
     }
+    if debug_allowed_apps {
+        detection_println!(
+            "[AllowedAppsDebug] classify_exit app_norm={:?} reason=no_match_not_distracting",
+            app_norm
+        );
+    }
     None
+}
+
+fn is_locally_allowed_non_browser_app(app_name: &str) -> bool {
+    if is_browser(app_name) {
+        return false;
+    }
+    let app_norm = normalize_app_name(app_name).unwrap_or_else(|| app_name.trim().to_lowercase());
+    let Ok(rules) = distraction_rules().lock().map(|g| g.clone()) else {
+        return false;
+    };
+    if app_rule_match_detail(&app_norm, &rules.classroom_allowed).is_some() {
+        return true;
+    }
+    if rules.whitelist_mode_apps {
+        return app_rule_match_detail(&app_norm, &rules.whitelist_apps).is_some();
+    }
+    if app_rule_match_detail(&app_norm, &rules.allowed).is_some() {
+        return true;
+    }
+    matches_productive_override(&app_norm)
 }
 
 /// Default API host (production). Override with `BACKEND_URL` or persisted `backend_url` if needed.
@@ -2458,6 +2677,8 @@ fn maybe_log_steam_foreground_blocked(
 fn get_foreground_info() -> Option<(String, String, u32)> {
     match window_monitor::get_active_window_skip_pip_overlay() {
         Ok(window) => {
+            let raw_app_name = window.app_name.clone();
+            let raw_title = window.title.clone();
             let mut app_name = window.app_name;
             if let Some(label) =
                 steam_label_when_cef_reports_as_browser(&window.process_path, &app_name)
@@ -2467,6 +2688,24 @@ fn get_foreground_info() -> Option<(String, String, u32)> {
             let title = window.title;
             let pid = window.process_id as u32;
             let out = sanitize_foreground_snapshot(app_name, title, pid);
+            if is_allowed_apps_debug_target(&raw_app_name)
+                || is_allowed_apps_debug_target(&raw_title)
+                || out
+                    .as_ref()
+                    .map(|(a, t, _)| {
+                        is_allowed_apps_debug_target(a) || is_allowed_apps_debug_target(t)
+                    })
+                    .unwrap_or(false)
+            {
+                detection_println!(
+                    "[AllowedAppsDebug] foreground_snapshot raw_app={:?} raw_title={:?} sanitized={:?} pid={} process_path={:?}",
+                    raw_app_name,
+                    raw_title,
+                    out,
+                    pid,
+                    window.process_path
+                );
+            }
             #[cfg(target_os = "macos")]
             window_monitor::log_detection_foreground_tick(
                 out.as_ref()
@@ -2881,6 +3120,25 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         effective_target.as_deref().or(browser_fallback_target),
                         Some(user_id.as_str()),
                     );
+                    if is_allowed_apps_debug_target(&app_name)
+                        || is_allowed_apps_debug_target(&title)
+                        || is_allowed_apps_debug_target(&desktop_apps_foreground)
+                        || effective_target
+                            .as_ref()
+                            .map(|s| is_allowed_apps_debug_target(s))
+                            .unwrap_or(false)
+                    {
+                        detection_println!(
+                            "[AllowedAppsDebug] detection_loop app={:?} title={:?} pid={} desktop_apps_foreground={:?} effective_target={:?} browser_fallback_target={:?} local_distraction_key={:?}",
+                            app_name,
+                            title,
+                            pid,
+                            desktop_apps_foreground,
+                            effective_target,
+                            browser_fallback_target,
+                            local_distraction_key
+                        );
+                    }
                     #[cfg(target_os = "macos")]
                     {
                         let now_ms = epoch_ms_now();
@@ -2977,8 +3235,17 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         .as_ref()
                         .map(|d| d.is_foreground_blocked)
                         .unwrap_or(false);
-                    let server_blocked_after_own_guard =
-                        server_report_blocked && !server_own_domain_match;
+                    let local_non_browser_allow = is_locally_allowed_non_browser_app(&app_name);
+                    let server_blocked_after_own_guard = server_report_blocked
+                        && !server_own_domain_match
+                        && !local_non_browser_allow;
+                    if server_report_blocked && local_non_browser_allow {
+                        detection_println!(
+                            "[AllowedAppsDebug] suppress_server_block app={:?} desktop_fg={:?} reason=local_non_browser_allow_match",
+                            app_name,
+                            desktop_apps_foreground
+                        );
+                    }
 
                     let is_browser_distracting =
                         is_browser(&app_name) && local_distraction_key.is_some();

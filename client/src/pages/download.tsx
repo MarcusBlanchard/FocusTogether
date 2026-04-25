@@ -6,7 +6,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { MAC_DOWNLOAD_URL } from "@/lib/download";
-import { Download, FileText, Shield } from "lucide-react";
+import { Download as DownloadIcon, FileText, Shield } from "lucide-react";
 
 export default function Download() {
   const [agreed, setAgreed] = useState(false);
@@ -118,13 +118,13 @@ export default function Download() {
               {agreed ? (
                 <Button asChild size="lg" className="gap-2">
                   <a href={MAC_DOWNLOAD_URL} rel="noopener noreferrer">
-                    <Download className="h-4 w-4" />
+                    <DownloadIcon className="h-4 w-4" />
                     Download for Mac
                   </a>
                 </Button>
               ) : (
                 <Button size="lg" className="gap-2" disabled>
-                  <Download className="h-4 w-4" />
+                  <DownloadIcon className="h-4 w-4" />
                   Download for Mac
                 </Button>
               )}

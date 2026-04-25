@@ -1,6 +1,6 @@
 {
   "build": {
-    "beforeDevCommand": "./scripts/start-vite-if-needed.sh",
+    "beforeDevCommand": "npm run dev:vite:check || npm run dev:vite",
     "beforeBuildCommand": "npm run build",
     "devPath": "http://127.0.0.1:5173/?tauri=1",
     "distDir": "../dist/public",
