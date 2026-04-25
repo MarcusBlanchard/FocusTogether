@@ -274,6 +274,7 @@ struct LocalDistractionRules {
     classroom_allowed: HashSet<String>,
     classroom_blocked: HashSet<String>,
     own_app_domains: HashSet<String>,
+    system_allowed_domains: HashSet<String>,
     whitelist_apps: HashSet<String>,
     whitelist_websites: HashSet<String>,
     whitelist_mode_apps: bool,
@@ -285,6 +286,7 @@ struct ForegroundServerDecision {
     foreground_key: String,
     is_foreground_blocked: bool,
     own_app_domains: HashSet<String>,
+    system_allowed_domains: HashSet<String>,
 }
 
 fn distraction_rules() -> &'static Mutex<LocalDistractionRules> {
@@ -523,6 +525,7 @@ fn update_distraction_rules_from_poll(
     classroom_allowed: &[String],
     classroom_blocked: &[String],
     own_app_domains: &[String],
+    system_allowed_domains: &[String],
     whitelist_apps: &[String],
     whitelist_websites: &[String],
     whitelist_mode_apps: bool,
@@ -571,6 +574,12 @@ fn update_distraction_rules_from_poll(
     for v in own_app_domains {
         if let Some(n) = normalize_rule_value(v) {
             own_domains_set.insert(n);
+        }
+    }
+    let mut system_allowed_domains_set = HashSet::new();
+    for v in system_allowed_domains {
+        if let Some(n) = normalize_rule_value(v) {
+            system_allowed_domains_set.insert(n);
         }
     }
     let mut whitelist_apps_set = HashSet::new();
@@ -625,6 +634,7 @@ fn update_distraction_rules_from_poll(
             classroom_allowed: classroom_allowed_set,
             classroom_blocked: classroom_blocked_set,
             own_app_domains: own_domains_set,
+            system_allowed_domains: system_allowed_domains_set,
             whitelist_apps: whitelist_apps_set,
             whitelist_websites: whitelist_websites_set,
             whitelist_mode_apps,
@@ -660,6 +670,20 @@ fn contains_any_rule_token(value: &str, rules: &HashSet<String>) -> bool {
         }
         lower.contains(r.as_str())
     })
+}
+
+fn matching_system_allowed_domain<'a>(
+    value: &str,
+    system_allowed_domains: &'a HashSet<String>,
+) -> Option<&'a str> {
+    let lower = value.trim().to_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+    system_allowed_domains
+        .iter()
+        .find(|d| !d.is_empty() && lower.contains(d.as_str()))
+        .map(|s| s.as_str())
 }
 
 fn compact_ascii_alnum(value: &str) -> String {
@@ -747,6 +771,14 @@ fn classify_local_distraction(
     };
     if let Some(d) = domain {
         let normalized = normalize_rule_value(d);
+        if let Some(matched_domain) = matching_system_allowed_domain(d, &rules.system_allowed_domains)
+        {
+            detection_println!(
+                "[Detection] local_judge_system_allowed domain={} origin=poll|active_session",
+                matched_domain
+            );
+            return None;
+        }
         if contains_any_rule_token(d, &rules.own_app_domains) {
             return None;
         }
@@ -1171,6 +1203,8 @@ struct DesktopAppsResponse {
     blocked_apps: Vec<String>,
     #[serde(rename = "ownAppDomains", default)]
     own_app_domains: Vec<String>,
+    #[serde(rename = "systemAllowedDomains", default)]
+    system_allowed_domains: Vec<String>,
     #[serde(default, rename = "needsTabInfo")]
     needs_tab_info: bool,
 }
@@ -1531,6 +1565,7 @@ fn cache_foreground_server_decision(
     foreground_app: &str,
     is_foreground_blocked: bool,
     own_app_domains: &[String],
+    system_allowed_domains: &[String],
 ) {
     let mut own_set = HashSet::new();
     for v in own_app_domains {
@@ -1538,11 +1573,18 @@ fn cache_foreground_server_decision(
             own_set.insert(n);
         }
     }
+    let mut system_allowed_set = HashSet::new();
+    for v in system_allowed_domains {
+        if let Some(n) = normalize_rule_value(v) {
+            system_allowed_set.insert(n);
+        }
+    }
     if let Ok(mut slot) = latest_foreground_server_decision().lock() {
         *slot = Some(ForegroundServerDecision {
             foreground_key: normalized_foreground_key(foreground_app),
             is_foreground_blocked,
             own_app_domains: own_set,
+            system_allowed_domains: system_allowed_set,
         });
     }
 }
@@ -1629,12 +1671,14 @@ fn check_apps_with_server(
                                 foreground_app,
                                 data.is_foreground_blocked,
                                 &data.own_app_domains,
+                                &data.system_allowed_domains,
                             );
                             println!(
-                                "[Detection] Server response - isForegroundBlocked: {}, blockedRunning: {:?}, ownAppDomains: {}, needsTabInfo: {}, currentDistractionPresent: {}",
+                                "[Detection] Server response - isForegroundBlocked: {}, blockedRunning: {:?}, ownAppDomains: {}, systemAllowedDomains: {}, needsTabInfo: {}, currentDistractionPresent: {}",
                                 data.is_foreground_blocked,
                                 data.blocked_running,
                                 data.own_app_domains.len(),
+                                data.system_allowed_domains.len(),
                                 data.needs_tab_info,
                                 data.current_distraction.is_some()
                             );
@@ -2538,6 +2582,8 @@ struct SessionResponse {
     classroom_blocked_apps: Vec<String>,
     #[serde(rename = "ownAppDomains", default)]
     own_app_domains: Vec<String>,
+    #[serde(rename = "systemAllowedDomains", default)]
+    system_allowed_domains: Vec<String>,
     #[serde(rename = "whitelistApps", default)]
     whitelist_apps: Vec<String>,
     #[serde(rename = "whitelistWebsites", default)]
@@ -3228,6 +3274,58 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         .as_ref()
                         .map(|d| contains_any_rule_token(&desktop_apps_foreground, &d.own_app_domains))
                         .unwrap_or(false);
+                    let system_allowed_match = {
+                        let rules_allowed = distraction_rules()
+                            .lock()
+                            .ok()
+                            .and_then(|rules| {
+                                effective_target
+                                    .as_deref()
+                                    .or(browser_fallback_target)
+                                    .and_then(|value| {
+                                        matching_system_allowed_domain(
+                                            value,
+                                            &rules.system_allowed_domains,
+                                        )
+                                        .map(|m| m.to_string())
+                                    })
+                                    .or_else(|| {
+                                        matching_system_allowed_domain(
+                                            &desktop_apps_foreground,
+                                            &rules.system_allowed_domains,
+                                        )
+                                        .map(|m| m.to_string())
+                                    })
+                            });
+                        rules_allowed.or_else(|| {
+                            cached_server.as_ref().and_then(|d| {
+                                effective_target
+                                    .as_deref()
+                                    .or(browser_fallback_target)
+                                    .and_then(|value| {
+                                        matching_system_allowed_domain(
+                                            value,
+                                            &d.system_allowed_domains,
+                                        )
+                                        .map(|m| m.to_string())
+                                    })
+                                    .or_else(|| {
+                                        matching_system_allowed_domain(
+                                            &desktop_apps_foreground,
+                                            &d.system_allowed_domains,
+                                        )
+                                        .map(|m| m.to_string())
+                                    })
+                            })
+                        })
+                    };
+                    if let Some(ref matched_domain) = system_allowed_match {
+                        detection_println!(
+                            "[Detection] local_judge_system_allowed domain={} origin=apps",
+                            matched_domain
+                        );
+                        local_distraction_key = None;
+                    }
                     if server_own_domain_match {
                         local_distraction_key = None;
                     }
@@ -3247,7 +3345,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     let server_blocked_after_own_guard = server_report_blocked
                         && !server_own_domain_match
                         && !local_non_browser_allow
-                        && !bare_browser_pending_url_read;
+                        && !bare_browser_pending_url_read
+                        && system_allowed_match.is_none();
                     if server_report_blocked && local_non_browser_allow {
                         detection_println!(
                             "[AllowedAppsDebug] suppress_server_block app={:?} desktop_fg={:?} reason=local_non_browser_allow_match",
@@ -3390,18 +3489,27 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         // Not distracting on this tick. Decide whether this is a genuine
                         // "user navigated away" or a transient classifier flip.
                         if warning_shown_at.is_some() || is_marked_distracted {
+                            let immediate_system_allowed_clear = system_allowed_match.is_some();
                             let identity_changed = active_foreground_key
                                 .as_deref()
                                 .map(|prev| prev != current_foreground_key.as_str())
                                 .unwrap_or(true);
-                            if identity_changed {
+                            if identity_changed || immediate_system_allowed_clear {
                                 // Real navigation away from the distracting target → dismiss immediately.
                                 clear_pending_started_at = None;
-                                detection_println!(
-                                    "[Detection] distraction_exit_immediate reason=foreground_changed from_key={:?} to_key={:?}",
-                                    active_foreground_key.as_deref().unwrap_or("-"),
-                                    current_foreground_key
-                                );
+                                if immediate_system_allowed_clear {
+                                    detection_println!(
+                                        "[Detection] distraction_exit_immediate reason=system_allowed_domain from_key={:?} to_key={:?}",
+                                        active_foreground_key.as_deref().unwrap_or("-"),
+                                        current_foreground_key
+                                    );
+                                } else {
+                                    detection_println!(
+                                        "[Detection] distraction_exit_immediate reason=foreground_changed from_key={:?} to_key={:?}",
+                                        active_foreground_key.as_deref().unwrap_or("-"),
+                                        current_foreground_key
+                                    );
+                                }
                                 consecutive_clear_ticks = 0;
                                 dismiss_distraction_warning(&app_handle);
                                 warning_shown_at = None;
@@ -3655,6 +3763,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
             &session_response.classroom_allowed_apps,
             &session_response.classroom_blocked_apps,
             &session_response.own_app_domains,
+            &session_response.system_allowed_domains,
             &session_response.whitelist_apps,
             &session_response.whitelist_websites,
             session_response.whitelist_mode_apps,
@@ -3665,7 +3774,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
                  alert_count,
                  session_response.distracting_apps.len());
         log!(
-            "[POLL DEBUG] Parsed extra: active={:?} kicked={} joinedAt={:?} allowedApps count={} blockedApps count={} classroomAllowedApps count={} classroomBlockedApps count={} ownAppDomains count={} whitelistModeApps={} whitelistModeWebsites={} whitelistApps count={} whitelistWebsites count={} requestImmediateAppReport={}",
+            "[POLL DEBUG] Parsed extra: active={:?} kicked={} joinedAt={:?} allowedApps count={} blockedApps count={} classroomAllowedApps count={} classroomBlockedApps count={} ownAppDomains count={} systemAllowedDomains count={} whitelistModeApps={} whitelistModeWebsites={} whitelistApps count={} whitelistWebsites count={} requestImmediateAppReport={}",
             session_response.active,
             session_response.kicked,
             session_response.joined_at,
@@ -3674,6 +3783,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
             session_response.classroom_allowed_apps.len(),
             session_response.classroom_blocked_apps.len(),
             session_response.own_app_domains.len(),
+            session_response.system_allowed_domains.len(),
             session_response.whitelist_mode_apps,
             session_response.whitelist_mode_websites,
             session_response.whitelist_apps.len(),
