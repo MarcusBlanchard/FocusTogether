@@ -3236,12 +3236,28 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         .map(|d| d.is_foreground_blocked)
                         .unwrap_or(false);
                     let local_non_browser_allow = is_locally_allowed_non_browser_app(&app_name);
+                    let bare_browser_pending_url_read =
+                        is_browser(&app_name) && effective_target.is_none() && browser_fallback_target.is_none();
+                    if bare_browser_pending_url_read {
+                        detection_println!(
+                            "[AllowedAppsDebug] whitelist_bare_browser_skip foreground={} pending_url_read=true",
+                            app_name
+                        );
+                    }
                     let server_blocked_after_own_guard = server_report_blocked
                         && !server_own_domain_match
-                        && !local_non_browser_allow;
+                        && !local_non_browser_allow
+                        && !bare_browser_pending_url_read;
                     if server_report_blocked && local_non_browser_allow {
                         detection_println!(
                             "[AllowedAppsDebug] suppress_server_block app={:?} desktop_fg={:?} reason=local_non_browser_allow_match",
+                            app_name,
+                            desktop_apps_foreground
+                        );
+                    }
+                    if server_report_blocked && bare_browser_pending_url_read {
+                        detection_println!(
+                            "[AllowedAppsDebug] suppress_server_block app={:?} desktop_fg={:?} reason=bare_browser_pending_url_read",
                             app_name,
                             desktop_apps_foreground
                         );
