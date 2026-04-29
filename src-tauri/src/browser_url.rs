@@ -1185,6 +1185,11 @@ mod windows {
             Ok(a) => a,
             Err(e) => {
                 println!("[Browser URL] ⚠️ UIA init failed: {}", e);
+                super::emit_browser_url_log(format!(
+                    "[browser_url] win_uia_fail pid={} reason=uia_init_failed detail=\"{}\"",
+                    pid,
+                    e.to_string().replace('"', "'")
+                ));
                 return None;
             }
         };
@@ -1192,19 +1197,29 @@ mod windows {
         let picked = picked_title.map(str::trim).filter(|s| !s.is_empty());
         let hwnds = hwnds_for_pid_zorder(pid);
 
+        let mut skipped_pip = 0usize;
+        let mut root_handle_fail = 0usize;
+        let mut address_bar_missing = 0usize;
+        let mut skipped_junk_url = 0usize;
         let mut z_good: Vec<(String, String)> = Vec::new();
         for (hwnd, title) in &hwnds {
             if is_flowlocked_pip_title(title) {
+                skipped_pip += 1;
                 continue;
             }
             let root = match automation.element_from_handle(Handle::from(*hwnd)) {
                 Ok(el) => el,
-                Err(_) => continue,
+                Err(_) => {
+                    root_handle_fail += 1;
+                    continue;
+                }
             };
             let Some(url) = read_address_bar_from_root(&automation, &root) else {
+                address_bar_missing += 1;
                 continue;
             };
             if should_skip_raw_browser_url(&url) {
+                skipped_junk_url += 1;
                 continue;
             }
             z_good.push((title.clone(), url));
@@ -1238,12 +1253,16 @@ mod windows {
             .map(|s| s.replace('"', "'").replace('\n', "\\n"))
             .unwrap_or_else(|| "-".to_string());
         super::emit_browser_url_log(format!(
-            "[browser_url] win_uia pid={} picked_title=\"{}\" hwnd_candidates={} good_reads={} strategy={}",
+            "[browser_url] win_uia pid={} picked_title=\"{}\" hwnd_candidates={} good_reads={} strategy={} skipped_pip={} root_handle_fail={} address_bar_missing={} skipped_junk_url={}",
             pid,
             picked_esc,
             hwnds.len(),
             z_good.len(),
-            strategy
+            strategy,
+            skipped_pip,
+            root_handle_fail,
+            address_bar_missing,
+            skipped_junk_url
         ));
 
         if let Some((matched_title, url)) = chosen {
@@ -1259,6 +1278,15 @@ mod windows {
         println!(
             "[Browser URL] ⚠️ Failed reading browser address bar via UI Automation (possibly elevated browser or only about:blank/newtab windows)"
         );
+        super::emit_browser_url_log(format!(
+            "[browser_url] win_uia_fail pid={} reason=no_viable_url hwnd_candidates={} skipped_pip={} root_handle_fail={} address_bar_missing={} skipped_junk_url={}",
+            pid,
+            hwnds.len(),
+            skipped_pip,
+            root_handle_fail,
+            address_bar_missing,
+            skipped_junk_url
+        ));
         None
     }
 }
