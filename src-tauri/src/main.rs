@@ -3140,7 +3140,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         // before dismissing the orange warning, so transient flips don't cause flicker.
         let mut consecutive_clear_ticks: u32 = 0;
         let mut active_foreground_key: Option<String> = None;
-        const DISMISS_CLEAR_TICKS: u32 = 8; // ~1.6s at 200ms tick
+        // Same-key exit path (transient classifier flicker only). Main loop uses 200ms while warning is up.
+        const DISMISS_CLEAR_TICKS: u32 = 4; // ~0.8s at 200ms tick
 
         // Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
         const WARNING_DURATION_SECS: u64 = 10;
@@ -3548,11 +3549,10 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 detection_println!("[Detection] ⚠️ Warning triggered by local rules for '{}'", app_name);
                             }
                         } else if let Some(start_time) = warning_shown_at {
-                            // Refresh the foreground key while still distracting on the same site,
-                            // so a brief flip-then-recover doesn't lose track of identity.
-                            if active_foreground_key.as_deref() != Some(current_foreground_key.as_str()) {
-                                active_foreground_key = Some(current_foreground_key.clone());
-                            }
+                            // Do NOT update `active_foreground_key` to track live URL while distracting:
+                            // if we did, navigating away would often leave active_key == current_key before
+                            // the clear branch runs → same_foreground_transient_clear / multi-second sustained
+                            // dismiss (handoff: popup lag after leaving a distracting site).
                             if start_time.elapsed().as_secs() >= WARNING_DURATION_SECS && !is_marked_distracted {
                                 is_marked_distracted = true;
                                 detection_println!("[Detection] ⏰ 10 seconds passed - transitioning to distracted");
