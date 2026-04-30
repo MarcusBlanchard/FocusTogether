@@ -285,6 +285,8 @@ struct LocalDistractionRules {
 struct ForegroundServerDecision {
     foreground_key: String,
     is_foreground_blocked: bool,
+    /// Mirrors server `needsTabInfo`; when true, foreground may be uncertain (e.g. bare browser name).
+    needs_tab_info: bool,
     own_app_domains: HashSet<String>,
     system_allowed_domains: HashSet<String>,
 }
@@ -1589,6 +1591,7 @@ fn log_desktop_apps_outbound_body(body: &serde_json::Value) {
 fn cache_foreground_server_decision(
     foreground_app: &str,
     is_foreground_blocked: bool,
+    needs_tab_info: bool,
     own_app_domains: &[String],
     system_allowed_domains: &[String],
 ) {
@@ -1608,6 +1611,7 @@ fn cache_foreground_server_decision(
         *slot = Some(ForegroundServerDecision {
             foreground_key: normalized_foreground_key(foreground_app),
             is_foreground_blocked,
+            needs_tab_info,
             own_app_domains: own_set,
             system_allowed_domains: system_set,
         });
@@ -1695,6 +1699,7 @@ fn check_apps_with_server(
                             cache_foreground_server_decision(
                                 foreground_app,
                                 data.is_foreground_blocked,
+                                data.needs_tab_info,
                                 &data.own_app_domains,
                                 &data.system_allowed_domains,
                             );
@@ -3147,6 +3152,9 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         const WARNING_DURATION_SECS: u64 = 10;
         // Optional apps-report heartbeat for server-side UI/debug views; local rules drive distraction state.
         const SERVER_REPORT_HEARTBEAT_SECS: u64 = 10;
+        /// While the orange warning is up (or we're marked distracted), poll `/api/desktop/apps` ~1 Hz so
+        /// server `isForegroundBlocked` clears land quickly (Replit handoff 2026-04-29).
+        const SERVER_REPORT_HEARTBEAT_WHILE_WARNING_SECS: u64 = 1;
         // Safety-net: treat sustained bare browser process (URL reader failing) as no longer transient.
         const BARE_BROWSER_PENDING_TIMEOUT_SECS: u64 = 5;
         let mut clear_pending_started_at: Option<std::time::Instant> = None;
@@ -3161,6 +3169,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         let mut mac_last_host_change_ms: Option<u64> = None;
         #[cfg(target_os = "macos")]
         let mut mac_prev_host: Option<String> = None;
+        // `(foreground_key, is_foreground_blocked)` from the prior tick — used for server blocked→clear edge.
+        let mut prev_apps_blocked_and_key: Option<(String, bool)> = None;
 
         while DETECTION_RUNNING.load(Ordering::SeqCst) {
             // Keep app/site transitions snappy: 250ms baseline, 200ms while warning/distracted.
@@ -3305,12 +3315,19 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         || (is_browser(&app_name)
                             && last_reported_target.as_deref() != Some(desktop_apps_foreground.as_str()));
 
+                    let heartbeat_secs =
+                        if warning_shown_at.is_some() || is_marked_distracted {
+                            SERVER_REPORT_HEARTBEAT_WHILE_WARNING_SECS
+                        } else {
+                            SERVER_REPORT_HEARTBEAT_SECS
+                        };
+
                     // Report on app switch, browser tab/site change, or periodic heartbeat.
                     let should_report_server = match last_server_report {
                         None => true,
                         Some(last_report) => {
                             foreground_identity_changed
-                                || last_report.elapsed().as_secs() >= SERVER_REPORT_HEARTBEAT_SECS
+                                || last_report.elapsed().as_secs() >= heartbeat_secs
                         }
                     };
 
@@ -3370,6 +3387,17 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         .as_ref()
                         .map(|d| d.is_foreground_blocked)
                         .unwrap_or(false);
+                    let server_confident_clear_edge = cached_server.as_ref().map_or(false, |d| {
+                        if d.needs_tab_info {
+                            return false;
+                        }
+                        match prev_apps_blocked_and_key.as_ref() {
+                            Some((k, was_blocked)) => {
+                                k == &d.foreground_key && *was_blocked && !d.is_foreground_blocked
+                            }
+                            None => false,
+                        }
+                    });
                     let local_non_browser_allow = is_locally_allowed_non_browser_app(&app_name);
                     let bare_browser_pending_url_read =
                         is_browser(&app_name) && effective_target.is_none() && browser_fallback_target.is_none();
@@ -3399,11 +3427,11 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         );
                         bare_browser_timeout_logged = true;
                     }
+                    // When the server says blocked, honor it even during bare-browser pending (whitelist fail-closed).
                     let server_blocked_after_own_guard = server_report_blocked
                         && !server_own_domain_match
                         && !server_system_allowed_match
-                        && !local_non_browser_allow
-                        && !(bare_browser_pending_url_read && !bare_browser_pending_timed_out);
+                        && !local_non_browser_allow;
                     if server_report_blocked && local_non_browser_allow {
                         detection_println!(
                             "[AllowedAppsDebug] suppress_server_block app={:?} desktop_fg={:?} reason=local_non_browser_allow_match",
@@ -3427,7 +3455,6 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                             && !server_own_domain_match
                             && !server_system_allowed_match
                             && !local_non_browser_allow
-                            && !(bare_browser_pending_url_read && !bare_browser_pending_timed_out)
                     } else {
                         // No fresh server decision yet: avoid local browser over-blocking regressions.
                         if is_browser(&app_name) {
@@ -3579,7 +3606,33 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                                 .as_deref()
                                 .map(|prev| prev != current_foreground_key.as_str())
                                 .unwrap_or(true);
-                            if identity_changed {
+                            if server_confident_clear_edge {
+                                // Server already cleared `isForegroundBlocked` with a confident foreground (handoff:
+                                // dismiss on falling edge; skip dwell when needsTabInfo is false).
+                                clear_pending_started_at = None;
+                                detection_println!(
+                                    "[Detection] distraction_exit_immediate reason=server_blocked_falling_edge from_blocked_to_clear foreground_key={:?}",
+                                    cached_server.as_ref().map(|d| d.foreground_key.as_str())
+                                );
+                                consecutive_clear_ticks = 0;
+                                dismiss_distraction_warning(&app_handle);
+                                warning_shown_at = None;
+                                is_marked_distracted = false;
+                                active_distraction_key = None;
+                                active_foreground_key = None;
+                                if last_sent_state == Some("distracted") {
+                                    if send_distraction_state(&user_id, false, None) {
+                                        detection_println!(
+                                            "[Detection] Back to active (server blocked→clear edge)"
+                                        );
+                                        last_sent_state = Some("active");
+                                    } else {
+                                        detection_println!(
+                                            "[Detection] ⚠️ Failed to clear distracted; will retry"
+                                        );
+                                    }
+                                }
+                            } else if identity_changed {
                                 // Real navigation away from the distracting target → dismiss immediately.
                                 clear_pending_started_at = None;
                                 detection_println!(
@@ -3659,6 +3712,11 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     } else {
                         250
                     };
+
+                    if let Some(ref d) = cached_server {
+                        prev_apps_blocked_and_key =
+                            Some((d.foreground_key.clone(), d.is_foreground_blocked));
+                    }
                 } else {
                     sleep_ms = if warning_shown_at.is_some() || is_marked_distracted {
                         200
