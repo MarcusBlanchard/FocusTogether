@@ -1,5 +1,6 @@
 # Produces the Windows installer (MSI + NSIS) on a real Windows runner.
 # Tauri cannot reliably bundle Windows from macOS (generate_context / plist tooling is macOS-oriented when cross-compiling).
+# Manual run: GitHub → Actions → this workflow → Run workflow.
 
 name: Build Windows
 
