@@ -3150,6 +3150,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
 
         // Orange distraction warning: 10s countdown before red + sending distracted (idle warning uses useIdleWarning.ts + notification.html countdown)
         const WARNING_DURATION_SECS: u64 = 10;
+        // Ignore brief non-browser focus blips (e.g. transient alt-tab/task-switch churn).
+        const NON_BROWSER_WARN_DEBOUNCE_MS: u64 = 1600;
         // Optional apps-report heartbeat for server-side UI/debug views; local rules drive distraction state.
         const SERVER_REPORT_HEARTBEAT_SECS: u64 = 10;
         /// While the orange warning is up (or we're marked distracted), poll `/api/desktop/apps` ~1 Hz so
@@ -3171,6 +3173,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         let mut mac_prev_host: Option<String> = None;
         // `(foreground_key, is_foreground_blocked)` from the prior tick — used for server blocked→clear edge.
         let mut prev_apps_blocked_and_key: Option<(String, bool)> = None;
+        let mut pending_non_browser_block_started_at: Option<std::time::Instant> = None;
+        let mut pending_non_browser_block_key: Option<String> = None;
 
         while DETECTION_RUNNING.load(Ordering::SeqCst) {
             // Keep app/site transitions snappy: 250ms baseline, 200ms while warning/distracted.
@@ -3502,6 +3506,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                     // (Previously we `continue`d here without dismissing, so the orange popup
                     // stayed up after switching from YouTube back to Flowlocked.)
                     if is_our_app {
+                        pending_non_browser_block_started_at = None;
+                        pending_non_browser_block_key = None;
                         if warning_shown_at.is_some() || is_marked_distracted {
                             clear_pending_started_at = None;
                             detection_println!(
@@ -3547,7 +3553,38 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         // Reset the clear-tick counter the moment we see distraction again.
                         consecutive_clear_ticks = 0;
                         clear_pending_started_at = None;
-                        if warning_shown_at.is_none() && !is_marked_distracted {
+                        let mut should_show_warning_now = warning_shown_at.is_none() && !is_marked_distracted;
+                        if should_show_warning_now && !is_browser(&app_name) {
+                            let same_pending_key = pending_non_browser_block_key
+                                .as_deref()
+                                .map(|k| k == current_foreground_key.as_str())
+                                .unwrap_or(false);
+                            if !same_pending_key {
+                                pending_non_browser_block_started_at = Some(std::time::Instant::now());
+                                pending_non_browser_block_key = Some(current_foreground_key.clone());
+                                detection_println!(
+                                    "[Detection] non_browser_block_pending_start debounce_ms={} key={:?}",
+                                    NON_BROWSER_WARN_DEBOUNCE_MS,
+                                    current_foreground_key
+                                );
+                            }
+                            let elapsed_ms = pending_non_browser_block_started_at
+                                .as_ref()
+                                .map(|t| t.elapsed().as_millis() as u64)
+                                .unwrap_or(0);
+                            if elapsed_ms < NON_BROWSER_WARN_DEBOUNCE_MS {
+                                should_show_warning_now = false;
+                                detection_println!(
+                                    "[Detection] holding_non_browser_block pending_ms={} required_ms={} key={:?}",
+                                    elapsed_ms,
+                                    NON_BROWSER_WARN_DEBOUNCE_MS,
+                                    current_foreground_key
+                                );
+                            }
+                        }
+                        if should_show_warning_now {
+                            pending_non_browser_block_started_at = None;
+                            pending_non_browser_block_key = None;
                             // First detection - show warning
                             show_distraction_warning(&app_handle);
                             if !(is_browser(&app_name) && local_would_block) && !server_blocked_after_own_guard {
@@ -3599,6 +3636,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                             }
                         }
                     } else {
+                        pending_non_browser_block_started_at = None;
+                        pending_non_browser_block_key = None;
                         // Not distracting on this tick. Decide whether this is a genuine
                         // "user navigated away" or a transient classifier flip.
                         if warning_shown_at.is_some() || is_marked_distracted {
