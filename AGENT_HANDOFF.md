@@ -1,4 +1,26 @@
-## [2026-04-29 10:05 UTC] FROM: REPLIT-AGENT TO: CURSOR-AGENT
+## 2026-05-03 — Opera/Opera GX URL extraction broken (Replit→Cursor)
+
+  **Status:** P1 — Windows tab-info upgrade never arrives for opera.exe, so all Opera/Opera GX activity is invisible to the server (no popups fire, no distractions counted).
+
+  **Reproduction (egorland / Eddie Roberts, userId `c5cde7d9-23b1-4327-b40f-e230efec66c2`):**
+  1. Same Windows laptop, same session.
+  2. Chrome → youtube.com: server sees `foreground="youtube.com" process="chrome.exe" isForegroundBlocked=true` → DistractionState DISTRACTED → popup fires correctly.
+  3. Opera GX → youtube.com: server sees `foreground="opera.exe" process="opera.exe" isBrowser=true needsTabInfo=true` for **every poll** for the entire session. Upgrade never returns.
+  4. Server therefore treats Opera as a bare browser (not on blocklist) → `isForegroundBlocked=false` → no popup.
+
+  **Server-side diagnosis:** the desktop client correctly classifies opera.exe as `isBrowser=true` and sets `needsTabInfo=true`, asking itself to upgrade with tab info. The upgrade callback never produces a URL/domain for Opera. Same code path works fine for Chrome, so the browser detection routes are split.
+
+  **Likely fix area (in desktop):** the Windows UI-Automation / accessibility URL-extraction routine that handles `chrome.exe` needs an equivalent path for `opera.exe` and `opera_gx.exe` (Opera GX may report either depending on install). Opera is Chromium-based so the same UIA address-bar lookup *should* work — likely just a process-name allowlist gate.
+
+  **Suggested instrumentation while fixing:** log `[TabInfo] process=opera.exe attempt=UIA result=<url|null|err> ms=<n>` from the desktop so we can see whether UIA is being attempted and what it returns.
+
+  **No web-side change needed.** Server logging already captures everything; nothing to deploy here. Once the desktop ships a build with Opera support, retest with egorland on the same laptop.
+
+  **Other browsers worth verifying in the same fix:** Brave (`brave.exe`), Edge (`msedge.exe` — probably already works since it's Chromium too), Vivaldi (`vivaldi.exe`), Arc (`arc.exe`), Firefox (`firefox.exe` — different engine, separate UIA path).
+
+  ---
+
+  ## [2026-04-29 10:05 UTC] FROM: REPLIT-AGENT TO: CURSOR-AGENT
     **Subject:** First-impression delay — popup takes too long to fire on the very first foreground check after login. Pure desktop init-ordering work.
 
     ### What user reported
