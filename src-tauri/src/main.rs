@@ -256,6 +256,8 @@ static LAST_APPS_FOREGROUND_DECISION: OnceLock<Mutex<Option<ForegroundServerDeci
 
 // Session poll counter for Cursor/device console logging (correlate with server logs)
 static SESSION_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Throttle extra `/api/desktop/apps` snapshots after poll rules refresh (first-impression latency; handoff 2026-04-29).
+static LAST_POLL_IMPLICIT_APPS_REPORT_MS: AtomicU64 = AtomicU64::new(0);
 
 // Single source of truth for current userId (pings and app reports must use the same value)
 static CURRENT_USER_ID: OnceLock<Mutex<Option<String>>> = OnceLock::new();
@@ -3943,6 +3945,23 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
             session_response.whitelist_mode_apps,
             session_response.whitelist_mode_websites,
         );
+        if !session_response.kicked
+            && session_response.session_id.is_some()
+            && session_response.active.unwrap_or(true)
+        {
+            const POLL_APPS_REPORT_MIN_INTERVAL_MS: u64 = 1500;
+            let now_ms = epoch_ms_now();
+            let last = LAST_POLL_IMPLICIT_APPS_REPORT_MS.load(Ordering::Relaxed);
+            if now_ms.saturating_sub(last) >= POLL_APPS_REPORT_MIN_INTERVAL_MS {
+                LAST_POLL_IMPLICIT_APPS_REPORT_MS.store(now_ms, Ordering::Relaxed);
+                let uid_spawn = userId.clone();
+                log!("[SessionPoll] spawning immediate_desktop_apps_report after_rules (throttle_ms={})",
+                    POLL_APPS_REPORT_MIN_INTERVAL_MS);
+                std::thread::spawn(move || {
+                    run_immediate_desktop_apps_report(&uid_spawn);
+                });
+            }
+        }
         log!("[POLL DEBUG] Parsed OK — sessionId={:?} pendingAlerts count={} distractingApps count={}",
                  session_response.session_id,
                  alert_count,

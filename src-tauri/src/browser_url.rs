@@ -1144,6 +1144,10 @@ mod windows {
         let name_candidates = [
             "Address and search bar",
             "Search or enter address",
+            "Search or type a web address",
+            "Combined address and search bar",
+            "Combined search and address bar",
+            "Address or search bar",
             "Address bar",
             "Address field",
         ];
@@ -1157,6 +1161,9 @@ mod windows {
             "search-or-enter-address",
             "urlbar-input",
             "addressEditBox",
+            "address-field",
+            "address-field-input",
+            "location-bar",
         ];
         for candidate in automation_id_candidates {
             if let Some(url) =

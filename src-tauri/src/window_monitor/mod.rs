@@ -336,6 +336,7 @@ pub(crate) fn is_known_browser_app_name(name: &str) -> bool {
         "vivaldi",
         "firefox",
         "safari",
+        "opera gx",
         "opera",
         "brave",
         "arc",
@@ -357,6 +358,7 @@ pub(crate) fn is_known_browser_app_name(name: &str) -> bool {
             | "msedge"
             | "brave"
             | "opera"
+            | "operagx"
             | "vivaldi"
             | "firefox"
             | "safari"

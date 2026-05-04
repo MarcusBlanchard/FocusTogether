@@ -32,6 +32,7 @@ function isBrowserProcessForegroundName(foregroundApp: string): boolean {
     a.includes("safari") ||
     a.includes("arc") ||
     a.includes("opera") ||
+    a.includes("operagx") ||
     a.includes("vivaldi") ||
     a.includes("brave") ||
     a.includes("edge") ||
