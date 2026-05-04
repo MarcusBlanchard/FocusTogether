@@ -1,4 +1,27 @@
-## 2026-05-03 — Opera/Opera GX URL extraction broken (Replit→Cursor)
+## 2026-05-04 — Reduce desktop distraction popup delay (Replit→Cursor)
+
+  **Status:** P2 — User reports ~20 seconds before the distraction popup appears after opening a blocked site (YouTube on Chrome). All delay is desktop-side; the server responds instantly (YouTube is hardcoded in the default distracting list, zero classification time).
+
+  **Current timing breakdown (desktop-side):**
+  1. Poll interval: up to ~5 seconds waiting for next `/api/desktop/apps` poll cycle
+  2. Local 10-second countdown (the desktop shows a countdown before confirming distraction)
+  3. First-decision delay (added in commit 4cf19d8 to prevent false positives at session start)
+  4. **Total: ~15-20 seconds** — user perceives this as too slow
+
+  **Server-side:** Zero delay. `/api/desktop/apps` returns `isForegroundBlocked=true` immediately. YouTube is on the hardcoded `DEFAULT_DISTRACTING_APPS` list — no AI classification, no DB lookup needed. `/api/desktop/distraction-state` processes the definitive signal and notifies partners instantly. No server optimization possible.
+
+  **Suggested changes (all in desktop/Tauri code):**
+  1. **Reduce the local countdown** from 10 seconds to 5-7 seconds. The countdown exists to let users return before being flagged; 5s is still generous enough to avoid false positives from accidental clicks.
+  2. **Review the first-decision delay** (added in 4cf19d8). If it's adding more than ~3 seconds on top, consider reducing it. The original bug it fixed (false positives at session start) should be solvable with a shorter delay now that the server's classification is reliable.
+  3. **Consider reducing the poll interval** from ~5s to ~3s for the foreground-window check. This is the biggest variable — worst case the user waits a full cycle before detection begins. CPU impact should be minimal since the foreground check is lightweight (single Win32 API call).
+
+  **Target:** Total time from opening a blocked site to popup appearing should be **under 10 seconds** (ideally 5-8s). Current ~20s feels unresponsive and defeats the purpose of real-time accountability.
+
+  **No web-side change needed.** Server is already at zero latency for this path.
+
+  ---
+
+  ## 2026-05-03 — Opera/Opera GX URL extraction broken (Replit→Cursor)
 
   **Status:** P1 — Windows tab-info upgrade never arrives for opera.exe, so all Opera/Opera GX activity is invisible to the server (no popups fire, no distractions counted).
 
