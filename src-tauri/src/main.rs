@@ -61,7 +61,7 @@ fn browser_title_cache_lock() -> &'static Mutex<HashMap<u32, (String, std::time:
 /// title-derived targets so the 10s countdown does not fire on transient suggestions.
 #[cfg(target_os = "windows")]
 const WINDOWS_TITLE_TARGET_DEBOUNCE: std::time::Duration =
-    std::time::Duration::from_millis(2500);
+    std::time::Duration::from_millis(900);
 
 #[cfg(target_os = "windows")]
 #[derive(Debug, Default)]
@@ -3127,9 +3127,22 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
     let _ = tray.get_item("status").set_title("Monitoring: Active");
     
     detection_println!("[Detection] Started for user {} in session {}", user_id, session_id);
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(mut g) = windows_title_target_debounce_lock().lock() {
+            g.reset();
+        }
+    }
+    LAST_POLL_IMPLICIT_APPS_REPORT_MS.store(0, Ordering::Relaxed);
+    let uid_immediate = user_id.clone();
+    std::thread::spawn(move || {
+        run_immediate_desktop_apps_report(&uid_immediate);
+    });
     
     // Spawn detection thread
     std::thread::spawn(move || {
+        let session_started_at = std::time::Instant::now();
         // State tracking
         let mut warning_shown_at: Option<std::time::Instant> = None;
         let mut is_marked_distracted = false;
@@ -3155,7 +3168,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
         // Ignore brief non-browser focus blips (e.g. transient alt-tab/task-switch churn).
         const NON_BROWSER_WARN_DEBOUNCE_MS: u64 = 1600;
         // Optional apps-report heartbeat for server-side UI/debug views; local rules drive distraction state.
-        const SERVER_REPORT_HEARTBEAT_SECS: u64 = 10;
+        const SERVER_REPORT_HEARTBEAT_SECS: u64 = 2;
         /// While the orange warning is up (or we're marked distracted), poll `/api/desktop/apps` ~1 Hz so
         /// server `isForegroundBlocked` clears land quickly (Replit handoff 2026-04-29).
         const SERVER_REPORT_HEARTBEAT_WHILE_WARNING_SECS: u64 = 1;
@@ -3587,6 +3600,14 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                         if should_show_warning_now {
                             pending_non_browser_block_started_at = None;
                             pending_non_browser_block_key = None;
+                            detection_println!(
+                                "[FirstDecision] ms_since_detection_start={} foreground={:?} process={:?} local_key={:?} server_blocked={}",
+                                session_started_at.elapsed().as_millis(),
+                                desktop_apps_foreground,
+                                app_name,
+                                local_distraction_key,
+                                server_report_blocked
+                            );
                             // First detection - show warning
                             show_distraction_warning(&app_handle);
                             if !(is_browser(&app_name) && local_would_block) && !server_blocked_after_own_guard {
@@ -3949,7 +3970,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
             && session_response.session_id.is_some()
             && session_response.active.unwrap_or(true)
         {
-            const POLL_APPS_REPORT_MIN_INTERVAL_MS: u64 = 1500;
+            const POLL_APPS_REPORT_MIN_INTERVAL_MS: u64 = 800;
             let now_ms = epoch_ms_now();
             let last = LAST_POLL_IMPLICIT_APPS_REPORT_MS.load(Ordering::Relaxed);
             if now_ms.saturating_sub(last) >= POLL_APPS_REPORT_MIN_INTERVAL_MS {

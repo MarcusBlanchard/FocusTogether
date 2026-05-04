@@ -8,7 +8,7 @@ const DISTRACTED_THRESHOLD_SECONDS = 90;
 const POLL_INTERVAL_MS = 250; // Update every 250ms for faster response
 // How often we refresh session + browser distraction from the server. Lower = faster clear
 // when switching Chrome from YouTube → neutral tab (extension posts quickly; desktop must poll).
-const SESSION_POLL_INTERVAL_MS = 3000;
+const SESSION_POLL_INTERVAL_MS = 2000;
 
 export type IdlePhase = 'active' | 'warning' | 'idle';
 
