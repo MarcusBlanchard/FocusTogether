@@ -1331,7 +1331,9 @@ fn resolve_focused_browser_domain_with_source(
     }
     #[cfg(target_os = "macos")]
     let url_read_timeout = std::time::Duration::from_millis(250);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    let url_read_timeout = std::time::Duration::from_millis(450);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let url_read_timeout = std::time::Duration::from_millis(250);
     if let Some(d) = browser_url::get_active_browser_domain_nonblocking(
         pid,

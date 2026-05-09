@@ -43,7 +43,13 @@ pub(crate) fn get_active_browser_window_title(
         return macos::get_active_browser_window_title(pid, browser_app_name.unwrap_or(""));
     }
 
-    #[allow(unreachable_code)]
+    #[cfg(target_os = "windows")]
+    {
+        let _ = browser_app_name;
+        return windows::recover_meaningful_window_title_for_pid(pid);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     None
 }
 
@@ -156,6 +162,7 @@ pub(crate) fn infer_site_from_window_title(title: &str) -> Option<String> {
         || lower.ends_with(" - youtube")
         || lower.ends_with(" — youtube")
         || lower.contains(" | youtube")
+        || lower.contains("| youtube")
         || lower == "youtube"
         || lower.starts_with("youtube ")
     {
@@ -1045,6 +1052,24 @@ mod windows {
             || lower.starts_with("edge://newtab")
             || lower.starts_with("brave://newtab")
             || lower.starts_with("vivaldi://newtab")
+            || lower.starts_with("opera://newtab")
+            || lower.starts_with("opera://startpage")
+    }
+
+    /// Frontmost visible top-level HWND title for this PID (Z-order), skipping PiP.
+    /// Used when the shell reports a useless foreground title (common for Opera GX).
+    pub(super) fn recover_meaningful_window_title_for_pid(pid: u32) -> Option<String> {
+        for (_hwnd, title) in hwnds_for_pid_zorder(pid) {
+            let t = title.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if is_flowlocked_pip_title(t) {
+                continue;
+            }
+            return Some(title);
+        }
+        None
     }
 
     /// Top-level HWNDs for `pid` in front-to-back Z-order (same EnumWindows ordering as window monitor).
@@ -1172,7 +1197,69 @@ mod windows {
                 return Some(url);
             }
         }
-        None
+        read_omnibox_via_edit_scan(automation, root)
+    }
+
+    /// Opera GX and some Chromium skins omit the usual Name/AutomationId on the omnibox Edit.
+    /// Scan Edit controls and pick a URL-like Value (same idea as macOS per-window walks).
+    fn read_omnibox_via_edit_scan(automation: &UIAutomation, root: &UIElement) -> Option<String> {
+        let type_cond = automation
+            .create_property_condition(
+                UIProperty::ControlType,
+                Variant::from(ControlType::Edit as i32),
+                None,
+            )
+            .ok()?;
+        let Ok(edits) = root.find_all(TreeScope::Subtree, &type_cond) else {
+            return None;
+        };
+        let mut scored: Vec<(i32, String)> = Vec::new();
+        for el in edits {
+            let pattern = match el.get_pattern::<UIValuePattern>() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let value = match pattern.get_value() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let trimmed = value.trim().to_string();
+            if trimmed.is_empty() || should_skip_raw_browser_url(&trimmed) {
+                continue;
+            }
+            let low = trimmed.to_lowercase();
+            let candidate_url = if low.contains("://") {
+                trimmed.clone()
+            } else if !trimmed.chars().any(|c| c.is_whitespace()) && trimmed.contains('.') {
+                format!("https://{}", trimmed.trim_start_matches("www."))
+            } else {
+                continue;
+            };
+            let Some(dom) = super::extract_domain(&candidate_url) else {
+                continue;
+            };
+            if dom.len() < 4 {
+                continue;
+            }
+            let score = if low.starts_with("https://") {
+                1000
+            } else if low.starts_with("http://") {
+                900
+            } else {
+                800
+            } + trimmed.len() as i32;
+            scored.push((score, trimmed));
+        }
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        let Some((_, picked)) = scored.into_iter().next() else {
+            return None;
+        };
+        let prefix: String = picked.chars().take(40).collect();
+        super::emit_browser_url_log(format!(
+            "[browser_url] win_uia_omnibox_edit_scan hit url_prefix=\"{}\"",
+            prefix.replace('"', "'")
+        ));
+        Some(picked)
     }
 
     fn titles_match_exact(a: &str, b: &str) -> bool {

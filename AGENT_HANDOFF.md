@@ -1,3 +1,32 @@
+## 2026-05-09 — Opera GX + YouTube: no distraction warning on Windows build 188 (Cursor)
+
+**Status:** Fixed in desktop **build 189** (splash `client/startup-notification.html`). Root cause was **not** server-side.
+
+**What was wrong (code review + log semantics; no `focustogether-live.log` in repo):**
+
+1. **`get_active_browser_window_title` was macOS-only.** On Windows it always returned `None`, so when the shell reported a **generic** foreground title (e.g. only `Opera GX`), `resolved_browser_window_title` could not recover the real tab title. Title heuristics (`infer_site_from_window_title`, `target_from_window_title`) then never saw strings like `… - YouTube - Opera GX`, so `foregroundApp` stayed `opera.exe` / bare browser and the server correctly kept **`needsTabInfo`** with no block.
+
+2. **Opera GX often omits the usual UI Automation Name/AutomationId** on the omnibox `Edit` that we match by fixed strings. Named `read_edit_value` passes could all fail → `address_bar_missing` → no URL from UIA.
+
+**Desktop changes (189):**
+
+- `src-tauri/src/browser_url.rs` (Windows): **`recover_meaningful_window_title_for_pid`** — walk the same top-level HWND Z-order as the UIA reader and take the first non-PiP title for the browser PID; wire **`get_active_browser_window_title`** to use it on Windows (no longer always `None`).
+- `src-tauri/src/browser_url.rs` (Windows): **`read_omnibox_via_edit_scan`** — after named omnibox lookups fail, **`find_all` `Edit` controls** under the window root and pick a **URL-like** `Value` (scheme or `host/path` without spaces), with a diagnostic log line **`[browser_url] win_uia_omnibox_edit_scan hit …`**.
+- Skip **`opera://newtab`** / **`opera://startpage`** in `should_skip_raw_browser_url` like other internal new-tab URLs.
+- Slightly broader YouTube title hint: **`| youtube`** (no leading space).
+- `src-tauri/src/main.rs`: Windows **`url_read_timeout`** for browser domain read **250ms → 450ms** so the extra UIA subtree walk can finish.
+
+**Reinstall:** Built locally:
+
+- `src-tauri\target\release\bundle\msi\Flowlocked_0.1.0_x64_en-US.msi`
+- `src-tauri\target\release\bundle\nsis\Flowlocked_0.1.0_x64-setup.exe`
+
+If `msiexec` reports *“Another program is being installed”*, wait for the other installer to finish, then run the MSI again (or use the NSIS setup). After install, confirm splash **(189) (W)** and retest Opera GX → YouTube. In **`focustogether-live.log`**, look for **`win_uia_omnibox_edit_scan`** or improved **`[Desktop Apps] foregroundApp`** / **`needsTabInfo=false`** with `youtube.com`.
+
+**Server-side:** **No change required.** Build 187 already treats `operagx` as a browser process in `server/routes.ts`. If anything still fails after 189, grab desktop log lines around **`[browser_url]`** and **`[Desktop Apps] foregroundApp computed`** for one poll cycle.
+
+---
+
 ## 2026-05-04 — Reduce desktop distraction popup delay (Replit→Cursor)
 
   **Status:** P2 — User reports ~20 seconds before the distraction popup appears after opening a blocked site (YouTube on Chrome). All delay is desktop-side; the server responds instantly (YouTube is hardcoded in the default distracting list, zero classification time).
