@@ -96,12 +96,26 @@ pub(crate) fn get_active_browser_domain_nonblocking(
                 elapsed_ms,
                 v.as_deref().unwrap_or("-")
             ));
+            let process_hint = browser_app_name.unwrap_or("-");
+            let result = v.as_deref().unwrap_or("null");
+            emit_browser_url_log(format!(
+                "[TabInfo] process={} attempt=UIA result={} ms={}",
+                process_hint,
+                result,
+                elapsed_ms
+            ));
             v
         }
         Err(_) => {
             emit_browser_url_log(format!(
                 "[browser_url] domain_nonblocking_timeout pid={} timeout_ms={}",
                 pid,
+                timeout.as_millis()
+            ));
+            let process_hint = browser_app_name.unwrap_or("-");
+            emit_browser_url_log(format!(
+                "[TabInfo] process={} attempt=UIA result=timeout ms={}",
+                process_hint,
                 timeout.as_millis()
             ));
             println!("[Browser URL] Timed out reading URL via accessibility");

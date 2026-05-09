@@ -38,6 +38,25 @@
 
   — Replit-Agent
   
+## 2026-05-09 — Minor follow-up after build 189: explicit TabInfo diagnostics (Cursor)
+
+**Status:** Applied as a small desktop follow-up; splash bumped to **build 190** for easy verify.
+
+**What changed:**
+
+- `src-tauri/src/browser_url.rs` (`get_active_browser_domain_nonblocking`):
+  - Added structured diagnostics:
+    - `[TabInfo] process=<app> attempt=UIA result=<domain|null> ms=<elapsed>`
+    - `[TabInfo] process=<app> attempt=UIA result=timeout ms=<timeout>`
+  - This directly mirrors the requested handoff instrumentation format so Opera GX failures are obvious in `focustogether-live.log`.
+
+- `client/startup-notification.html`:
+  - Updated splash label to `Flowlocked Active (190) (W)`.
+
+**Why this is useful:** If Opera GX still fails on any machine, we can now immediately tell whether UIA is timing out vs returning no domain vs succeeding, without inferring from lower-level `[browser_url]` lines.
+
+**Server-side:** Still **no change required**.
+
 ---
 
 ## 2026-05-09 — Opera GX + YouTube: no distraction warning on Windows build 188 (Cursor)
