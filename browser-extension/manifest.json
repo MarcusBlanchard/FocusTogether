@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Flowlocked",
+  "name": "Zirain",
   "version": "1.0.0",
-  "description": "Stay focused during your Flowlocked sessions by detecting distracting websites",
+  "description": "Stay focused during your Zirain sessions by detecting distracting websites",
   "permissions": [
     "tabs",
     "windows",
@@ -12,6 +12,7 @@
     "nativeMessaging"
   ],
   "host_permissions": [
+    "https://zirain.com/*",
     "https://flowlocked.com/*",
     "https://*.replit.dev/*",
     "https://*.spock.replit.dev/*",

@@ -61,6 +61,8 @@ fn strip_browser_title_suffix(title: &str) -> String {
         " - Arc",
         " - Safari",
         " - Firefox",
+        " - Zirain",
+        " — Zirain",
     ];
     for suf in suffixes {
         if let Some(pos) = s.rfind(suf) {
@@ -98,6 +100,7 @@ fn should_skip_stripped(stripped: &str) -> bool {
         || compact.contains("localhost")
         || compact.contains("flowlocked")
         || compact.contains("focustogether")
+        || compact.contains("zirain")
     {
         return true;
     }
@@ -112,6 +115,7 @@ fn should_skip_host_token(host: &str) -> bool {
         || lower.contains("localhost")
         || lower.contains("flowlocked")
         || lower.contains("focustogether")
+        || lower.contains("zirain")
     {
         return true;
     }

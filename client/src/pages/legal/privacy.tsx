@@ -5,7 +5,7 @@ export default function PrivacyPolicy() {
     <LegalDocLayout title="Privacy Policy" updated="April 9, 2026">
       <p>
         This Privacy Policy describes how <strong>[YOUR LEGAL ENTITY NAME]</strong> (“we,” “us,” or
-        “our”) collects, uses, and shares information when you use Flowlocked (the “Service”), including
+        “our”) collects, uses, and shares information when you use Zirain (the “Service”), including
         our website and desktop application.
       </p>
 
@@ -27,7 +27,7 @@ export default function PrivacyPolicy() {
 
       <h3>1.3 Desktop application and browser companion</h3>
       <p>
-        When you run the Flowlocked desktop app during an active focus session, it may collect and send
+        When you run the Zirain desktop app during an active focus session, it may collect and send
         to our servers:
       </p>
       <ul>

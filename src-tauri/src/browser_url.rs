@@ -484,7 +484,7 @@ return ""
             let err = String::from_utf8_lossy(&output.stderr);
             if err.contains("not allowed") || err.contains("(-1743)") {
                 println!(
-                    "[Browser URL] Browser AppleScript blocked — allow Flowlocked under \
+                    "[Browser URL] Browser AppleScript blocked — allow Zirain under \
 System Settings → Privacy & Security → Automation to control this browser (or use Accessibility below)."
                 );
             } else if !err.trim().is_empty() {
@@ -571,7 +571,7 @@ System Settings → Privacy & Security → Automation to control this browser (o
         }
     }
 
-    /// System Events UI tree — needs Accessibility for Flowlocked (not Automation).
+    /// System Events UI tree — needs Accessibility for Zirain (not Automation).
     fn try_system_events_address_bar(pid: u32) -> Option<String> {
         let script = format!(
             r#"
@@ -692,6 +692,7 @@ return ""
         let lower = t.to_lowercase();
         if lower.contains("google chrome")
             || lower.contains("flowlocked")
+            || lower.contains("zirain")
             || lower.contains("focus & accountability")
             || lower == "new tab"
             || lower == "extensions"
@@ -709,6 +710,7 @@ return ""
         t.is_empty()
             || t == "google chrome"
             || t.contains("flowlocked")
+            || t.contains("zirain")
             || t.contains("replit")
             || t.contains("server/downloads/")
     }
@@ -731,6 +733,7 @@ return ""
             return false;
         }
         if lower.contains("flowlocked")
+            || lower.contains("zirain")
             || lower.contains("google chrome")
             || lower.contains("tiny tycoon")
             || lower.contains("available on google chrome")
@@ -859,8 +862,8 @@ return ""
             ));
             println!(
                 "[Browser URL] ⚠️ Accessibility not granted for UI-based address bar read. \
-Enable Flowlocked in System Settings → Privacy & Security → Accessibility. \
-If YouTube still fails: also enable Automation for Flowlocked on your browser (Chrome/Safari) under the same Privacy section."
+Enable Zirain in System Settings → Privacy & Security → Accessibility. \
+If YouTube still fails: also enable Automation for Zirain on your browser (Chrome/Safari) under the same Privacy section."
             );
             return None;
         }
@@ -966,7 +969,7 @@ If YouTube still fails: also enable Automation for Flowlocked on your browser (C
         }
 
         let _ = &chosen_domain;
-        println!("[Browser URL] ⚠️ Could not read browser URL — enable Automation (browser) and/or Accessibility (Flowlocked)");
+        println!("[Browser URL] ⚠️ Could not read browser URL — enable Automation (browser) and/or Accessibility (Zirain)");
         super::emit_browser_url_log(format!(
             "[browser_url] exit returned=None total_strategies={} total_elapsed_ms={}",
             strategy_count,

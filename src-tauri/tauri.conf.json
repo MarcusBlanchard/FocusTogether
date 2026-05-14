@@ -7,7 +7,7 @@
     "withGlobalTauri": true
   },
   "package": {
-    "productName": "Flowlocked",
+    "productName": "Zirain",
     "version": "0.1.0"
   },
   "tauri": {
@@ -33,7 +33,7 @@
     "bundle": {
       "active": true,
       "targets": "all",
-      "identifier": "com.focustogether.app",
+      "identifier": "com.zirain.app",
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
@@ -67,7 +67,7 @@
       }
     },
     "cli": {
-      "description": "Flowlocked Desktop App",
+      "description": "Zirain Desktop App",
       "args": [
         {
           "name": "url",
@@ -84,7 +84,7 @@
         "label": "main",
         "fullscreen": false,
         "resizable": true,
-        "title": "Flowlocked",
+        "title": "Zirain",
         "width": 1200,
         "height": 800,
         "visible": false

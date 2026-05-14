@@ -5,16 +5,17 @@
     <key>LSUIElement</key>
     <true/>
     <key>NSAccessibilityUsageDescription</key>
-    <string>Flowlocked needs accessibility access to see which websites are open so it can detect distractions during focus sessions.</string>
+    <string>Zirain needs accessibility access to see which websites are open so it can detect distractions during focus sessions.</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
             <key>CFBundleURLName</key>
-            <string>com.focustogether.app</string>
+            <string>com.zirain.app</string>
             <key>CFBundleURLSchemes</key>
             <array>
+                <string>zirain</string>
                 <string>flowlocked</string>
                 <string>focustogether</string>
             </array>

@@ -92,9 +92,9 @@ jobs:
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
         with:
-          name: flowlocked-windows
+          name: zirain-windows
           if-no-files-found: warn
           path: |
-            src-tauri/target/release/Flowlocked.exe
+            src-tauri/target/release/Zirain.exe
             src-tauri/target/release/bundle/msi/*
             src-tauri/target/release/bundle/nsis/*

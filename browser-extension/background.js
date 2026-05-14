@@ -1,8 +1,8 @@
-// Flowlocked Browser Extension - Background Service Worker
+// Zirain Browser Extension - Background Service Worker
 // Reports active website to server, server decides if it's distracting
 
 // Default API host (production). Override with apiBaseOverride in storage for staging/dev.
-let API_BASE = 'https://flowlocked.com';
+let API_BASE = 'https://zirain.com';
 
 // State
 let userId = null;
@@ -13,13 +13,13 @@ let reportInterval = null;
 
 // Initialize on install
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('[Flowlocked] Extension installed');
+  console.log('[Zirain] Extension installed');
   loadUserId();
 });
 
 // Initialize on startup
 chrome.runtime.onStartup.addListener(() => {
-  console.log('[Flowlocked] Extension started');
+  console.log('[Zirain] Extension started');
   loadUserId();
 });
 
@@ -28,10 +28,10 @@ async function loadUserId() {
   const result = await chrome.storage.local.get(['userId', 'apiBaseOverride']);
   if (result.apiBaseOverride && typeof result.apiBaseOverride === 'string') {
     API_BASE = result.apiBaseOverride.replace(/\/$/, '');
-    console.log('[Flowlocked] Using apiBaseOverride:', API_BASE);
+    console.log('[Zirain] Using apiBaseOverride:', API_BASE);
   }
   userId = result.userId || null;
-  console.log('[Flowlocked] Loaded userId from storage:', userId ? userId : 'not set');
+  console.log('[Zirain] Loaded userId from storage:', userId ? userId : 'not set');
   
   // Try to sync with desktop app
   await syncWithDesktopApp();
@@ -46,19 +46,19 @@ async function loadUserId() {
 
 // Sync user ID with desktop app via native messaging
 async function syncWithDesktopApp() {
-  console.log('[Flowlocked] Syncing with desktop app...');
+  console.log('[Zirain] Syncing with desktop app...');
   
   try {
     const result = await tryNativeMessaging();
     // tryNativeMessaging already saves the user ID if successful
   } catch (error) {
-    console.log('[Flowlocked] Desktop app sync failed:', error.message);
+    console.log('[Zirain] Desktop app sync failed:', error.message);
   }
 }
 
 // Try to get user ID from web app session (if logged in on same browser)
 async function tryAutoDetectUser() {
-  console.log('[Flowlocked] Trying to auto-detect user from web app...');
+  console.log('[Zirain] Trying to auto-detect user from web app...');
   
   try {
     // Add timeout to prevent hanging
@@ -73,26 +73,26 @@ async function tryAutoDetectUser() {
     
     clearTimeout(timeout);
     
-    console.log('[FocusTogether] Auth response status:', response.status);
+    console.log('[Zirain] Auth response status:', response.status);
     
     if (response.ok) {
       const data = await response.json();
-      console.log('[FocusTogether] Auth response data:', data);
+      console.log('[Zirain] Auth response data:', data);
       
       if (data && data.id) {
-        console.log('[FocusTogether] ✅ Auto-detected user:', data.id);
+        console.log('[Zirain] ✅ Auto-detected user:', data.id);
         await saveUserId(data.id);
         return { success: true, userId: data.id };
       } else {
-        console.log('[FocusTogether] No user ID in response');
+        console.log('[Zirain] No user ID in response');
         return { success: false, error: 'No user data returned' };
       }
     } else {
-      console.log('[FocusTogether] Not logged in (status:', response.status, ')');
+      console.log('[Zirain] Not logged in (status:', response.status, ')');
       return { success: false, error: 'Not logged in on this browser' };
     }
   } catch (error) {
-    console.log('[FocusTogether] Auto-detect failed:', error.message);
+    console.log('[Zirain] Auto-detect failed:', error.message);
     return { success: false, error: error.message };
   }
 }
@@ -101,12 +101,12 @@ async function tryAutoDetectUser() {
 const NATIVE_HOST_NAME = 'com.focustogether.app';
 
 async function tryNativeMessaging() {
-  console.log('[FocusTogether] Trying to connect to desktop app via native messaging...');
+  console.log('[Zirain] Trying to connect to desktop app via native messaging...');
   
   return new Promise((resolve) => {
     // Timeout after 5 seconds to prevent getting stuck
     const timeout = setTimeout(() => {
-      console.log('[FocusTogether] Native messaging timed out');
+      console.log('[Zirain] Native messaging timed out');
       resolve(false);
     }, 5000);
     
@@ -118,7 +118,7 @@ async function tryNativeMessaging() {
           clearTimeout(timeout);
           
           if (chrome.runtime.lastError) {
-            console.log('[FocusTogether] Native messaging not available:', chrome.runtime.lastError.message);
+            console.log('[Zirain] Native messaging not available:', chrome.runtime.lastError.message);
             resolve(false);
             return;
           }
@@ -128,21 +128,21 @@ async function tryNativeMessaging() {
             
             // Check if user ID changed
             if (userId !== newUserId) {
-              console.log('[FocusTogether] ✅ User ID from desktop app:', newUserId, userId ? `(changed from ${userId})` : '(new)');
+              console.log('[Zirain] ✅ User ID from desktop app:', newUserId, userId ? `(changed from ${userId})` : '(new)');
               saveUserId(newUserId);
             } else {
-              console.log('[FocusTogether] User ID unchanged:', newUserId);
+              console.log('[Zirain] User ID unchanged:', newUserId);
             }
             resolve(true);
           } else {
-            console.log('[FocusTogether] Desktop app response:', response);
+            console.log('[Zirain] Desktop app response:', response);
             resolve(false);
           }
         }
       );
     } catch (error) {
       clearTimeout(timeout);
-      console.log('[FocusTogether] Native messaging error:', error.message);
+      console.log('[Zirain] Native messaging error:', error.message);
       resolve(false);
     }
   });
@@ -150,7 +150,7 @@ async function tryNativeMessaging() {
 
 // Look up user ID by username
 async function lookupUserByUsername(username) {
-  console.log('[FocusTogether] Looking up user by username:', username);
+  console.log('[Zirain] Looking up user by username:', username);
   
   try {
     const response = await fetch(`${API_BASE}/api/users/lookup?username=${encodeURIComponent(username)}`);
@@ -158,14 +158,14 @@ async function lookupUserByUsername(username) {
     if (response.ok) {
       const data = await response.json();
       if (data && data.id) {
-        console.log('[FocusTogether] ✅ Found user:', data.id);
+        console.log('[Zirain] ✅ Found user:', data.id);
         return data.id;
       }
     }
-    console.log('[FocusTogether] User not found');
+    console.log('[Zirain] User not found');
     return null;
   } catch (error) {
-    console.log('[FocusTogether] Username lookup failed:', error.message);
+    console.log('[Zirain] Username lookup failed:', error.message);
     return null;
   }
 }
@@ -174,7 +174,7 @@ async function lookupUserByUsername(username) {
 async function saveUserId(id) {
   userId = id;
   await chrome.storage.local.set({ userId: id });
-  console.log('[FocusTogether] Saved userId');
+  console.log('[Zirain] Saved userId');
   startSessionPolling();
 }
 
@@ -183,7 +183,7 @@ async function clearUserId() {
   userId = null;
   await chrome.storage.local.remove(['userId']);
   stopSessionPolling();
-  console.log('[FocusTogether] Cleared userId');
+  console.log('[Zirain] Cleared userId');
 }
 
 // Poll server for active session
@@ -192,7 +192,7 @@ let pollingInterval = null;
 function startSessionPolling() {
   if (pollingInterval) return;
   
-  console.log('[FocusTogether] Starting session polling');
+  console.log('[Zirain] Starting session polling');
   checkSession(); // Check immediately
   pollingInterval = setInterval(checkSession, 5000); // Then every 5 seconds
 }
@@ -230,14 +230,14 @@ async function checkSession() {
       };
       
       if (!isMonitoring) {
-        console.log('[FocusTogether] Session active, starting monitoring');
+        console.log('[Zirain] Session active, starting monitoring');
         isMonitoring = true;
         updateIcon(true);
         startDomainReporting();
       }
     } else {
       if (isMonitoring) {
-        console.log('[FocusTogether] Session ended, stopping monitoring');
+        console.log('[Zirain] Session ended, stopping monitoring');
         isMonitoring = false;
         currentSession = null;
         lastReportedForeground = null;
@@ -249,7 +249,7 @@ async function checkSession() {
       }
     }
   } catch (error) {
-    console.error('[FocusTogether] Error checking session:', error);
+    console.error('[Zirain] Error checking session:', error);
   }
 }
 
@@ -303,7 +303,7 @@ async function reportCurrentDomain() {
     // Skip reporting if unchanged foreground target
     if (payload.key === lastReportedForeground) return;
     
-    console.log('[FocusTogether] Reporting extension foreground to server:', payload);
+    console.log('[Zirain] Reporting extension foreground to server:', payload);
     lastReportedForeground = payload.key;
     
     // Extension-only contract: never send website domains from this integration.
@@ -320,16 +320,16 @@ async function reportCurrentDomain() {
     });
     
     if (!response.ok) {
-      console.error('[FocusTogether] Server returned error:', response.status);
+      console.error('[Zirain] Server returned error:', response.status);
     } else {
       const data = await response.json();
-      console.log('[FocusTogether] Server response:', data);
+      console.log('[Zirain] Server response:', data);
       if (data.isForegroundBlocked) {
-        console.log('[FocusTogether] Distracting extension context detected');
+        console.log('[Zirain] Distracting extension context detected');
       }
     }
   } catch (error) {
-    console.error('[FocusTogether] Error reporting extension foreground:', error);
+    console.error('[Zirain] Error reporting extension foreground:', error);
   }
 }
 
@@ -344,7 +344,7 @@ function showWarningNotification(domain) {
       priority: 2
     });
   } catch (error) {
-    console.error('[FocusTogether] Error showing notification:', error);
+    console.error('[Zirain] Error showing notification:', error);
   }
 }
 

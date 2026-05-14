@@ -4,7 +4,7 @@ export default function TermsOfService() {
   return (
     <LegalDocLayout title="Terms of Service" updated="April 9, 2026">
       <p>
-        These Terms of Service (“Terms”) govern your access to and use of Flowlocked, including the
+        These Terms of Service (“Terms”) govern your access to and use of Zirain, including the
         website, APIs, and desktop application (together, the “Service”) operated by{" "}
         <strong>[YOUR LEGAL ENTITY NAME]</strong> (“we,” “us,” or “our”). By creating an account,
         using the Service, or downloading the desktop app, you agree to these Terms. If you do not
@@ -20,7 +20,7 @@ export default function TermsOfService() {
 
       <h2>2. Description of the Service</h2>
       <p>
-        Flowlocked helps users schedule and join focus sessions with accountability partners. The
+        Zirain helps users schedule and join focus sessions with accountability partners. The
         Service may include video or audio sessions, social features, notifications, and desktop
         software that monitors certain device activity during active sessions to support focus goals.
       </p>

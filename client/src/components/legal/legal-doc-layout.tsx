@@ -30,7 +30,7 @@ export function LegalDocLayout({ title, updated, children }: Props) {
         <Alert>
           <AlertTitle>Not legal advice</AlertTitle>
           <AlertDescription>
-            These documents are starter templates for Flowlocked. They are not a substitute for advice
+            These documents are starter templates for Zirain. They are not a substitute for advice
             from a qualified attorney. Update placeholders (contact email, legal entity, jurisdiction)
             and have counsel review before you rely on them.
           </AlertDescription>

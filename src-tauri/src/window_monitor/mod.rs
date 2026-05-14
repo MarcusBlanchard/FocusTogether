@@ -1,9 +1,9 @@
-//! Foreground window selection that skips the Flowlocked Document Picture-in-Picture overlay
-//! (title contains `Flowlocked PiP` / `FocusTogether PiP`, tolerant of browser suffixes) so distraction
-//! detection sees the real window underneath.
+//! Foreground window selection that skips the Zirain Document Picture-in-Picture overlay
+//! (title contains `Zirain PiP` / legacy `Flowlocked PiP` / `FocusTogether PiP`, tolerant of browser suffixes)
+//! so distraction detection sees the real window underneath.
 //!
-//! Browser tabs whose titles contain "Flowlocked" or "FocusTogether" are **not** skipped here: after
-//! PiP is skipped, that window is often the correct "user is in Flowlocked" answer. Those strings
+//! Browser tabs whose titles start with "Zirain", "Flowlocked", or "FocusTogether" are **not** skipped here:
+//! after PiP is skipped, that window is often the correct "user is in the app" answer. Those strings
 //! are already treated as non-distracting in `classify_local_distraction` (native app name and
 //! server-driven own domains).
 
@@ -102,7 +102,7 @@ static PIP_OPEN: AtomicBool = AtomicBool::new(false);
 static PIP_OPEN_AT_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_FLOWLOCKED_PIP_LEVEL: AtomicI64 = AtomicI64::new(-1);
 
-/// Returns the effective foreground window, skipping Flowlocked PiP when it sits above real content.
+/// Returns the effective foreground window, skipping Zirain / legacy PiP overlays when they sit above real content.
 pub fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     #[cfg(target_os = "macos")]
     {
@@ -122,12 +122,14 @@ pub fn get_active_window_skip_pip_overlay() -> Result<ActiveWindow, ()> {
     }
 }
 
-/// Document PiP uses a title containing `Flowlocked PiP` or `FocusTogether PiP` (case-insensitive).
+/// Document PiP uses a title containing `Zirain PiP` or legacy `Flowlocked PiP` / `FocusTogether PiP` (case-insensitive).
 /// Substring match tolerates browser suffixes such as ` - Google Chrome` and
 /// ` — Picture in Picture` on docked PiP windows.
 pub(crate) fn is_flowlocked_pip_title(title: &str) -> bool {
     let t = title.trim().to_lowercase();
-    t.contains("flowlocked pip") || t.contains("focustogether pip")
+    t.contains("zirain pip")
+        || t.contains("flowlocked pip")
+        || t.contains("focustogether pip")
 }
 
 pub(crate) fn is_flowlocked_surface(w: &ActiveWindow) -> bool {
@@ -136,14 +138,20 @@ pub(crate) fn is_flowlocked_surface(w: &ActiveWindow) -> bool {
     if is_flowlocked_pip_title(&title) {
         return true;
     }
-    // Native app (macOS bundle name "Flowlocked" / "FocusTogether"; Windows .exe stem too).
+    // Native app (macOS bundle name; Windows .exe stem).
     let app_stem = app.trim_end_matches(".exe");
-    if matches!(app_stem, "flowlocked" | "focustogether") {
+    if matches!(
+        app_stem,
+        "zirain" | "flowlocked" | "focustogether"
+    ) {
         return true;
     }
-    // Browser tab title for the Flowlocked web app.
-    // Examples: "Flowlocked – Focus & Accountability App", "Flowlocked - Replit"
-    if title.starts_with("flowlocked") || title.starts_with("focustogether") {
+    // Browser tab title for the Zirain web app (legacy titles still matched).
+    // Examples: "Zirain – Focus & Accountability App", "Flowlocked - Replit"
+    if title.starts_with("zirain")
+        || title.starts_with("flowlocked")
+        || title.starts_with("focustogether")
+    {
         return true;
     }
     false
@@ -215,27 +223,29 @@ pub(crate) fn pip_open_immediate() -> bool {
     PIP_OPEN.load(Ordering::Relaxed)
 }
 
-/// Whether we should replace a Flowlocked-looking foreground with recent history (e.g. YouTube).
+/// Whether we should replace an own-app-looking foreground with recent history (e.g. YouTube).
 ///
 /// `pip_recent` + [`is_flowlocked_surface`] alone is too broad: after PiP, the user may genuinely
-/// focus the main Flowlocked browser tab (large window, title prefix `Flowlocked` / `FocusTogether`).
+/// focus the main Zirain browser tab (large window, title prefix `Zirain` / legacy prefixes).
 /// History recovery would swap that for the last distracting window and the distraction warning
 /// never clears. Only treat as the PiP masking case when it still looks like a PiP-sized / overlay
-/// surface, or PiP title text — never for native Flowlocked, never for a large main browser tab.
+/// surface, or PiP title text — never for native Zirain, never for a large main browser tab.
 fn pip_history_recovery_eligible(resolved: &ActiveWindow, pip_recent: bool) -> bool {
     if !pip_recent || !is_flowlocked_surface(resolved) {
         return false;
     }
     let app = resolved.app_name.trim().to_lowercase();
     let app_stem = app.trim_end_matches(".exe");
-    if matches!(app_stem, "flowlocked" | "focustogether") {
+    if matches!(app_stem, "zirain" | "flowlocked" | "focustogether") {
         return false;
     }
     let t = resolved.title.trim().to_lowercase();
     let browser = is_known_browser_app_name(&resolved.app_name);
     let main_flow_tab = browser
         && !is_flowlocked_pip_title(&resolved.title)
-        && (t.starts_with("flowlocked") || t.starts_with("focustogether"));
+        && (t.starts_with("zirain")
+            || t.starts_with("flowlocked")
+            || t.starts_with("focustogether"));
     if main_flow_tab {
         let w = resolved.position.width;
         let h = resolved.position.height;
@@ -313,7 +323,7 @@ pub(crate) fn finalize_with_history(resolved: ActiveWindow) -> ActiveWindow {
         ),
     );
 
-    // Push *non-Flowlocked* entries into history so the next masked tick can use them.
+    // Push *non-own-app* entries into history so the next masked tick can use them.
     if !is_flowlocked_surface(&final_win) {
         history::push(&final_win);
     }
@@ -393,6 +403,8 @@ mod tests {
 
     #[test]
     fn detects_pip_title_case_insensitive() {
+        assert!(is_flowlocked_pip_title("Zirain PiP"));
+        assert!(is_flowlocked_pip_title("zirain pip"));
         assert!(is_flowlocked_pip_title("Flowlocked PiP"));
         assert!(is_flowlocked_pip_title("flowlocked pip"));
         assert!(is_flowlocked_pip_title("Flowlocked PiP - Google Chrome"));
@@ -422,12 +434,16 @@ mod tests {
             process_path: PathBuf::new(),
         };
         assert!(is_flowlocked_surface(&mk(
+            "Zirain – Focus & Accountability App",
+            "Google Chrome"
+        )));
+        assert!(is_flowlocked_surface(&mk(
             "Flowlocked – Focus & Accountability App",
             "Google Chrome"
         )));
         assert!(is_flowlocked_surface(&mk("Flowlocked - Replit", "Google Chrome")));
         assert!(is_flowlocked_surface(&mk("Flowlocked PiP", "Google Chrome")));
-        assert!(is_flowlocked_surface(&mk("anything", "Flowlocked")));
+        assert!(is_flowlocked_surface(&mk("anything", "Zirain")));
         assert!(is_flowlocked_surface(&mk("anything", "FocusTogether.exe")));
         assert!(!is_flowlocked_surface(&mk(
             "YouTube - Google Chrome",

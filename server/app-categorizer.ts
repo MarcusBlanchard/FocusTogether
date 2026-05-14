@@ -174,7 +174,8 @@ const DEFAULT_CATEGORIES: Record<string, AppCategoryType> = {
   'messages': 'neutral',
   'facetime': 'neutral',
   
-  // Flowlocked itself - always neutral
+  // Zirain desktop / legacy names — always neutral
+  'zirain': 'neutral',
   'flowlocked': 'neutral',
   'focustogether': 'neutral',
 };
@@ -540,9 +541,12 @@ export async function isAppDistractingForUser(
   const raw = appName.trim().toLowerCase();
   if (
     raw.includes('focustogether-live') ||
+    raw.includes('zirain-live') ||
     (raw.includes('focustogether') && raw.includes('.log')) ||
+    raw === 'zirain' ||
     raw === 'flowlocked' ||
-    raw.includes('flowlocked.app')
+    raw.includes('flowlocked.app') ||
+    raw.includes('zirain.app')
   ) {
     return false;
   }

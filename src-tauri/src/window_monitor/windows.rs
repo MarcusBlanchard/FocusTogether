@@ -70,10 +70,10 @@ fn enum_top_level_z_order() -> Vec<HWND> {
     z_windows
 }
 
-/// Titles used by the Flowlocked web app / document PiP surface (not the literal "Flowlocked PiP" string).
+/// Titles used by the Zirain web app / document PiP surface (not only the literal "Zirain PiP" string).
 fn flowlocked_document_surface_hint(title: &str) -> bool {
     let t = title.trim().to_lowercase();
-    (t.contains("flowlocked") || t.contains("focustogether"))
+    (t.contains("zirain") || t.contains("flowlocked") || t.contains("focustogether"))
         && (t.contains("focus")
             || t.contains("accountability")
             || t.contains("pip")
@@ -81,7 +81,7 @@ fn flowlocked_document_surface_hint(title: &str) -> bool {
 }
 
 /// Narrow skip: do **not** treat "small browser window" alone as PiP (that hid real Chrome and led to
-/// `explorer.exe` picks). Require explicit PiP markers or topmost + Flowlocked-ish small window.
+/// `explorer.exe` picks). Require explicit PiP markers or topmost + Zirain-ish small window.
 fn skip_windows_browser_document_pip(
     hwnd: HWND,
     title: &str,
@@ -129,12 +129,12 @@ fn log_skipped_input_overlay(app_name: &str, title: &str) {
     crate::diagnostic_log::append_line(&line);
 }
 
-/// Tauri orange distraction popup: same binary as desktop (`Flowlocked.exe`) but must not win Z-order
-/// or detection treats it as "user returned to Flowlocked" and dismisses the warning in a tight loop.
+/// Tauri orange distraction popup: same binary as desktop (`Zirain.exe`, legacy `Flowlocked.exe`) but must not win Z-order
+/// or detection treats it as "user returned to Zirain" and dismisses the warning in a tight loop.
 fn is_flowlocked_distraction_warning_window(app_name: &str, title: &str) -> bool {
     let s = app_name.trim().to_lowercase();
     let stem = s.trim_end_matches(".exe");
-    stem == "flowlocked" && title.trim().eq_ignore_ascii_case("Distraction Warning")
+    matches!(stem, "zirain" | "flowlocked") && title.trim().eq_ignore_ascii_case("Distraction Warning")
 }
 
 fn log_skipped_distraction_warning_popup(app_name: &str, title: &str) {

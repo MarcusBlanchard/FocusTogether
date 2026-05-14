@@ -1,4 +1,4 @@
-//! Timestamped lines to Desktop `focustogether-live.log` (same file as `log!`) so deeplink/GUI
+//! Timestamped lines to Desktop `zirain-live.log` (same file as `log!`) so deeplink/GUI
 //! launches capture window-monitor and detection output, not only Terminal sessions.
 
 use chrono::Local;
@@ -13,7 +13,7 @@ static LOG_FILE: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
 pub fn init() {
     let log_path = dirs::desktop_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("focustogether-live.log");
+        .join("zirain-live.log");
     if let Ok(meta) = std::fs::metadata(&log_path) {
         if meta.len() > LIVE_LOG_MAX_BYTES {
             let rotated = log_path.with_extension("log.old");

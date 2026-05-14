@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// Flowlocked Desktop App - Background Enforcement
+// Zirain Desktop App - Background Enforcement
 // Idle monitoring only
 
 use user_idle::UserIdle;
@@ -353,6 +353,10 @@ fn default_distracting_entries() -> &'static [&'static str] {
 
 fn local_own_app_tokens() -> &'static [&'static str] {
     &[
+        "zirain",
+        "zirain.com",
+        "zirain.app",
+        "com.zirain.app",
         "flowlocked",
         "flowlocked.com",
         "flowlocked.app",
@@ -369,7 +373,9 @@ fn is_local_own_app_value(value: &str, own_app_domains: &HashSet<String>) -> boo
     }
     if lower.contains("focustogether")
         && lower.contains(".log")
-        && (lower.contains("focustogether-live") || lower.contains("flowlocked"))
+        && (lower.contains("focustogether-live")
+            || lower.contains("flowlocked")
+            || lower.contains("zirain-live"))
     {
         return true;
     }
@@ -786,7 +792,10 @@ fn classify_local_distraction(
     user_id: Option<&str>,
 ) -> Option<String> {
     let app = app_name.to_lowercase();
-    if app.contains("flowlocked") || app.contains("focustogether") {
+    if app.contains("zirain")
+        || app.contains("flowlocked")
+        || app.contains("focustogether")
+    {
         return None;
     }
     if is_browser(app_name) {
@@ -1062,7 +1071,7 @@ fn is_locally_allowed_non_browser_app(app_name: &str) -> bool {
 }
 
 /// Default API host (production). Override with `BACKEND_URL` or persisted `backend_url` if needed.
-const DEFAULT_BACKEND_BASE_URL: &str = "https://flowlocked.com";
+const DEFAULT_BACKEND_BASE_URL: &str = "https://zirain.com";
 
 /// Resolved API base: `BACKEND_URL` env → persisted `backend_url` in config → `DEFAULT_BACKEND_BASE_URL`.
 fn backend_base_url() -> String {
@@ -2015,9 +2024,12 @@ struct DeepLinkAuth {
     backend: DeepLinkBackendParam,
 }
 
-/// Expected: `flowlocked://auth?userId=XXX` (or legacy `focustogether://auth?...`) with optional `&backend=https%3A%2F%2F...`
+/// Expected: `zirain://auth?...` (primary). Legacy `flowlocked://auth?...` and `focustogether://auth?...`
+/// remain supported during rollout, with optional `&backend=https%3A%2F%2F...`.
 fn parse_deep_link(url: &str) -> Option<DeepLinkAuth> {
-    let ok = url.starts_with("flowlocked://auth") || url.starts_with("focustogether://auth");
+    let ok = url.starts_with("zirain://auth")
+        || url.starts_with("flowlocked://auth")
+        || url.starts_with("focustogether://auth");
     if !ok {
         println!("[DeepLink] Failed to parse URL: {}", url);
         return None;
@@ -2050,8 +2062,149 @@ fn parse_deep_link(url: &str) -> Option<DeepLinkAuth> {
     Some(DeepLinkAuth { user_id, backend })
 }
 
+fn handle_auth_deep_link(app_handle: &tauri::AppHandle, request: &str) {
+    println!("[DeepLink] 🔗 Received deep link: {}", request);
+
+    if let Some(parsed) = parse_deep_link(request) {
+        let user_id = parsed.user_id.clone();
+        println!("[DeepLink] Extracted userId: {}", user_id);
+
+        match parsed.backend {
+            DeepLinkBackendParam::Unspecified => {}
+            DeepLinkBackendParam::Clear => {
+                if let Err(e) = set_backend_config_url(None) {
+                    println!("[DeepLink] Failed to clear backend URL: {}", e);
+                } else {
+                    println!(
+                        "[DeepLink] Backend URL reset to default ({})",
+                        backend_base_url()
+                    );
+                }
+            }
+            DeepLinkBackendParam::Set(v) => {
+                if let Err(e) = set_backend_config_url(Some(v)) {
+                    println!("[DeepLink] Invalid or failed to save backend URL: {}", e);
+                } else {
+                    println!("[DeepLink] Backend URL set to {}", backend_base_url());
+                }
+            }
+        }
+
+        let old_user_id = get_current_user_id();
+
+        let old_str = old_user_id.as_deref().unwrap_or("none");
+        println!(
+            "[DeepLink] Switching user from {} to {}, clearing old intervals",
+            old_str, user_id
+        );
+        stop_heartbeat_loop();
+        stop_detection(app_handle);
+
+        match set_user_id(user_id.clone()) {
+            Ok(_) => {
+                println!("[DeepLink] User ID saved to config");
+                start_heartbeat_loop();
+                let _ = app_handle.emit_all("userId-changed", ());
+
+                println!(
+                    "[DeepLink] Checking for active session for new user: {}",
+                    user_id
+                );
+                let user_id_for_session = user_id.clone();
+                let app_handle_for_session = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    match get_active_session(app_handle_for_session, user_id_for_session).await {
+                        Ok(r) if r.session_id.is_some() => {
+                            println!(
+                                "[DeepLink] Detection restarted for new user with session: {:?}",
+                                r.session_id
+                            );
+                        }
+                        Ok(_) => {
+                            println!(
+                                "[DeepLink] No active session for new user - detection will start when session begins"
+                            );
+                        }
+                        Err(e) => {
+                            println!(
+                                "[DeepLink] Failed to check active session: {} (detection will start on next frontend poll)",
+                                e
+                            );
+                        }
+                    }
+                });
+
+                let user_id_for_register = user_id.clone();
+                let app_handle_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    match register_desktop_connection(&user_id_for_register).await {
+                        Ok(_) => {
+                            println!("[DeepLink] Backend registration successful");
+                            if let Err(e) = tauri::api::notification::Notification::new(
+                                &app_handle_clone.config().tauri.bundle.identifier,
+                            )
+                            .title("Zirain Connected!")
+                            .body("Desktop app linked to your account")
+                            .show()
+                            {
+                                println!("[DeepLink] Failed to show confirmation: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            println!(
+                                "[DeepLink] Backend registration failed: {} (heartbeat already running)",
+                                e
+                            );
+                            if let Err(e) = tauri::api::notification::Notification::new(
+                                &app_handle_clone.config().tauri.bundle.identifier,
+                            )
+                            .title("Zirain Connected")
+                            .body("Linked locally - backend sync pending")
+                            .show()
+                            {
+                                println!("[DeepLink] Failed to show notification: {}", e);
+                            }
+                        }
+                    }
+                });
+            }
+            Err(e) => {
+                println!("[DeepLink] ❌ Failed to save user ID: {}", e);
+            }
+        }
+    }
+}
+
+/// Windows: register `flowlocked://` for the same executable (plugin registers `zirain` only).
+#[cfg(target_os = "windows")]
+fn register_windows_legacy_flowlocked_url_scheme() -> std::io::Result<()> {
+    use std::path::Path;
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let exe = std::env::current_exe()?
+        .display()
+        .to_string()
+        .replace("\\\\?\\", "");
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let base = Path::new("Software").join("Classes").join("flowlocked");
+    let (key, _) = hkcu.create_subkey(&base)?;
+    key.set_value("", &"URL:Zirain")?;
+    key.set_value("URL Protocol", &"")?;
+
+    let (icon, _) = hkcu.create_subkey(base.join("DefaultIcon"))?;
+    icon.set_value("", &format!("{},0", exe.as_str()))?;
+
+    let (cmd, _) = hkcu.create_subkey(base.join("shell").join("open").join("command"))?;
+    cmd.set_value("", &format!("{} \"%1\"", exe))?;
+
+    println!("[DeepLink] ✅ Windows: registered legacy flowlocked:// (same exe as zirain://)");
+    Ok(())
+}
+
 /// Second URL scheme for the same executable (`tauri-plugin-deep-link` only registers one scheme on Windows).
-/// Keeps `focustogether://` working after migrating the site to `flowlocked://`.
+/// Keeps `focustogether://` working after migrating the site to `zirain://`.
 #[cfg(target_os = "windows")]
 fn register_windows_legacy_focustogether_url_scheme() -> std::io::Result<()> {
     use std::path::Path;
@@ -2066,8 +2219,8 @@ fn register_windows_legacy_focustogether_url_scheme() -> std::io::Result<()> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let base = Path::new("Software").join("Classes").join("focustogether");
     let (key, _) = hkcu.create_subkey(&base)?;
-    // Match `prepare("Flowlocked")` + plugin behavior (URL: label in Default Programs).
-    key.set_value("", &"URL:Flowlocked")?;
+    // Match `prepare("Zirain")` + plugin behavior (URL: label in Default Programs).
+    key.set_value("", &"URL:Zirain")?;
     key.set_value("URL Protocol", &"")?;
 
     let (icon, _) = hkcu.create_subkey(base.join("DefaultIcon"))?;
@@ -2076,7 +2229,7 @@ fn register_windows_legacy_focustogether_url_scheme() -> std::io::Result<()> {
     let (cmd, _) = hkcu.create_subkey(base.join("shell").join("open").join("command"))?;
     cmd.set_value("", &format!("{} \"%1\"", exe))?;
 
-    println!("[DeepLink] ✅ Windows: registered legacy focustogether:// (same exe as flowlocked://)");
+    println!("[DeepLink] ✅ Windows: registered legacy focustogether:// (same exe as zirain://)");
     Ok(())
 }
 
@@ -2128,7 +2281,7 @@ fn debug_ai_classify(hostname: String) -> Result<String, String> {
     }
     let Some(uid) = get_current_user_id() else {
         return Err(
-            "No linked userId — sign in via the web app and open Flowlocked from the site (deep link)."
+            "No linked userId — sign in via the web app and open Zirain from the site (deep link)."
                 .to_string(),
         );
     };
@@ -3206,7 +3359,8 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
                 if let Some((app_name, title, pid)) = get_foreground_info() {
                     // Check if foreground is our own app (main shell — not the orange distraction popup).
                     let app_lower = app_name.to_lowercase();
-                    let is_our_app = (app_lower.contains("flowlocked")
+                    let is_our_app = (app_lower.contains("zirain")
+                        || app_lower.contains("flowlocked")
                         || app_lower.contains("focustogether"))
                         && !is_distraction_warning_popup_title(&title);
                     
@@ -3521,7 +3675,7 @@ fn start_detection(app_handle: tauri::AppHandle, user_id: String, session_id: St
 
                     // Native app in foreground: clear any warning from a prior browser/other app.
                     // (Previously we `continue`d here without dismissing, so the orange popup
-                    // stayed up after switching from YouTube back to Flowlocked.)
+                    // stayed up after switching from YouTube back to Zirain.)
                     if is_our_app {
                         pending_non_browser_block_started_at = None;
                         pending_non_browser_block_key = None;
@@ -4113,7 +4267,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
                             .as_deref()
                             .map(str::trim)
                             .filter(|s| !s.is_empty())
-                            .unwrap_or("Flowlocked");
+                            .unwrap_or("Zirain");
                         let body = alert
                             .notification_body
                             .as_deref()
@@ -4149,7 +4303,7 @@ async fn get_active_session(app: tauri::AppHandle, userId: String) -> Result<Act
                             .notification_title
                             .clone()
                             .filter(|s| !s.is_empty())
-                            .unwrap_or_else(|| "Flowlocked".to_string());
+                            .unwrap_or_else(|| "Zirain".to_string());
                         log!(
                             "[POLL DEBUG] Alert[{}] → self-distraction, showing native notification",
                             i
@@ -4423,10 +4577,10 @@ fn is_listener_only() -> bool {
 
 fn main() {
     diagnostic_log::init();
-    println!("[Tauri] Starting Flowlocked Enforcer...");
+    println!("[Tauri] Starting Zirain Enforcer...");
     
     // Create system tray menu
-    let quit = tauri::CustomMenuItem::new("quit".to_string(), "Quit Flowlocked");
+    let quit = tauri::CustomMenuItem::new("quit".to_string(), "Quit Zirain");
     let status = tauri::CustomMenuItem::new("status".to_string(), "Monitoring: Inactive").disabled();
     let stats_header =
         tauri::CustomMenuItem::new("stats_header", "My stats (private)").disabled();
@@ -4490,112 +4644,24 @@ fn main() {
             // Initialize deep link plugin
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             {
-                // `prepare` sets the Windows "URL:" protocol label (e.g. URL:Flowlocked) and instance id.
-                tauri_plugin_deep_link::prepare("Flowlocked");
-                println!("[DeepLink] ✅ Deep link handler prepared for flowlocked://");
-                
-                // Register handler for deep link events (scheme must match site + default OS handler)
-                let app_handle = app.handle();
-                tauri_plugin_deep_link::register("flowlocked", move |request| {
-                    println!("[DeepLink] 🔗 Received deep link: {}", request);
-                    
-                    if let Some(parsed) = parse_deep_link(&request) {
-                        let user_id = parsed.user_id.clone();
-                        println!("[DeepLink] Extracted userId: {}", user_id);
+                // `prepare` sets the Windows "URL:" protocol label (e.g. URL:Zirain) and instance id.
+                tauri_plugin_deep_link::prepare("Zirain");
+                println!("[DeepLink] ✅ Deep link handler prepared for zirain://");
 
-                        match parsed.backend {
-                            DeepLinkBackendParam::Unspecified => {}
-                            DeepLinkBackendParam::Clear => {
-                                if let Err(e) = set_backend_config_url(None) {
-                                    println!("[DeepLink] Failed to clear backend URL: {}", e);
-                                } else {
-                                    println!("[DeepLink] Backend URL reset to default ({})", backend_base_url());
-                                }
-                            }
-                            DeepLinkBackendParam::Set(v) => {
-                                if let Err(e) = set_backend_config_url(Some(v)) {
-                                    println!("[DeepLink] Invalid or failed to save backend URL: {}", e);
-                                } else {
-                                    println!("[DeepLink] Backend URL set to {}", backend_base_url());
-                                }
-                            }
-                        }
-                        
-                        let old_user_id = get_current_user_id();
-                        
-                        // Stop all intervals/loops for the old user so we replace, not add
-                        let old_str = old_user_id.as_deref().unwrap_or("none");
-                        println!("[DeepLink] Switching user from {} to {}, clearing old intervals", old_str, user_id);
-                        stop_heartbeat_loop();
-                        stop_detection(&app_handle);
-                        
-                        // Save to config (also updates CURRENT_USER_ID)
-                        match set_user_id(user_id.clone()) {
-                            Ok(_) => {
-                                println!("[DeepLink] User ID saved to config");
-                                // Start new heartbeat immediately with new user only
-                                start_heartbeat_loop();
-                                let _ = app_handle.emit_all("userId-changed", ());
-                                
-                                // Immediately check for active session and restart detection if needed
-                                println!("[DeepLink] Checking for active session for new user: {}", user_id);
-                                let user_id_for_session = user_id.clone();
-                                let app_handle_for_session = app_handle.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    match get_active_session(app_handle_for_session, user_id_for_session).await {
-                                        Ok(r) if r.session_id.is_some() => {
-                                            println!(
-                                                "[DeepLink] Detection restarted for new user with session: {:?}",
-                                                r.session_id
-                                            );
-                                        }
-                                        Ok(_) => {
-                                            println!("[DeepLink] No active session for new user - detection will start when session begins");
-                                        }
-                                        Err(e) => {
-                                            println!("[DeepLink] Failed to check active session: {} (detection will start on next frontend poll)", e);
-                                        }
-                                    }
-                                });
-                                
-                                // Register with backend (async) and show notification
-                                let user_id_for_register = user_id.clone();
-                                let app_handle_clone = app_handle.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    match register_desktop_connection(&user_id_for_register).await {
-                                        Ok(_) => {
-                                            println!("[DeepLink] Backend registration successful");
-                                            if let Err(e) = tauri::api::notification::Notification::new(&app_handle_clone.config().tauri.bundle.identifier)
-                                                .title("Flowlocked Connected!")
-                                                .body("Desktop app linked to your account")
-                                                .show()
-                                            {
-                                                println!("[DeepLink] Failed to show confirmation: {}", e);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            println!("[DeepLink] Backend registration failed: {} (heartbeat already running)", e);
-                                            // Still show notification but with warning
-                                            if let Err(e) = tauri::api::notification::Notification::new(&app_handle_clone.config().tauri.bundle.identifier)
-                                                .title("Flowlocked Connected")
-                                                .body("Linked locally - backend sync pending")
-                                                .show()
-                                            {
-                                                println!("[DeepLink] Failed to show notification: {}", e);
-                                            }
-                                        }
-                                    }
-                                });
-                            }
-                            Err(e) => {
-                                println!("[DeepLink] ❌ Failed to save user ID: {}", e);
-                            }
-                        }
-                    }
-                }).map_err(|e| format!("Failed to register deep link handler: {}", e))?;
+                let app_handle = app.handle().clone();
+                tauri_plugin_deep_link::register("zirain", move |request| {
+                    handle_auth_deep_link(&app_handle, &request);
+                })
+                .map_err(|e| format!("Failed to register deep link handler: {}", e))?;
 
                 #[cfg(target_os = "windows")]
                 {
+                    if let Err(e) = register_windows_legacy_flowlocked_url_scheme() {
+                        eprintln!(
+                            "[DeepLink] ⚠️ Failed to register legacy flowlocked:// on Windows: {}",
+                            e
+                        );
+                    }
                     if let Err(e) = register_windows_legacy_focustogether_url_scheme() {
                         eprintln!(
                             "[DeepLink] ⚠️ Failed to register legacy focustogether:// on Windows: {}",
@@ -4647,7 +4713,7 @@ fn main() {
                     let app_id = app.config().tauri.bundle.identifier.clone();
                     let _ = tauri::api::notification::Notification::new(&app_id)
                         .title("Screen Recording permission needed")
-                        .body("Flowlocked needs Screen Recording permission to read window titles so it can correctly skip the Picture-in-Picture overlay during distraction detection. Please enable it in System Settings → Privacy & Security → Screen Recording, then restart Flowlocked.")
+                        .body("Zirain needs Screen Recording permission to read window titles so it can correctly skip the Picture-in-Picture overlay during distraction detection. Please enable it in System Settings → Privacy & Security → Screen Recording, then restart Zirain.")
                         .show();
                 }
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -4655,7 +4721,7 @@ fn main() {
                     let _ = std::process::Command::new("osascript")
                         .arg("-e")
                         .arg(
-                            r#"display dialog "Flowlocked needs Accessibility (Privacy & Security → Accessibility) to read the browser address bar. For Chrome/Safari you may also need Automation: allow Flowlocked to control your browser under Privacy & Security → Automation." buttons {"OK"} default button "OK" with title "Browser URL access""#,
+                            r#"display dialog "Zirain needs Accessibility (Privacy & Security → Accessibility) to read the browser address bar. For Chrome/Safari you may also need Automation: allow Zirain to control your browser under Privacy & Security → Automation." buttons {"OK"} default button "OK" with title "Browser URL access""#,
                         )
                         .output();
                 }
@@ -4677,7 +4743,7 @@ fn main() {
                 // Request permission by attempting to show a test notification
                 // This will trigger the macOS permission dialog if not already granted
                 match Notification::new(&app_id)
-                    .title("Flowlocked")
+                    .title("Zirain")
                     .body("Notification permission check")
                     .show()
                 {
@@ -4707,7 +4773,7 @@ fn main() {
                     window_label,
                     url
                 )
-                .title("Flowlocked")
+                .title("Zirain")
                 .inner_size(440.0, 360.0)
                 .transparent(true)
                 .resizable(false)

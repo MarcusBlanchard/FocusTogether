@@ -16,7 +16,7 @@ export default function Download() {
       <header className="border-b">
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
           <Link href="/landing" className="text-lg font-semibold hover:underline underline-offset-4">
-            Flowlocked
+            Zirain
           </Link>
           <div className="flex items-center gap-3 text-sm">
             <Link href="/legal/terms" className="text-muted-foreground hover:text-foreground">
@@ -31,7 +31,7 @@ export default function Download() {
 
       <main className="max-w-2xl mx-auto px-4 py-10 space-y-8">
         <div className="space-y-2">
-          <h1 className="text-3xl font-semibold tracking-tight">Download Flowlocked for Mac</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Download Zirain for Mac</h1>
           <p className="text-muted-foreground">
             Install the desktop companion to enforce focus rules during scheduled sessions. Before you
             download, review the legal documents and confirm you agree to them.
@@ -54,7 +54,7 @@ export default function Download() {
               <CardTitle>Before you download</CardTitle>
             </div>
             <CardDescription>
-              Flowlocked can observe foreground applications and browser context during active focus
+              Zirain can observe foreground applications and browser context during active focus
               sessions and share high-level status with your session partners and our servers, as
               described in the Privacy Policy.
             </CardDescription>

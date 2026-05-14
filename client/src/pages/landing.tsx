@@ -10,7 +10,7 @@ export default function Landing() {
     <div className="min-h-screen bg-background">
       <header className="border-b">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-semibold">Flowlocked</h1>
+          <h1 className="text-2xl font-semibold">Zirain</h1>
           <div className="flex items-center gap-2 sm:gap-3">
             <Button variant="ghost" size="sm" asChild>
               <Link href="/download">Download</Link>
