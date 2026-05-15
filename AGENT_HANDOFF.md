@@ -1,4 +1,117 @@
-## 2026-05-14 — Brand rename: Flowlocked / FocusTogether → **Zirain** (web side done)
+## 2026-05-15 — `zirain://` deep link not launching after rebrand (URGENT)
+
+  **Symptom (reported by Marcus):** After installing the rebranded Zirain desktop build, clicking a session in the web app does not launch the desktop app. The web app sends `zirain://auth?userId=…&backend=https://zirain.com` but the OS does nothing — no app opens, no "open in?" prompt.
+
+  **Root cause (almost certainly):** The new desktop build was rebranded visually (productName, identifier, splash) but the **URL scheme registration was not updated** from `flowlocked` to `zirain`. The OS doesn't know any installed app handles `zirain://`, so the link silently fails.
+
+  **What Cursor needs to verify / fix on the desktop side:**
+
+  ### Tauri config (`src-tauri/tauri.conf.json`)
+
+  For tauri-plugin-deep-link v2 (Tauri 2.x):
+
+  ```json
+  {
+    "plugins": {
+      "deep-link": {
+        "desktop": {
+          "schemes": ["zirain", "flowlocked"]
+        }
+      }
+    }
+  }
+  ```
+
+  Keep `flowlocked` as a second scheme for one release so users mid-upgrade aren't broken. **Do not remove it yet.**
+
+  ### macOS (`src-tauri/Info.plist` or `tauri.conf.json` macOS bundle config)
+
+  Need `CFBundleURLTypes` with both schemes registered:
+
+  ```xml
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>com.zirain.app</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>zirain</string>
+        <string>flowlocked</string>
+      </array>
+    </dict>
+  </array>
+  ```
+
+  **Important:** macOS only re-reads URL scheme registrations on first launch after install. After installing the new `.dmg`:
+  1. Drag Zirain.app into /Applications.
+  2. **Launch it once manually** (double-click the app icon) — this registers the schemes with LaunchServices.
+  3. *Then* try the deep link from the web app.
+
+  If launching once doesn't fix it, force-rebuild the LaunchServices DB:
+  ```bash
+  /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -kill -r -domain local -domain system -domain user
+  ```
+
+  ### Windows (registry, handled by tauri-plugin-deep-link's `prepare()`)
+
+  In `src-tauri/src/main.rs` (or wherever you initialize the deep-link plugin), the `prepare(scheme)` call writes the registry entries on first run:
+
+  ```rust
+  fn main() {
+      tauri_plugin_deep_link::prepare("com.zirain.app");  // identifier, NOT scheme
+      // ... rest of setup
+  }
+  ```
+
+  The actual scheme registration in Windows registry needs both:
+  ```
+  HKEY_CURRENT_USER\Software\Classes\zirain\(Default) = "URL:Zirain Protocol"
+  HKEY_CURRENT_USER\Software\Classes\zirain\URL Protocol = ""
+  HKEY_CURRENT_USER\Software\Classes\zirain\shell\open\command\(Default) = "\"C:\\path\\to\\Zirain.exe\" \"%1\""
+  ```
+
+  If using `tauri-plugin-deep-link`, calling `register("zirain", handler)` AND `register("flowlocked", handler)` at startup writes both. Verify with `regedit` after installing the new MSI.
+
+  **Important:** Windows MSI installers don't always re-run first-launch registration. If the registry entries don't appear after install, the user needs to launch Zirain.exe once manually before deep links work.
+
+  ### Handler (both platforms)
+
+  Wherever the deep link is received (the `register` callback or `OnOpenURL` handler), it must accept BOTH schemes:
+
+  ```rust
+  // Pseudo
+  fn handle_deep_link(url: &str) {
+      // url is "zirain://auth?userId=X&backend=https://zirain.com"
+      //  or  "flowlocked://auth?userId=X&backend=https://zirain.com"  (legacy)
+      let parsed = Url::parse(url)?;
+      if parsed.scheme() != "zirain" && parsed.scheme() != "flowlocked" { return; }
+      if parsed.host_str() == Some("auth") {
+          // extract userId + backend, call POST {backend}/api/desktop/connect
+      }
+  }
+  ```
+
+  ### How to verify the fix
+
+  1. Install the new build.
+  2. **Launch Zirain.app / Zirain.exe once manually** (this registers the schemes — do not skip).
+  3. From a terminal:
+     - macOS: `open "zirain://auth?userId=test&backend=https://zirain.com"`
+     - Windows: `start zirain://auth?userId=test&backend=https://zirain.com`
+  4. The app should come to the foreground and POST `/api/desktop/connect` with userId=test. Confirm in `zirain-live.log` that `[deep-link] received` (or equivalent) is logged.
+  5. Repeat with `flowlocked://` to confirm the legacy scheme still works.
+  6. Only then test from the web app's "Connect Desktop App" / "Join Session" buttons.
+
+  **If after all of this it still doesn't work**, send me:
+  - The contents of `src-tauri/tauri.conf.json` (or just the `plugins.deep-link` and `bundle` sections).
+  - The output of `/usr/bin/lsregister -dump | grep -i zirain` on macOS.
+  - The contents of `HKCU\Software\Classes\zirain` from regedit on Windows.
+  - The bundle identifier you shipped with (`com.zirain.app`? something else?).
+
+  ---
+
+  ## 2026-05-14 — Brand rename: Flowlocked / FocusTogether → **Zirain** (web side done)
 
   **Status:** Web app fully rebranded. Desktop app needs a coordinated update to keep the integration working.
 
