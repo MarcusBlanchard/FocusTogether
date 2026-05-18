@@ -22,6 +22,7 @@ on:
       - "package-lock.json"
       - "vite.config.ts"
       - ".github/workflows/build-windows.yml"
+      - ".github/workflows/build-mac.yml"
   pull_request:
     branches:
       - main
@@ -34,6 +35,7 @@ on:
       - "package-lock.json"
       - "vite.config.ts"
       - ".github/workflows/build-windows.yml"
+      - ".github/workflows/build-mac.yml"
 
 concurrency:
   group: windows-build-${{ github.workflow }}-${{ github.ref }}

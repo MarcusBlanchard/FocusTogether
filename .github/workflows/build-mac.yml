@@ -1,0 +1,87 @@
+# Produces the macOS DMG (.app bundle) on a macOS runner.
+# Manual run: GitHub → Actions → Build macOS → Run workflow.
+
+name: Build macOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - activity-refactor
+    tags:
+      - "v*"
+    paths:
+      - "src-tauri/**"
+      - "client/**"
+      - "browser-extension/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - ".github/workflows/build-mac.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src-tauri/**"
+      - "client/**"
+      - "browser-extension/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - ".github/workflows/build-mac.yml"
+
+concurrency:
+  group: macos-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust / cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Tauri (macOS)
+        env:
+          CI: "true"
+        run: npm run tauri:build
+
+      - name: List bundle output (debug)
+        if: always()
+        run: |
+          if [ -d src-tauri/target/release/bundle ]; then
+            find src-tauri/target/release/bundle -type f | head -200
+          else
+            echo "No bundle directory"
+          fi
+
+      - name: Upload macOS installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: zirain-macos
+          if-no-files-found: warn
+          path: |
+            src-tauri/target/release/bundle/macos/*.app
+            src-tauri/target/release/bundle/dmg/*.dmg

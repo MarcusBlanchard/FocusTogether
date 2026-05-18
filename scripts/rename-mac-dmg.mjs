@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const dmgDir = path.resolve("src-tauri/target/release/bundle/dmg");
-const finalName = "flowlocked.dmg";
+const finalName = "Zirain.dmg";
 const finalPath = path.join(dmgDir, finalName);
 
 if (!fs.existsSync(dmgDir)) {

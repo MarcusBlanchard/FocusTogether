@@ -15,7 +15,8 @@
     "tauri": "tauri",
     "tauri:dev": "node scripts/sync-tray-icon.cjs && tauri dev",
     "tauri:dev:no-vite": "./scripts/tauri-dev-no-vite.sh",
-    "tauri:build": "node scripts/sync-tray-icon.cjs && tauri build && node scripts/rename-mac-dmg.mjs",
+    "prepare:icon": "node scripts/prepare-zirain-icon-runner.cjs",
+    "tauri:build": "npm run prepare:icon && npx tauri icon src-tauri/zirain-app-icon.png -o src-tauri/icons && node scripts/sync-tray-icon.cjs && tauri build && node scripts/rename-mac-dmg.mjs",
     "install:mac": "bash scripts/install-mac.sh"
   },
   "dependencies": {
